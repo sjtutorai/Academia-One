@@ -17,7 +17,7 @@ import { exportToCsv } from '../../lib/csv';
 import { Button } from '../../components/ui/Primitives';
 import type { School, AuditLog } from '../../types/models';
 
-const PIE_COLORS = ['#101C35', '#0D9488', '#2563EB', '#8B5CF6'];
+const PIE_COLORS = ['#2563EB', '#EA4335', '#EAB308', '#16A34A'];
 
 // ============================================================================
 // Platform Analytics View with CSV Export (100% Free Schools Model)
@@ -101,7 +101,7 @@ export function MainHeadAnalyticsView({
                 <XAxis dataKey="status" tick={{ fontSize: 12 }} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
                 <Tooltip />
-                <Bar dataKey="Count" fill="#0D9488" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Count" fill="#2563EB" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -196,7 +196,7 @@ export function MainHeadAuditLogsView({ auditLogs }: { auditLogs: AuditLog[] }) 
                 <td className="py-3 px-4 font-medium text-slate-900">
                   {l.actorName} <span className="text-slate-400">({l.actorRole})</span>
                 </td>
-                <td className="py-3 px-4 font-mono text-teal-800">{l.action}</td>
+                <td className="py-3 px-4 font-mono text-[#2563EB] font-medium">{l.action}</td>
                 <td className="py-3 px-4 text-slate-700">{l.targetLabel || l.targetId}</td>
                 <td className="py-3 px-4 text-slate-500 max-w-xs truncate">{l.details || '—'}</td>
               </tr>

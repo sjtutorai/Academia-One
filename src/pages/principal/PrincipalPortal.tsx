@@ -352,7 +352,7 @@ function PrincipalOverview({
               {needsSetup ? 'Complete Post-Approval Campus Setup' : 'Active Campus School Code'}
             </p>
             <div className="flex flex-wrap items-center gap-2.5 mt-1">
-              <span className="font-mono text-base font-bold text-[#0B1528]">{formatPrincipalCode(school.code)}</span>
+              <span className="font-mono text-base font-bold text-[#0F295C]">{formatPrincipalCode(school.code)}</span>
               <button
                 type="button"
                 onClick={() => {
@@ -386,14 +386,14 @@ function PrincipalOverview({
       )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Students" value={data.students.filter((s) => s.status === 'active').length} subtext="Active enrollment" />
-        <StatCard label="Total Teachers" value={data.teachers.filter((t) => t.status === 'active').length} subtext="Assigned faculty" />
-        <StatCard label="Coordinators" value={coordinatorsCount} subtext="Scoped academic leads" />
-        <StatCard label="Classes & Sections" value={data.classes.length} subtext={`${data.rooms.length} campus rooms`} />
-        <StatCard label="Attendance Rate" value={`${attendanceSummary.pct}%`} tone="teal" subtext={`${data.attendance.length} submitted registers`} />
-        <StatCard label="Upcoming Exams" value={data.examinations.filter((e) => e.status === 'scheduled').length} subtext="Scheduled assessments" />
-        <StatCard label="Active Homework" value={data.homework.filter((h) => h.status === 'published').length} subtext={`${data.submissions.length} submissions received`} />
-        <StatCard label="Announcements" value={data.announcements.length} subtext={`${data.announcements.filter((a) => a.audience === 'principal_flag').length} coordinator flags`} />
+        <StatCard label="Total Students" value={data.students.filter((s) => s.status === 'active').length} tone="blue" subtext="Active enrollment" />
+        <StatCard label="Total Teachers" value={data.teachers.filter((t) => t.status === 'active').length} tone="green" subtext="Assigned faculty" />
+        <StatCard label="Coordinators" value={coordinatorsCount} tone="yellow" subtext="Scoped academic leads" />
+        <StatCard label="Classes & Sections" value={data.classes.length} tone="red" subtext={`${data.rooms.length} campus rooms`} />
+        <StatCard label="Attendance Rate" value={`${attendanceSummary.pct}%`} tone="green" subtext={`${data.attendance.length} submitted registers`} />
+        <StatCard label="Upcoming Exams" value={data.examinations.filter((e) => e.status === 'scheduled').length} tone="blue" subtext="Scheduled assessments" />
+        <StatCard label="Active Homework" value={data.homework.filter((h) => h.status === 'published').length} tone="yellow" subtext={`${data.submissions.length} submissions received`} />
+        <StatCard label="Announcements" value={data.announcements.length} tone="red" subtext={`${data.announcements.filter((a) => a.audience === 'principal_flag').length} coordinator flags`} />
       </div>
 
       <div className="grid lg:grid-cols-12 gap-6">
@@ -410,7 +410,7 @@ function PrincipalOverview({
                   <XAxis dataKey="name" tick={{ fontSize: 12 }} />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} />
                   <Tooltip />
-                  <Bar dataKey="AttendancePct" name="Attendance %" fill="#0D9488" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="AttendancePct" name="Attendance %" fill="#2563EB" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

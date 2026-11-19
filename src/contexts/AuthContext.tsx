@@ -16,6 +16,7 @@ import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { DEFAULT_NOTIFICATION_PREFS } from '../lib/notifications';
 import { recordAuditLog } from '../lib/audit';
 import { emailToKey } from '../lib/schoolProvisioning';
+import { clearAllMainHeadSessionUnlocks } from '../lib/adminVerification';
 import type { EmailDirectoryEntry, PlatformUser, School } from '../types/models';
 
 const BOOTSTRAPPED_MAIN_HEAD_EMAIL = 'sjtutorai@gmail.com';
@@ -261,6 +262,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Session idle timeout guard
   const logout = useCallback(async () => {
+    clearAllMainHeadSessionUnlocks();
     setPreviewPersona(null);
     await signOut(auth);
     setRealProfile(null);

@@ -535,7 +535,7 @@ service cloud.firestore {
         && isOptString(data, 'postalCode', 32)
         && isOptString(data, 'campusAddress', 500)
         && isOptString(data, 'classesOffered', 800)
-        && isBoundedList(data, 'classSectionPlan', 25)
+        && isBoundedList(data, 'classSectionPlan', 30)
         && isOptString(data, 'schoolPrefix', 12)
         && isOptString(data, 'workingDaysSummary', 120)
         && isOptString(data, 'principalPhone', 64)
@@ -616,6 +616,17 @@ service cloud.firestore {
         && isOptString(data, 'note', 500)
         && isOptString(data, 'decisionNote', 500)
         && isOptString(data, 'reviewedBy', 128);
+    }
+
+    function isValidAdminSecurityConfig(data) {
+      return data.keys().hasAll(['id', 'passcodeHash', 'passcodeSalt', 'algorithm', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'passcodeHash', 'passcodeSalt', 'algorithm', 'updatedByUid', 'updatedByEmail', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isShortString(data.passcodeHash, 32, 128)
+        && isShortString(data.passcodeSalt, 16, 128)
+        && data.algorithm == 'SHA-256-v1'
+        && isValidId(data.updatedByUid)
+        && isOptString(data, 'updatedByEmail', 160);
     }
 
     // =========================================================================
@@ -1069,6 +1080,22 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (isMainHead() || isPrincipalOf(existing().schoolId));
       allow delete: if isValidId(requestId) && isSignedIn() && (isMainHead() || isPrincipalOf(existing().schoolId));
+    }
+
+    match /adminSecurity/{docId} {
+      allow get: if isValidId(docId) && isMainHead();
+      allow list: if false;
+      allow create: if isValidId(docId) && docId == 'main_head' && isMainHead() && isValidAdminSecurityConfig(incoming())
+        && incoming().id == docId
+        && incoming().updatedByUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId) && docId == 'main_head' && isMainHead() && isValidAdminSecurityConfig(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedByUid == request.auth.uid
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
     }
   }
 }

@@ -296,31 +296,34 @@ function StudentOverview({
 
   return (
     <div className="space-y-6">
-      <div className="bg-[#0B1528] text-white rounded-xl p-6 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-xs font-medium text-teal-400">
-            {classNameLabel}
-            {studentProfile?.rollNumber ? ` · Roll #${studentProfile.rollNumber}` : ''}
-            {studentProfile?.admissionNumber ? ` · ${studentProfile.admissionNumber}` : ''}
-          </p>
-          <h2 className="text-xl font-bold font-display mt-1">Hello, {user.displayName}</h2>
-          <p className="text-xs text-slate-300 mt-1">
-            {today}'s schedule has {todayPeriods.filter((p) => !p.isBreak).length} classes · {pendingHomework.length} homework items pending.
-          </p>
-        </div>
-        {nextClass && (
-          <div className="bg-slate-900/80 border border-slate-700/80 rounded-lg px-4 py-3 text-xs">
-            <p className="text-teal-400 flex items-center gap-1.5 font-medium">
-              <Clock className="w-3.5 h-3.5" /> Next Class ({today})
+      <div className="bg-[#0F295C] text-white rounded-xl overflow-hidden shadow-xs">
+        <div className="brand-spectrum-bar w-full" />
+        <div className="p-6 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold text-[#FACC15]">
+              {classNameLabel}
+              {studentProfile?.rollNumber ? ` · Roll #${studentProfile.rollNumber}` : ''}
+              {studentProfile?.admissionNumber ? ` · ${studentProfile.admissionNumber}` : ''}
             </p>
-            <p className="font-semibold text-white mt-1">
-              {nextClass.subjectName} · {nextClass.startTime}–{nextClass.endTime}
-            </p>
-            <p className="text-slate-400 mt-0.5">
-              {nextClass.teacherName || 'Instructor'} · {nextClass.roomName || 'Room TBD'}
+            <h2 className="text-xl font-bold font-display mt-1">Hello, {user.displayName}</h2>
+            <p className="text-xs text-blue-100/80 mt-1">
+              {today}'s schedule has {todayPeriods.filter((p) => !p.isBreak).length} classes · {pendingHomework.length} homework items pending.
             </p>
           </div>
-        )}
+          {nextClass && (
+            <div className="bg-blue-950/70 border border-blue-800/80 rounded-lg px-4 py-3 text-xs">
+              <p className="text-[#4ADE80] flex items-center gap-1.5 font-medium">
+                <Clock className="w-3.5 h-3.5" /> Next Class ({today})
+              </p>
+              <p className="font-semibold text-white mt-1">
+                {nextClass.subjectName} · {nextClass.startTime}–{nextClass.endTime}
+              </p>
+              <p className="text-blue-200/75 mt-0.5">
+                {nextClass.teacherName || 'Instructor'} · {nextClass.roomName || 'Room TBD'}
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -328,23 +331,25 @@ function StudentOverview({
           label="Attendance Rate"
           value={`${attendancePct}%`}
           subtext={`${presentOrLate} of ${personalAttendance.length} recorded days`}
-          tone={attendancePct >= 85 ? 'teal' : 'amber'}
+          tone={attendancePct >= 85 ? 'green' : 'yellow'}
         />
         <StatCard
           label="Pending Homework"
           value={pendingHomework.length}
           subtext={`${data.submissions.length} submitted`}
-          tone={pendingHomework.length > 0 ? 'amber' : 'teal'}
+          tone={pendingHomework.length > 0 ? 'red' : 'green'}
         />
         <StatCard
           label="Upcoming Exams"
           value={upcomingExams.length}
           subtext="Published dates"
+          tone="blue"
         />
         <StatCard
           label="Published Results"
           value={data.examResults.length}
           subtext={`${data.materials.length} study resources`}
+          tone="yellow"
         />
       </div>
 
@@ -816,7 +821,7 @@ function StudentExamsResultsView({ data }: { data: SchoolDataBundle }) {
                   <XAxis dataKey="subject" tick={{ fontSize: 11, fill: '#64748B' }} />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#64748B' }} />
                   <Tooltip />
-                  <Bar dataKey="percentage" fill="#0D9488" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="percentage" fill="#16A34A" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

@@ -7,6 +7,7 @@ import { ROLE_LABELS, ROLE_PERMISSION_MATRIX } from '../../lib/permissions';
 import { isValidPhoneDigits, sanitizePhoneDigits } from '../../lib/schoolCodes';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button, StatusText, useToast } from '../ui/Primitives';
+import { MainHeadAdminSecurityCard } from '../main-head/MainHeadAdminSecurityCard';
 
 export function ProfileSecurityView() {
   const { activeUser, realProfile, firebaseUser, isPreviewMode, replaceTemporaryPassword, refreshProfile } = useAuth();
@@ -87,6 +88,7 @@ export function ProfileSecurityView() {
   return (
     <div className="grid lg:grid-cols-12 gap-6">
       <div className="lg:col-span-7 space-y-6">
+        <MainHeadAdminSecurityCard />
         <form onSubmit={handleSaveProfile} className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
           <div className="flex items-center justify-between pb-4 border-b border-slate-200">
             <div>

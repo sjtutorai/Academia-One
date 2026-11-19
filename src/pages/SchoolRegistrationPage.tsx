@@ -26,7 +26,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { doc, writeBatch, serverTimestamp } from 'firebase/firestore';
-import { db, generateId, OperationType } from '../lib/firebase';
+import { auth, db, generateId, OperationType } from '../lib/firebase';
 import { generateApplicationNumber, hashVerificationEmail } from '../lib/schoolProvisioning';
 import {
   DEFAULT_CLASS_SECTION_PLAN,
@@ -555,7 +555,8 @@ export default function SchoolRegistrationPage() {
       }
     }
 
-    if (!firebaseUser) {
+    const activeFbUser = auth.currentUser || firebaseUser;
+    if (!activeFbUser) {
       setDirection(-1);
       setStep(1);
       setStepError('Please sign in with Email & Password or Google in Step 1 before submitting.');
@@ -567,47 +568,111 @@ export default function SchoolRegistrationPage() {
 
     const applicationId = generateId('app');
     const applicationNumber = generateApplicationNumber('SCH');
-    const effectiveApplicantEmail = (firebaseUser.email || draft.applicantEmail).trim().toLowerCase();
-    const effectivePrincipalName = (draft.applicantIsPrincipal ? draft.applicantName : draft.principalName).trim();
-    const effectivePrincipalEmail = (draft.applicantIsPrincipal ? effectiveApplicantEmail : draft.principalEmail)
+    const effectiveApplicantEmail = (activeFbUser.email || draft.applicantEmail || '').trim().toLowerCase();
+    const effectivePrincipalName = (draft.applicantIsPrincipal ? draft.applicantName : draft.principalName || '').trim();
+    const effectivePrincipalEmail = (draft.applicantIsPrincipal ? effectiveApplicantEmail : draft.principalEmail || '')
       .trim()
       .toLowerCase();
-    const effectivePrincipalPhone = (draft.applicantIsPrincipal ? draft.applicantPhone : draft.principalPhone).trim();
+    const effectivePrincipalPhone = (draft.applicantIsPrincipal ? draft.applicantPhone : draft.principalPhone || '').trim();
     const safeAuthMethod: 'google' | 'email_password' =
       draft.authMethod === 'email_password' ? 'email_password' : 'google';
     const submittedIso = new Date().toISOString();
     const estCoordinators = Math.max(0, Math.min(5000, Math.round(Number(draft.estimatedCoordinators) || 0)));
     const estStudents = Math.max(0, Math.min(200000, Math.round(Number(draft.estimatedStudents) || 0)));
     const estTeachers = Math.max(0, Math.min(50000, Math.round(Number(draft.estimatedTeachers) || 0)));
-    const cleanClassPlan: ClassSectionRange[] = (draft.classSectionPlan || DEFAULT_CLASS_SECTION_PLAN)
+    const rawPlan =
+      Array.isArray(draft.classSectionPlan) && draft.classSectionPlan.length > 0
+        ? draft.classSectionPlan
+        : DEFAULT_CLASS_SECTION_PLAN;
+    const cleanClassPlan: ClassSectionRange[] = rawPlan
+      .filter((row) => row && typeof row.grade === 'string' && row.grade.trim().length > 0)
       .slice(0, 30)
       .map((row) => ({
         grade: truncateUtf8(row.grade, 24),
-        sectionFrom: row.sectionFrom.slice(0, 1).toUpperCase(),
-        sectionTo: row.sectionTo.slice(0, 1).toUpperCase(),
+        sectionFrom: String(row.sectionFrom || 'A').trim().slice(0, 1).toUpperCase() || 'A',
+        sectionTo: String(row.sectionTo || row.sectionFrom || 'A').trim().slice(0, 1).toUpperCase() || 'A',
       }));
-    const classesSummary = formatClassSectionPlanSummary(cleanClassPlan);
-    const chosenPrefix = sanitizeSchoolPrefix(draft.schoolPrefix) || deriveSchoolPrefix(draft.schoolName);
+    const finalClassPlan = cleanClassPlan.length > 0 ? cleanClassPlan : DEFAULT_CLASS_SECTION_PLAN;
+    const classesSummary = formatClassSectionPlanSummary(finalClassPlan);
+    const chosenPrefix = truncateUtf8(
+      sanitizeSchoolPrefix(draft.schoolPrefix || '') || deriveSchoolPrefix(draft.schoolName || ''),
+      12,
+    );
+
+    const safeApplicantName = truncateUtf8(draft.applicantName, 120);
+    const safeApplicantEmail = truncateUtf8(effectiveApplicantEmail, 160);
+    const safeSchoolName = truncateUtf8(draft.schoolName, 200);
+    const safeAcademicYear = truncateUtf8(draft.academicYear || '2026-2027', 40);
+    const safeSchoolEmail = truncateUtf8((draft.schoolEmail || '').toLowerCase(), 160);
+    const safeAddress = truncateUtf8(draft.address, 500);
+    const safePrincipalName = truncateUtf8(effectivePrincipalName, 120);
+    const safePrincipalEmail = truncateUtf8(effectivePrincipalEmail, 160);
+
+    // Pre-submit parity checks mirroring firestore.rules before hitting the network
+    const idRe = /^[a-zA-Z0-9_-]{1,128}$/;
+    if (!idRe.test(applicationId) || !idRe.test(applicationNumber)) {
+      setSubmitting(false);
+      setStepError('Unable to generate a valid application reference. Please click Submit again.');
+      return;
+    }
+    if (safeApplicantName.length < 2 || safeApplicantEmail.length < 3) {
+      setSubmitting(false);
+      setDirection(-1);
+      setStep(1);
+      setStepError('Step 1: Applicant full name and valid account email are required.');
+      return;
+    }
+    if (safeSchoolName.length < 2) {
+      setSubmitting(false);
+      setDirection(-1);
+      setStep(2);
+      setStepError('Step 2: Official school name must be at least 2 characters.');
+      return;
+    }
+    if (safeAddress.length < 4 || safeSchoolEmail.length < 3) {
+      setSubmitting(false);
+      setDirection(-1);
+      setStep(3);
+      setStepError('Step 3: Full registered school address (min 4 characters) and official school email are required.');
+      return;
+    }
+    if (safePrincipalName.length < 2 || safePrincipalEmail.length < 3) {
+      setSubmitting(false);
+      setDirection(-1);
+      setStep(4);
+      setStepError('Step 4: Principal full name and valid official email are required.');
+      return;
+    }
+    if (safeAcademicYear.length < 2) {
+      setSubmitting(false);
+      setDirection(-1);
+      setStep(5);
+      setStepError('Step 5: Academic year (e.g., 2026-2027) is required.');
+      return;
+    }
 
     try {
-      const verificationEmailHash = await hashVerificationEmail(effectiveApplicantEmail);
+      // Ensure a fresh Firebase Auth ID token is active on this write session
+      await activeFbUser.getIdToken();
+
+      const verificationEmailHash = await hashVerificationEmail(safeApplicantEmail);
       const batch = writeBatch(db);
       const now = serverTimestamp();
 
       const applicationPayload = {
         id: applicationId,
         applicationNumber,
-        applicantUid: firebaseUser.uid,
-        applicantName: truncateUtf8(draft.applicantName, 120),
+        applicantUid: activeFbUser.uid,
+        applicantName: safeApplicantName,
         applicantDesignation: truncateUtf8(draft.applicantDesignation || 'Principal', 64),
-        applicantEmail: truncateUtf8(effectiveApplicantEmail, 160),
-        applicantPhone: sanitizePhoneDigits(draft.applicantPhone),
+        applicantEmail: safeApplicantEmail,
+        applicantPhone: sanitizePhoneDigits(String(draft.applicantPhone || '')),
         organizationName: truncateUtf8(draft.organizationName, 200),
         preferredContactMethod: truncateUtf8(draft.preferredContactMethod || 'Email', 32),
         authorityRelationship: truncateUtf8(draft.authorityRelationship, 200),
         applicantIsPrincipal: Boolean(draft.applicantIsPrincipal),
         contactVerified: true,
-        schoolName: truncateUtf8(draft.schoolName, 200),
+        schoolName: safeSchoolName,
         displayName: truncateUtf8(draft.displayName || draft.schoolName, 200),
         institutionType: truncateUtf8(draft.institutionType || 'Private', 64),
         affiliationBoard: truncateUtf8(draft.affiliationBoard || 'CBSE', 120),
@@ -615,28 +680,28 @@ export default function SchoolRegistrationPage() {
         establishedYear: truncateUtf8(draft.establishedYear, 32),
         externalRecognitionCode: truncateUtf8(draft.externalRecognitionCode, 64),
         logoDataUrl: truncateUtf8(draft.logoDataUrl, 480000),
-        academicYear: truncateUtf8(draft.academicYear, 40),
+        academicYear: safeAcademicYear,
         website: truncateUtf8(draft.website, 300),
-        schoolEmail: truncateUtf8(draft.schoolEmail.toLowerCase(), 160),
-        schoolPhone: sanitizePhoneDigits(draft.schoolPhone),
-        alternateContact: sanitizePhoneDigits(draft.alternateContact),
+        schoolEmail: safeSchoolEmail,
+        schoolPhone: sanitizePhoneDigits(String(draft.schoolPhone || '')),
+        alternateContact: sanitizePhoneDigits(String(draft.alternateContact || '')),
         country: truncateUtf8(draft.country, 80),
         stateRegion: truncateUtf8(draft.stateRegion, 80),
         district: truncateUtf8(draft.district, 80),
         city: truncateUtf8(draft.city, 80),
         postalCode: truncateUtf8(draft.postalCode, 32),
-        address: truncateUtf8(draft.address, 500),
+        address: safeAddress,
         campusAddress: truncateUtf8(draft.campusAddress, 500),
         classesOffered: truncateUtf8(classesSummary, 780),
-        classSectionPlan: cleanClassPlan,
+        classSectionPlan: finalClassPlan,
         schoolPrefix: chosenPrefix,
         estimatedCoordinators: estCoordinators,
         estimatedStudents: estStudents,
         estimatedTeachers: estTeachers,
         workingDaysSummary: truncateUtf8(draft.workingDaysSummary, 120),
-        principalName: truncateUtf8(effectivePrincipalName, 120),
-        principalEmail: truncateUtf8(effectivePrincipalEmail, 160),
-        principalPhone: sanitizePhoneDigits(effectivePrincipalPhone),
+        principalName: safePrincipalName,
+        principalEmail: safePrincipalEmail,
+        principalPhone: sanitizePhoneDigits(String(effectivePrincipalPhone || '')),
         principalDesignation: truncateUtf8(draft.principalDesignation || 'Principal', 120),
         authMethod: safeAuthMethod,
         requestedPlanId: 'plan_free',
@@ -651,7 +716,7 @@ export default function SchoolRegistrationPage() {
         activityLog: [
           {
             at: submittedIso,
-            actor: truncateUtf8(draft.applicantName, 120),
+            actor: safeApplicantName,
             action: 'APPLICATION_SUBMITTED',
             note: `Submitted free campus registration (${safeAuthMethod === 'google' ? 'Google Sign-In' : 'Email & Password'}).`,
           },
@@ -665,7 +730,7 @@ export default function SchoolRegistrationPage() {
         type: 'school' as const,
         verificationEmailHash: truncateUtf8(verificationEmailHash, 128),
         schoolId: '',
-        schoolName: truncateUtf8(draft.schoolName, 200),
+        schoolName: safeSchoolName,
         requestedRole: 'principal' as const,
         status: 'submitted' as const,
         schoolCode: '',
@@ -682,13 +747,14 @@ export default function SchoolRegistrationPage() {
 
       await batch.commit();
       localStorage.removeItem(DRAFT_STORAGE_KEY);
+      localStorage.removeItem('academiaone_school_reg_draft_v3');
       localStorage.removeItem('academiaone_school_reg_draft_v2');
       localStorage.removeItem('academiaone_school_reg_draft_v1');
       setSubmittedRef({
         applicationNumber,
-        schoolName: draft.schoolName.trim(),
-        principalEmail: effectivePrincipalEmail,
-        applicantEmail: effectiveApplicantEmail,
+        schoolName: safeSchoolName,
+        principalEmail: safePrincipalEmail,
+        applicantEmail: safeApplicantEmail,
       });
       pushToast('success', `School application ${applicationNumber} submitted for Main Head review.`);
     } catch (err) {
@@ -699,13 +765,13 @@ export default function SchoolRegistrationPage() {
           error: msg,
           operationType: OperationType.CREATE,
           path: `schoolApplications/${applicationId}`,
-          uid: firebaseUser.uid,
-          email: firebaseUser.email,
+          uid: activeFbUser.uid,
+          email: activeFbUser.email,
         }),
       );
       if (msg.toLowerCase().includes('permission')) {
         setStepError(
-          `Server rejected the application (${msg}). Verify you are signed in and all required fields are filled accurately, then try again.`,
+          `Your session could not be authorized by the server (${msg}). Try signing out and signing back in on Step 1, then submit again.`,
         );
       } else {
         setStepError(

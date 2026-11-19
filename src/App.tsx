@@ -23,6 +23,7 @@ import {
 } from './pages/AuthPages';
 import { PrivacyPolicyPage, TermsOfServicePage } from './pages/LegalPages';
 import MainHeadPortal from './pages/main-head/MainHeadPortal';
+import { MainHeadVerificationGate } from './components/main-head/MainHeadVerificationGate';
 import PrincipalPortal from './pages/principal/PrincipalPortal';
 import CoordinatorPortal from './pages/coordinator/CoordinatorPortal';
 import TeacherPortal from './pages/teacher/TeacherPortal';
@@ -32,7 +33,7 @@ import type { UserRole } from './types/models';
 function FullScreenLoader() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
-      <div className="w-9 h-9 rounded-lg border-2 border-slate-200 border-t-teal-600 animate-spin" />
+      <div className="w-9 h-9 rounded-lg border-2 border-slate-200 border-t-[#2563EB] animate-spin" />
       <p className="text-xs font-medium text-slate-500 mt-4">Loading AcademiaOne workspace…</p>
     </div>
   );
@@ -144,7 +145,9 @@ export default function App() {
                   path="/main-head/*"
                   element={
                     <ProtectedRoleRoute requiredRole="main_head">
-                      <MainHeadPortal />
+                      <MainHeadVerificationGate>
+                        <MainHeadPortal />
+                      </MainHeadVerificationGate>
                     </ProtectedRoleRoute>
                   }
                 />

@@ -584,7 +584,7 @@
         "type": { "type": "string", "enum": ["school", "member"] },
         "verificationEmailHash": { "type": "string", "maxLength": 128 },
         "schoolId": { "type": "string", "maxLength": 128 },
-        "schoolName": { "type": "string", "maxLength": 140 },
+        "schoolName": { "type": "string", "maxLength": 200 },
         "requestedRole": { "type": "string", "enum": ["principal", "coordinator", "teacher", "student"] },
         "status": { "type": "string", "enum": ["submitted", "under_review", "more_info_required", "pending", "approved", "rejected", "withdrawn"] },
         "schoolCode": { "type": "string", "maxLength": 24 },
@@ -666,6 +666,22 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "applicationNumber", "schoolId", "schoolCode", "schoolName", "applicantUid", "applicantEmail", "applicantName", "requestedRole", "status", "createdAt", "updatedAt"]
+    },
+    "AdminSecurityConfig": {
+      "title": "AdminSecurityConfig",
+      "description": "Salted SHA-256 verification password hash for the Main Head 1-Step Verification gate (strictly Main Head readable/writable).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "passcodeHash": { "type": "string", "minLength": 32, "maxLength": 128 },
+        "passcodeSalt": { "type": "string", "minLength": 16, "maxLength": 128 },
+        "algorithm": { "type": "string", "enum": ["SHA-256-v1"] },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "updatedByEmail": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "passcodeHash", "passcodeSalt", "algorithm", "updatedByUid", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -695,6 +711,7 @@
     "/applicationStatuses/{applicationNumber}": { "schema": { "$ref": "#/entities/ApplicationStatus" }, "description": "Public PII-free application status lookup keyed by Application Number" },
     "/schoolCodes/{code}": { "schema": { "$ref": "#/entities/SchoolCodeEntry" }, "description": "Exact-key school code lookup for member join requests" },
     "/emailDirectory/{emailKey}": { "schema": { "$ref": "#/entities/EmailDirectoryEntry" }, "description": "Normalized email-to-school role binding for Email/Password and Google login" },
-    "/schoolJoinRequests/{requestId}": { "schema": { "$ref": "#/entities/SchoolJoinRequest" }, "description": "School Code join requests pending Principal approval" }
+    "/schoolJoinRequests/{requestId}": { "schema": { "$ref": "#/entities/SchoolJoinRequest" }, "description": "School Code join requests pending Principal approval" },
+    "/adminSecurity/{docId}": { "schema": { "$ref": "#/entities/AdminSecurityConfig" }, "description": "Main Head 1-Step Verification password salted SHA-256 hash" }
   }
 }

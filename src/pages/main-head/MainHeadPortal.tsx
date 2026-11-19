@@ -65,6 +65,10 @@ import {
 } from '../../components/ui/Primitives';
 import { NotificationsAndPreferencesView } from '../../components/shared/NotificationsAndPreferencesView';
 import { ProfileSecurityView } from '../../components/shared/ProfileSecurityView';
+import {
+  ChangeSchoolPasswordModal,
+  type PasswordChangeTarget,
+} from '../../components/main-head/ChangeSchoolPasswordModal';
 import { provisionSchoolTenant } from '../../lib/schoolProvisioning';
 import { MainHeadApplicationsView } from './MainHeadApplicationsView';
 import {
@@ -88,7 +92,7 @@ const MAIN_HEAD_NAV: NavItem[] = [
   { id: 'users', label: 'Platform Users', path: '/main-head/users', icon: Users },
   { id: 'notifications', label: 'Notifications', path: '/main-head/notifications', icon: Bell },
   { id: 'audit', label: 'Audit Logs', path: '/main-head/audit-logs', icon: FileClock },
-  { id: 'profile', label: 'Profile', path: '/main-head/profile', icon: UserCircle2 },
+  { id: 'profile', label: 'Profile & Security', path: '/main-head/profile', icon: UserCircle2 },
 ];
 
 export default function MainHeadPortal() {
@@ -325,14 +329,14 @@ function MainHeadOverview({
         </div>
       </div>
 
-      {/* 6 Focused Overview Cards (100% Free Platform) */}
+      {/* 6 Focused Overview Cards (Blue, Green, Yellow, Red accents) */}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-        <StatCard label="Total Schools" value={schools.length} subtext="All modules included free" />
-        <StatCard label="Active Campuses" value={metrics.active} tone="teal" subtext="Full operational access" />
-        <StatCard label="Pending Applications" value={pendingApps.length} tone="amber" subtext="Awaiting Main Head review" />
+        <StatCard label="Total Schools" value={schools.length} tone="blue" subtext="All modules included free" />
+        <StatCard label="Active Campuses" value={metrics.active} tone="green" subtext="Full operational access" />
+        <StatCard label="Pending Applications" value={pendingApps.length} tone="yellow" subtext="Awaiting Main Head review" />
         <StatCard label="Suspended Schools" value={metrics.suspended} tone="red" subtext="Access paused" />
-        <StatCard label="Total Teachers" value={metrics.teachers} subtext="Across registered campuses" />
-        <StatCard label="Total Students" value={metrics.students} subtext={`${enquiries.filter((e) => e.status === 'new').length} new enquiries`} />
+        <StatCard label="Total Teachers" value={metrics.teachers} tone="blue" subtext="Across registered campuses" />
+        <StatCard label="Total Students" value={metrics.students} tone="green" subtext={`${enquiries.filter((e) => e.status === 'new').length} new enquiries`} />
       </div>
 
       {/* Quick Role Inspector (Only for Demo Testing by Main Head) */}
@@ -405,8 +409,8 @@ function MainHeadOverview({
                   <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#475569' }} />
                   <YAxis tick={{ fontSize: 12, fill: '#475569' }} />
                   <Tooltip />
-                  <Bar dataKey="Students" fill="#0B1528" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="Teachers" fill="#0D9488" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Students" fill="#2563EB" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Teachers" fill="#16A34A" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -471,6 +475,7 @@ function MainHeadSchoolsView({
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSchool, setEditingSchool] = useState<School | null>(null);
   const [detailSchool, setDetailSchool] = useState<School | null>(null);
+  const [passwordTarget, setPasswordTarget] = useState<PasswordChangeTarget | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     type: 'suspend' | 'activate' | 'archive' | 'delete';
     school: School;
@@ -767,7 +772,7 @@ function MainHeadSchoolsView({
                   type="button"
                   onClick={() => { setStatusFilter(st); setPage(1); }}
                   className={`px-3 py-1.5 text-xs font-medium rounded-lg cursor-pointer ${
-                    statusFilter === st ? 'bg-[#0B1528] text-white' : 'text-slate-600 hover:bg-slate-100'
+                    statusFilter === st ? 'bg-[#0F295C] text-white' : 'text-slate-600 hover:bg-slate-100'
                   }`}
                 >
                   {st === 'all' ? 'All Statuses' : st.charAt(0).toUpperCase() + st.slice(1)}
@@ -830,6 +835,25 @@ function MainHeadSchoolsView({
                       <td className="py-3 px-4"><StatusText status={s.status} /></td>
                       <td className="py-3 px-4 text-right">
                         <div className="inline-flex items-center gap-1.5">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() =>
+                              setPasswordTarget({
+                                kind: 'school',
+                                title: s.name,
+                                subtitle: `School Code ${s.code} · Principal: ${s.principalName || 'Unassigned'}`,
+                                email: s.principalEmail || s.email || '',
+                                uid: s.principalUid,
+                                schoolId: s.id,
+                                schoolName: s.name,
+                                school: s,
+                              })
+                            }
+                          >
+                            <KeyRound className="w-3.5 h-3.5 text-[#2563EB]" />
+                            Password
+                          </Button>
                           <Button variant="ghost" size="sm" onClick={() => setDetailSchool(s)}>Details</Button>
                           <Button variant="secondary" size="sm" onClick={() => openEditSchool(s)}>Edit</Button>
                         </div>
@@ -1056,12 +1080,32 @@ function MainHeadSchoolsView({
             </div>
 
             <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-200">
-              <Button variant="secondary" size="sm" onClick={() => handleResetPrincipalAccess(detailSchool)}>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => {
+                  const s = detailSchool;
+                  setDetailSchool(null);
+                  setPasswordTarget({
+                    kind: 'school',
+                    title: s.name,
+                    subtitle: `School Code ${s.code} · Principal: ${s.principalName || 'Unassigned'}`,
+                    email: s.principalEmail || s.email || '',
+                    uid: s.principalUid,
+                    schoolId: s.id,
+                    schoolName: s.name,
+                    school: s,
+                  });
+                }}
+              >
                 <KeyRound className="w-3.5 h-3.5" />
-                Reissue Principal Reset
+                Change School Password
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => handleResetPrincipalAccess(detailSchool)}>
+                Send Reset Link
               </Button>
               {detailSchool.status !== 'active' ? (
-                <Button variant="primary" size="sm" onClick={() => setConfirmAction({ type: 'activate', school: detailSchool })}>
+                <Button variant="success" size="sm" onClick={() => setConfirmAction({ type: 'activate', school: detailSchool })}>
                   <PlayCircle className="w-3.5 h-3.5" />
                   Activate
                 </Button>
@@ -1079,6 +1123,12 @@ function MainHeadSchoolsView({
           </div>
         )}
       </Modal>
+
+      <ChangeSchoolPasswordModal
+        target={passwordTarget}
+        actor={actor}
+        onClose={() => setPasswordTarget(null)}
+      />
 
       <ConfirmDialog
         open={Boolean(confirmAction)}
@@ -1126,6 +1176,7 @@ function MainHeadUsersView({
   const { pushToast } = useToast();
   const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
   const [editing, setEditing] = useState<PlatformUser | null>(null);
+  const [passwordTarget, setPasswordTarget] = useState<PasswordChangeTarget | null>(null);
   const [editRole, setEditRole] = useState<UserRole>('student');
   const [editSchool, setEditSchool] = useState('unassigned');
   const [editStatus, setEditStatus] = useState<PlatformUser['status']>('active');
@@ -1148,7 +1199,7 @@ function MainHeadUsersView({
             type="button"
             onClick={() => setRoleFilter(r)}
             className={`px-3 py-1.5 text-xs font-medium rounded-lg cursor-pointer ${
-              roleFilter === r ? 'bg-[#0B1528] text-white' : 'text-slate-600 hover:bg-slate-100'
+              roleFilter === r ? 'bg-[#0F295C] text-white' : 'text-slate-600 hover:bg-slate-100'
             }`}
           >
             {r === 'all' ? 'All Roles' : ROLE_LABELS[r]}
@@ -1196,12 +1247,22 @@ function MainHeadUsersView({
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={async () => {
-                        await sendPasswordResetEmail(auth, u.email).catch(() => undefined);
-                        pushToast('success', `Password reset link dispatched to ${u.email}.`);
+                      onClick={() => {
+                        const sc = schools.find((s) => s.id === u.schoolId);
+                        setPasswordTarget({
+                          kind: 'user',
+                          title: u.displayName,
+                          subtitle: `${ROLE_LABELS[u.role]} · ${sc?.name || u.schoolId}`,
+                          email: u.email,
+                          uid: u.uid,
+                          schoolId: u.schoolId || 'platform',
+                          schoolName: sc?.name,
+                          user: u,
+                        });
                       }}
                     >
-                      Reset Access
+                      <KeyRound className="w-3.5 h-3.5 text-[#2563EB]" />
+                      Change Password
                     </Button>
                   </div>
                 </td>
@@ -1285,6 +1346,12 @@ function MainHeadUsersView({
           </div>
         )}
       </Modal>
+
+      <ChangeSchoolPasswordModal
+        target={passwordTarget}
+        actor={actor}
+        onClose={() => setPasswordTarget(null)}
+      />
     </div>
   );
 }

@@ -111,16 +111,17 @@ export default function ApplicationStatusPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-16">
-      <header className="bg-[#0B1528] text-white border-b border-slate-800">
+      <div className="brand-spectrum-bar w-full" />
+      <header className="bg-[#0F295C] text-white border-b border-blue-900/60">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <Link to="/" className="hover:opacity-90 transition-opacity">
             <BrandLogo size="sm" tone="dark" />
           </Link>
           <div className="flex items-center gap-4 text-xs">
-            <Link to="/register-school" className="text-slate-300 hover:text-white font-medium">
+            <Link to="/register-school" className="text-blue-100/80 hover:text-white font-medium">
               Register School
             </Link>
-            <Link to="/login" className="text-teal-300 hover:text-teal-200 font-medium">
+            <Link to="/login" className="text-[#FACC15] hover:text-yellow-300 font-medium">
               Sign In
             </Link>
           </div>
