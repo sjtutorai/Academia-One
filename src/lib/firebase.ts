@@ -2,6 +2,9 @@ import { initializeApp, getApps, deleteApp, type FirebaseApp } from 'firebase/ap
 import {
   getAuth,
   createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updatePassword,
+  sendPasswordResetEmail,
   signOut as firebaseSignOut,
   type Auth,
 } from 'firebase/auth';
@@ -111,6 +114,119 @@ export async function provisionAuthAccountSecondary(
       };
     }
     throw err;
+  } finally {
+    if (secondaryApp) {
+      await deleteApp(secondaryApp).catch(() => undefined);
+    }
+  }
+}
+
+/**
+ * Allows the Main Head to set or rotate a school Principal's password using an isolated
+ * secondary Firebase App without disrupting the Main Head's active session.
+ * - If `currentPassword` is supplied, signs in on the secondary app and updates the password live.
+ * - If no Email/Password credential exists yet for `email`, provisions it immediately with `newPassword`.
+ * - If an Auth account already exists and `currentPassword` was omitted, dispatches an official
+ *   Firebase password reset email to `email` and enforces password update on next login.
+ */
+export async function changeSchoolPasswordSecondary(params: {
+  email: string;
+  newPassword: string;
+  currentPassword?: string;
+}): Promise<{
+  ok: boolean;
+  mode?: 'updated_directly' | 'provisioned_new' | 'reset_email_sent';
+  uid?: string;
+  message: string;
+}> {
+  const cleanEmail = params.email.trim().toLowerCase();
+  const cleanNew = params.newPassword;
+  const cleanCurrent = (params.currentPassword || '').trim();
+
+  if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    return { ok: false, message: 'A valid Principal email address is required.' };
+  }
+  if (cleanNew.length < 8) {
+    return { ok: false, message: 'New password must be at least 8 characters long.' };
+  }
+
+  let secondaryApp: FirebaseApp | null = null;
+  try {
+    const appName = `pw_rotate_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    secondaryApp = initializeApp(firebaseConfig, appName);
+    const secondaryAuth: Auth = getAuth(secondaryApp);
+
+    if (cleanCurrent) {
+      try {
+        const cred = await signInWithEmailAndPassword(secondaryAuth, cleanEmail, cleanCurrent);
+        await updatePassword(cred.user, cleanNew);
+        const uid = cred.user.uid;
+        await firebaseSignOut(secondaryAuth);
+        return {
+          ok: true,
+          mode: 'updated_directly',
+          uid,
+          message: `Password updated immediately for ${cleanEmail}.`,
+        };
+      } catch (err: unknown) {
+        const code = (err as { code?: string })?.code || '';
+        if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+          return {
+            ok: false,
+            message: 'The current password entered is incorrect. Leave Current Password blank to send a secure reset link instead.',
+          };
+        }
+        if (code === 'auth/user-not-found') {
+          const created = await createUserWithEmailAndPassword(secondaryAuth, cleanEmail, cleanNew);
+          const uid = created.user.uid;
+          await firebaseSignOut(secondaryAuth);
+          return {
+            ok: true,
+            mode: 'provisioned_new',
+            uid,
+            message: `Created new Email/Password login credential for ${cleanEmail}.`,
+          };
+        }
+        throw err;
+      }
+    }
+
+    try {
+      const created = await createUserWithEmailAndPassword(secondaryAuth, cleanEmail, cleanNew);
+      const uid = created.user.uid;
+      await firebaseSignOut(secondaryAuth);
+      return {
+        ok: true,
+        mode: 'provisioned_new',
+        uid,
+        message: `New school login password set immediately for ${cleanEmail}.`,
+      };
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/email-already-in-use') {
+        await sendPasswordResetEmail(auth, cleanEmail);
+        return {
+          ok: true,
+          mode: 'reset_email_sent',
+          message: `Account already exists in Firebase Auth. A secure password reset link has been sent to ${cleanEmail} and password change is enforced on next login. (To change an existing password directly without email confirmation, enter the current password above.)`,
+        };
+      }
+      if (code === 'auth/operation-not-allowed') {
+        return {
+          ok: false,
+          message: 'Email/Password sign-in is disabled in Firebase Console. Enable Authentication -> Sign-in method -> Email/Password.',
+        };
+      }
+      if (code === 'auth/weak-password') {
+        return { ok: false, message: 'Password is too weak. Use at least 8 characters with letters and numbers.' };
+      }
+      throw err;
+    }
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : 'Unable to update school password.',
+    };
   } finally {
     if (secondaryApp) {
       await deleteApp(secondaryApp).catch(() => undefined);

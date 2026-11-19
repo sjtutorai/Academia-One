@@ -5,7 +5,7 @@ import { Eye, EyeOff, Lock, ArrowLeft, ShieldAlert, CheckCircle2 } from 'lucide-
 import { useAuth } from '../contexts/AuthContext';
 import { ROLE_HOME_ROUTES } from '../lib/permissions';
 import { MOTION_EASE } from '../lib/motion';
-import { Button, useToast } from '../components/ui/Primitives';
+import { Button, GoogleLogo, useToast } from '../components/ui/Primitives';
 import { BrandLogo } from '../components/ui/BrandLogo';
 
 // ============================================================================
@@ -108,11 +108,13 @@ export function SignInPage() {
           initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           transition={{ duration: 0.28, ease: MOTION_EASE.out }}
-          className="bg-white border border-slate-200/90 rounded-xl p-8 shadow-sm"
+          className="bg-white border border-slate-200/90 rounded-xl overflow-hidden shadow-sm"
         >
+          <div className="h-1.5 w-full brand-spectrum-bar" aria-hidden="true" />
+          <div className="p-8">
           <div className="mb-6">
             <BrandLogo size="md" />
-            <h1 className="text-xl font-bold font-display text-slate-900 mt-4">Sign in to your account</h1>
+            <h1 className="text-xl font-bold font-display text-[#0F295C] mt-4">Sign in to your account</h1>
             <p className="text-sm text-slate-500 mt-1">
               Enter your credentials. You will be routed automatically to your authorized portal.
             </p>
@@ -235,22 +237,24 @@ export function SignInPage() {
             loading={googleSubmitting}
             disabled={busy}
           >
+            {!googleSubmitting && <GoogleLogo className="w-4 h-4 shrink-0" />}
             {googleSubmitting ? 'Connecting to Google…' : 'Continue with Google'}
           </Button>
 
           <p className="mt-6 text-center text-xs text-slate-500">
             New user?{' '}
-            <Link to="/signup" className="font-semibold text-teal-700 hover:text-teal-800 transition-colors">
+            <Link to="/signup" className="font-semibold text-blue-600 hover:text-blue-700 transition-colors">
               Create an Email & Password account
             </Link>
           </p>
           <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-            <Link to="/register-school" className="hover:text-slate-900 font-medium transition-colors">
+            <Link to="/register-school" className="hover:text-green-700 font-medium transition-colors">
               Register Your School Free
             </Link>
-            <Link to="/application-status" className="hover:text-teal-700 font-medium transition-colors">
+            <Link to="/application-status" className="hover:text-blue-700 font-medium transition-colors">
               Track Application →
             </Link>
+          </div>
           </div>
         </motion.div>
       </div>
@@ -346,11 +350,13 @@ export function SignUpPage() {
           initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           transition={{ duration: 0.28, ease: MOTION_EASE.out }}
-          className="bg-white border border-slate-200/90 rounded-xl p-8 shadow-sm"
+          className="bg-white border border-slate-200/90 rounded-xl overflow-hidden shadow-sm"
         >
+          <div className="h-1.5 w-full brand-spectrum-bar" aria-hidden="true" />
+          <div className="p-8">
           <div className="mb-6">
             <BrandLogo size="md" />
-            <h1 className="text-xl font-bold font-display text-slate-900 mt-4">Create your account</h1>
+            <h1 className="text-xl font-bold font-display text-[#0F295C] mt-4">Create your account</h1>
             <p className="text-sm text-slate-500 mt-1">
               Sign up with email and password. School administrators can link your account to your school roster.
             </p>
@@ -484,16 +490,18 @@ export function SignUpPage() {
                 }
               }}
             >
+              <GoogleLogo className="w-4 h-4 shrink-0" />
               Continue with Google
             </Button>
           </div>
 
           <p className="mt-6 text-center text-xs text-slate-500">
             Already have an account?{' '}
-            <Link to="/login" className="font-semibold text-teal-700 hover:text-teal-800 transition-colors">
+            <Link to="/login" className="font-semibold text-blue-600 hover:text-blue-700 transition-colors">
               Sign In
             </Link>
           </p>
+          </div>
         </motion.div>
       </div>
     </div>
@@ -528,8 +536,10 @@ export function ForgotPasswordPage() {
         initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.26, ease: MOTION_EASE.out }}
-        className="max-w-md w-full mx-auto bg-white border border-slate-200 rounded-xl p-8 shadow-sm"
+        className="max-w-md w-full mx-auto bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm"
       >
+        <div className="h-1.5 w-full brand-spectrum-bar" aria-hidden="true" />
+        <div className="p-8">
         <div className="flex items-center justify-between gap-3 mb-5">
           <BrandLogo size="sm" />
           <Link to="/login" className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors">
@@ -537,18 +547,18 @@ export function ForgotPasswordPage() {
             Back to Sign In
           </Link>
         </div>
-        <h1 className="text-xl font-bold font-display text-slate-900">Account Recovery</h1>
+        <h1 className="text-xl font-bold font-display text-[#0F295C]">Account Recovery</h1>
         <p className="text-sm text-slate-500 mt-1">
           Enter your registered email or username. For security, we never confirm whether an account exists.
         </p>
 
         {sent ? (
-          <div className="mt-6 p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-900 flex items-start gap-3">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+          <div className="mt-6 p-4 rounded-lg bg-green-50 border border-green-200 text-sm text-green-900 flex items-start gap-3">
+            <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
             <div>
               <p className="font-semibold">Recovery request processed</p>
-              <p className="text-xs text-emerald-800 mt-1">
-                If an active account matches that email, password reset instructions have been sent. If your account uses an administrator-issued login, contact your Principal or Main Head for a temporary reset.
+              <p className="text-xs text-green-800 mt-1">
+                If an active account matches that email, password reset instructions have been sent. If your account uses an administrator-issued login, contact your Principal or Main Head for a password update.
               </p>
             </div>
           </div>
@@ -562,7 +572,7 @@ export function ForgotPasswordPage() {
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 placeholder="name@school.edu"
-                className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
               />
             </div>
             <Button type="submit" variant="navy" className="w-full" loading={submitting}>
@@ -570,6 +580,7 @@ export function ForgotPasswordPage() {
             </Button>
           </form>
         )}
+        </div>
       </motion.div>
     </div>
   );

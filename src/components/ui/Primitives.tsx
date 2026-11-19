@@ -62,10 +62,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               role={t.type === 'error' ? 'alert' : 'status'}
               className="pointer-events-auto flex items-start gap-3 bg-white border border-slate-200 shadow-lg rounded-xl px-4 py-3 text-sm text-slate-800"
             >
-              {t.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />}
+              {t.type === 'success' && <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0 mt-0.5" />}
               {t.type === 'error' && <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />}
-              {t.type === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />}
-              {t.type === 'info' && <Info className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />}
+              {t.type === 'warning' && <AlertTriangle className="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" />}
+              {t.type === 'info' && <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />}
               <span className="flex-1 leading-snug">{t.message}</span>
               <button
                 type="button"
@@ -88,10 +88,36 @@ export function useToast() {
 }
 
 // ============================================================================
+// Official 4-Color Google "G" Mark (Blue, Red, Yellow, Green)
+// ============================================================================
+export function GoogleLogo({ className = 'w-4 h-4 shrink-0' }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="#4285F4"
+        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+      />
+      <path
+        fill="#34A853"
+        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+      />
+      <path
+        fill="#EA4335"
+        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+      />
+    </svg>
+  );
+}
+
+// ============================================================================
 // Buttons (Micro-interaction Hover, Press Scale 0.98, Inline Pending Spinner)
 // ============================================================================
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'navy' | 'secondary' | 'danger' | 'ghost';
+  variant?: 'primary' | 'navy' | 'secondary' | 'danger' | 'success' | 'warning' | 'ghost';
   size?: 'sm' | 'md' | 'lg';
   loading?: boolean;
 }
@@ -106,13 +132,15 @@ export function Button({
   ...props
 }: ButtonProps) {
   const base =
-    'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-150 ease-out active:scale-[0.98] disabled:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer';
+    'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-150 ease-out active:scale-[0.98] disabled:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer';
   const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
-    primary: 'bg-teal-600 text-white hover:bg-teal-700 hover:shadow-sm',
-    navy: 'bg-[#101C35] text-white hover:bg-[#172554] hover:shadow-sm',
-    secondary: 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 hover:border-slate-400',
+    primary: 'bg-blue-600 text-white hover:bg-blue-700 hover:shadow-sm',
+    navy: 'bg-[#0F295C] text-white hover:bg-[#17397A] hover:shadow-sm',
+    secondary: 'bg-white text-slate-700 border border-slate-300 hover:bg-blue-50/40 hover:border-blue-300',
     danger: 'bg-red-600 text-white hover:bg-red-700 hover:shadow-sm',
-    ghost: 'text-slate-600 hover:text-slate-900 hover:bg-slate-100',
+    success: 'bg-green-600 text-white hover:bg-green-700 hover:shadow-sm',
+    warning: 'bg-yellow-400 text-slate-950 hover:bg-yellow-500 hover:shadow-sm',
+    ghost: 'text-slate-600 hover:text-blue-700 hover:bg-blue-50/70',
   };
   const sizes: Record<NonNullable<ButtonProps['size']>, string> = {
     sm: 'text-xs px-3 py-1.5 min-h-[34px]',
@@ -139,7 +167,7 @@ export function StatusText({ status }: { status: string }) {
   const normalized = (status || '').toLowerCase();
   let color = 'text-slate-600';
   if (['active', 'published', 'present', 'completed', 'paid_manual', 'converted', 'approved'].includes(normalized)) {
-    color = 'text-emerald-700';
+    color = 'text-green-700';
   } else if (
     [
       'trial',
@@ -156,7 +184,7 @@ export function StatusText({ status }: { status: string }) {
       'scheduled',
     ].includes(normalized)
   ) {
-    color = 'text-amber-700';
+    color = 'text-yellow-700';
   } else if (
     ['suspended', 'expired', 'absent', 'overdue', 'cancelled', 'withdrawn', 'rejected', 'inactive', 'archived', 'dismissed'].includes(
       normalized,
@@ -175,7 +203,7 @@ export function StatusText({ status }: { status: string }) {
 }
 
 // ============================================================================
-// Single-Elevation Metric Card (Subtle Elevation & Border Highlight on Hover)
+// Single-Elevation Metric Card (Blue / Red / Green / Yellow Top Accent Rule)
 // ============================================================================
 export function StatCard({
   label,
@@ -186,24 +214,40 @@ export function StatCard({
   label: string;
   value: string | number;
   subtext?: string;
-  tone?: 'default' | 'teal' | 'amber' | 'red';
+  tone?: 'default' | 'blue' | 'green' | 'yellow' | 'red' | 'teal' | 'amber';
 }) {
   const valColor =
-    tone === 'teal'
-      ? 'text-teal-700'
-      : tone === 'amber'
-        ? 'text-amber-700'
-        : tone === 'red'
-          ? 'text-red-700'
-          : 'text-slate-900';
+    tone === 'blue'
+      ? 'text-blue-700'
+      : tone === 'green' || tone === 'teal'
+        ? 'text-green-700'
+        : tone === 'yellow' || tone === 'amber'
+          ? 'text-yellow-700'
+          : tone === 'red'
+            ? 'text-red-700'
+            : 'text-[#0F295C]';
+
+  const topAccent =
+    tone === 'blue'
+      ? 'bg-blue-600'
+      : tone === 'green' || tone === 'teal'
+        ? 'bg-green-600'
+        : tone === 'yellow' || tone === 'amber'
+          ? 'bg-yellow-400'
+          : tone === 'red'
+            ? 'bg-red-600'
+            : 'bg-blue-600/80';
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-2 transition-all duration-200 hover:border-slate-300 hover:shadow-sm">
-      <p className="text-xs font-medium text-slate-500">{label}</p>
-      <p className={`text-2xl font-bold font-display tabular-nums tracking-tight ${valColor}`}>
-        {value}
-      </p>
-      {subtext && <p className="text-xs text-slate-500 truncate">{subtext}</p>}
+    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col justify-between transition-all duration-200 hover:border-blue-200 hover:shadow-sm">
+      <div className={`h-1 w-full ${topAccent}`} aria-hidden="true" />
+      <div className="p-5 flex flex-col justify-between gap-2 flex-1">
+        <p className="text-xs font-medium text-slate-500">{label}</p>
+        <p className={`text-2xl font-bold font-display tabular-nums tracking-tight ${valColor}`}>
+          {value}
+        </p>
+        {subtext && <p className="text-xs text-slate-500 truncate">{subtext}</p>}
+      </div>
     </div>
   );
 }

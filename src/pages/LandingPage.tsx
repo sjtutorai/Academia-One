@@ -135,12 +135,15 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900">
+      {/* Top 4-Color Brand Spectrum Bar */}
+      <div className="h-1 w-full brand-spectrum-bar sticky top-0 z-50" aria-hidden="true" />
+
       {/* Sticky Top Navigation */}
       <header
-        className={`sticky top-0 z-40 transition-all duration-200 border-b ${
+        className={`sticky top-1 z-40 transition-all duration-200 border-b ${
           scrolled
             ? 'bg-white/95 backdrop-blur-md border-slate-200 py-3 shadow-xs'
-            : 'bg-[#101C35] border-slate-800/80 py-4'
+            : 'bg-[#0F295C] border-blue-900/80 py-4'
         }`}
       >
         <div className="max-w-7xl mx-auto px-6 flex items-center justify-between gap-8">
@@ -154,19 +157,19 @@ export default function LandingPage() {
           <nav
             aria-label="Primary Navigation"
             className={`hidden lg:flex items-center gap-7 text-sm font-medium ${
-              scrolled ? 'text-slate-600' : 'text-slate-300'
+              scrolled ? 'text-slate-600' : 'text-blue-100'
             }`}
           >
-            <a href="#features" className="nav-link-underline hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
+            <a href="#features" className="nav-link-underline hover:text-blue-400 transition-colors whitespace-nowrap shrink-0">
               Features
             </a>
-            <a href="#portals" className="nav-link-underline hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
+            <a href="#portals" className="nav-link-underline hover:text-red-400 transition-colors whitespace-nowrap shrink-0">
               For Schools
             </a>
-            <a href="#how-it-works" className="nav-link-underline hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
+            <a href="#how-it-works" className="nav-link-underline hover:text-yellow-400 transition-colors whitespace-nowrap shrink-0">
               How It Works
             </a>
-            <a href="#contact" className="nav-link-underline hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
+            <a href="#contact" className="nav-link-underline hover:text-green-400 transition-colors whitespace-nowrap shrink-0">
               Contact
             </a>
           </nav>
@@ -248,22 +251,32 @@ export default function LandingPage() {
         </AnimatePresence>
       </header>
 
-      {/* Hero Section: Deep Navy -> Midnight Indigo with Subtle Ambient Orbs */}
-      <section className="bg-gradient-to-br from-[#101C35] via-[#132245] to-[#172554] text-white relative overflow-hidden">
+      {/* Hero Section: Deep Cobalt Blue with Subtle 4-Color Ambient Orbs (Blue, Red, Yellow, Green) */}
+      <section className="bg-gradient-to-br from-[#0F295C] via-[#13326E] to-[#17397A] text-white relative overflow-hidden">
         <div
-          className="hidden md:block absolute -top-24 -right-24 w-[440px] h-[440px] rounded-full pointer-events-none opacity-25 blur-3xl animate-orb-slow"
+          className="hidden md:block absolute -top-24 -right-16 w-[440px] h-[440px] rounded-full pointer-events-none opacity-25 blur-3xl animate-orb-slow"
           style={{ background: 'radial-gradient(circle, #2563EB 0%, transparent 70%)' }}
           aria-hidden="true"
         />
         <div
-          className="hidden md:block absolute -bottom-28 -left-24 w-[420px] h-[420px] rounded-full pointer-events-none opacity-20 blur-3xl animate-orb-reverse"
-          style={{ background: 'radial-gradient(circle, #8B5CF6 0%, transparent 70%)' }}
+          className="hidden md:block absolute top-1/3 right-1/4 w-[280px] h-[280px] rounded-full pointer-events-none opacity-20 blur-3xl animate-orb-reverse"
+          style={{ background: 'radial-gradient(circle, #EA4335 0%, transparent 70%)' }}
           aria-hidden="true"
         />
         <div
-          className="absolute inset-0 pointer-events-none opacity-20"
+          className="hidden md:block absolute -bottom-24 left-1/3 w-[340px] h-[340px] rounded-full pointer-events-none opacity-15 blur-3xl animate-orb-slow"
+          style={{ background: 'radial-gradient(circle, #FBBC05 0%, transparent 70%)' }}
+          aria-hidden="true"
+        />
+        <div
+          className="hidden md:block absolute -bottom-28 -left-24 w-[420px] h-[420px] rounded-full pointer-events-none opacity-20 blur-3xl animate-orb-reverse"
+          style={{ background: 'radial-gradient(circle, #34A853 0%, transparent 70%)' }}
+          aria-hidden="true"
+        />
+        <div
+          className="absolute inset-0 pointer-events-none opacity-15"
           style={{
-            backgroundImage: 'radial-gradient(rgba(148,163,184,0.28) 1px, transparent 1px)',
+            backgroundImage: 'radial-gradient(rgba(191,219,254,0.35) 1px, transparent 1px)',
             backgroundSize: '28px 28px',
           }}
         />
@@ -277,7 +290,7 @@ export default function LandingPage() {
           >
             <motion.p
               variants={getStaggerItemVariants(prefersReducedMotion, 10)}
-              className="text-xs font-medium text-teal-400 tracking-wide mb-3.5"
+              className="text-xs font-semibold text-yellow-300 tracking-wide mb-3.5"
             >
               100% Free for All Schools · Main Head Verified · Strict Tenant Isolation
             </motion.p>
@@ -290,7 +303,7 @@ export default function LandingPage() {
             </motion.h1>
             <motion.p
               variants={getStaggerItemVariants(prefersReducedMotion, 12)}
-              className="mt-5 text-base sm:text-lg text-slate-300 leading-relaxed max-w-2xl"
+              className="mt-5 text-base sm:text-lg text-blue-100 leading-relaxed max-w-2xl"
             >
               Register your school completely free, receive dedicated role-specific School Access Codes upon Main Head
               approval, and run conflict-checked timetables, attendance, exams, and homework across five portals.
@@ -306,33 +319,33 @@ export default function LandingPage() {
               <Button
                 variant="secondary"
                 size="lg"
-                className="!bg-transparent !text-white !border-slate-600 hover:!bg-slate-800/80"
+                className="!bg-transparent !text-white !border-blue-300/50 hover:!bg-white/10"
                 onClick={() => navigate(activeUser ? ROLE_HOME_ROUTES[activeUser.role] : '/login')}
               >
                 {activeUser ? 'Go to My Portal' : 'Sign In'}
               </Button>
               <Link
                 to="/application-status"
-                className="inline-flex items-center justify-center px-3 py-3 text-sm font-medium text-teal-300 hover:text-teal-200 transition-colors whitespace-nowrap"
+                className="inline-flex items-center justify-center px-3 py-3 text-sm font-medium text-yellow-300 hover:text-yellow-200 transition-colors whitespace-nowrap"
               >
                 Track Application →
               </Link>
             </motion.div>
             <motion.div
               variants={getStaggerItemVariants(prefersReducedMotion, 10)}
-              className="mt-10 pt-8 border-t border-slate-700/70 grid grid-cols-1 sm:grid-cols-3 gap-6 max-w-2xl"
+              className="mt-10 pt-8 border-t border-blue-400/25 grid grid-cols-1 sm:grid-cols-3 gap-6 max-w-2xl"
             >
               <div>
-                <p className="text-xl font-bold font-display tabular-nums text-white">5 Portals</p>
-                <p className="text-xs text-slate-400 mt-1">Email & Google auto-routing</p>
+                <p className="text-xl font-bold font-display tabular-nums text-blue-300">5 Portals</p>
+                <p className="text-xs text-blue-100/80 mt-1">Email & Google auto-routing</p>
               </div>
               <div>
-                <p className="text-xl font-bold font-display tabular-nums text-white">100% Free</p>
-                <p className="text-xs text-slate-400 mt-1">All modules included</p>
+                <p className="text-xl font-bold font-display tabular-nums text-green-300">100% Free</p>
+                <p className="text-xs text-blue-100/80 mt-1">All modules included</p>
               </div>
               <div>
-                <p className="text-xl font-bold font-display tabular-nums text-white">Role Access Codes</p>
-                <p className="text-xs text-slate-400 mt-1">Auto-identifies school, role & class</p>
+                <p className="text-xl font-bold font-display tabular-nums text-yellow-300">Role Access Codes</p>
+                <p className="text-xs text-blue-100/80 mt-1">Auto-identifies school, role & class</p>
               </div>
             </motion.div>
           </motion.div>
@@ -359,36 +372,48 @@ export default function LandingPage() {
             {
               num: '01',
               icon: Building2,
+              bar: 'bg-blue-600',
+              iconColor: 'text-blue-600',
               title: 'Multi-School Tenant Isolation',
               body: 'Every class, roster, attendance sheet, and result carries an enforced schoolId key verified in Firestore security rules.',
             },
             {
               num: '02',
               icon: ShieldCheck,
+              bar: 'bg-red-600',
+              iconColor: 'text-red-600',
               title: 'Unified Role-Free Sign-In',
               body: 'One login form for every user. Credentials automatically resolve role, school scope, and forced password resets.',
             },
             {
               num: '03',
               icon: CalendarClock,
+              bar: 'bg-yellow-400',
+              iconColor: 'text-yellow-600',
               title: 'Conflict-Checked Timetables & Rooms',
               body: 'Detect teacher, class, and room double-bookings plus room capacity conflicts before publishing schedules.',
             },
             {
               num: '04',
               icon: ClipboardCheck,
+              bar: 'bg-green-600',
+              iconColor: 'text-green-600',
               title: 'Audited Attendance & Bounded Marks',
               body: 'Teachers draft and submit daily attendance with change histories and enter exam marks validated against max marks.',
             },
             {
               num: '05',
               icon: BookOpenCheck,
+              bar: 'bg-blue-600',
+              iconColor: 'text-blue-600',
               title: 'Homework, Submissions & CSV Bulk Ops',
               body: 'Import students via validated CSV templates, assign homework, collect files, and return inline teacher feedback.',
             },
             {
               num: '06',
               icon: BellRing,
+              bar: 'bg-red-600',
+              iconColor: 'text-red-600',
               title: 'Push & In-App Notification Engine',
               body: 'Real-time alerts for announcements, homework reminders, and published exams with per-user preference controls.',
             },
@@ -398,14 +423,17 @@ export default function LandingPage() {
               <motion.div
                 key={f.num}
                 variants={getStaggerItemVariants(prefersReducedMotion, 12)}
-                className="bg-white border border-slate-200 rounded-xl p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm"
+                className="bg-white border border-slate-200 rounded-xl overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-sm"
               >
-                <div className="flex items-center justify-between mb-3.5">
-                  <span className="text-xs font-mono text-slate-400">{f.num}</span>
-                  <Icon className="w-5 h-5 text-teal-600" />
+                <div className={`h-1 w-full ${f.bar}`} aria-hidden="true" />
+                <div className="p-5">
+                  <div className="flex items-center justify-between mb-3.5">
+                    <span className="text-xs font-mono text-slate-400">{f.num}</span>
+                    <Icon className={`w-5 h-5 ${f.iconColor}`} />
+                  </div>
+                  <h3 className="text-base font-bold font-display text-[#0F295C]">{f.title}</h3>
+                  <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">{f.body}</p>
                 </div>
-                <h3 className="text-base font-bold font-display text-slate-900">{f.title}</h3>
-                <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">{f.body}</p>
               </motion.div>
             );
           })}
@@ -417,13 +445,13 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div className="max-w-2xl">
-              <p className="text-xs font-semibold text-teal-700 tracking-wide">Role-Based Portals</p>
-              <h2 className="mt-2 text-2xl sm:text-3xl font-bold font-display text-slate-900 tracking-tight text-balance">
+              <p className="text-xs font-semibold text-red-600 tracking-wide">Role-Based Portals</p>
+              <h2 className="mt-2 text-2xl sm:text-3xl font-bold font-display text-[#0F295C] tracking-tight text-balance">
                 Least-privilege workspaces tailored to every school role
               </h2>
             </div>
-            <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-teal-50 border border-teal-200 text-xs font-semibold text-teal-800">
-              <Sparkles className="w-4 h-4 text-teal-600 shrink-0" />
+            <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-green-50 border border-green-200 text-xs font-semibold text-green-800">
+              <Sparkles className="w-4 h-4 text-green-600 shrink-0" />
               100% Free Unlimited Access for Every School
             </div>
           </div>
@@ -439,44 +467,62 @@ export default function LandingPage() {
               {
                 role: 'Main Head',
                 scope: 'Platform Owner',
-                items: ['Verify & approve schools', 'Issue unique School Codes', 'Platform analytics & users', 'Append-only audit logs'],
+                bar: 'bg-blue-600',
+                accent: 'text-blue-700',
+                check: 'text-blue-600',
+                items: ['Verify & approve schools', 'Issue unique School Codes', 'Change school passwords', 'Append-only audit logs'],
               },
               {
                 role: 'Principal',
                 scope: 'Single School Admin',
+                bar: 'bg-red-600',
+                accent: 'text-red-700',
+                check: 'text-red-600',
                 items: ['GPS campus address setup', 'Coordinators, teachers & CSV', 'Classes, rooms & timetables', 'Exams, notices & reports'],
               },
               {
                 role: 'Coordinator',
                 scope: 'Assigned Classes',
+                bar: 'bg-yellow-400',
+                accent: 'text-yellow-700',
+                check: 'text-yellow-600',
                 items: ['Monitor attendance alerts', 'Review class timetables', 'Coordinate exam dates', 'Flag issues for Principal'],
               },
               {
                 role: 'Teacher',
                 scope: 'Assigned Subjects',
+                bar: 'bg-green-600',
+                accent: 'text-green-700',
+                check: 'text-green-600',
                 items: ['Daily classes & agenda', 'Draft/submit attendance', 'Homework & marks entry', 'Upload learning materials'],
               },
               {
                 role: 'Student',
                 scope: 'Personal Portal',
+                bar: 'bg-blue-600',
+                accent: 'text-blue-700',
+                check: 'text-blue-600',
                 items: ['Weekly class timetable', 'Online homework upload', 'Published exam results', 'Attendance & resources'],
               },
             ].map((p) => (
               <motion.div
                 key={p.role}
                 variants={getStaggerItemVariants(prefersReducedMotion, 10)}
-                className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex flex-col transition-all duration-200 hover:border-slate-300 hover:bg-white"
+                className="bg-slate-50 border border-slate-200 rounded-xl overflow-hidden flex flex-col transition-all duration-200 hover:border-blue-200 hover:bg-white hover:shadow-xs"
               >
-                <p className="text-xs text-teal-700 font-medium">{p.scope}</p>
-                <h3 className="text-base font-bold font-display text-slate-900 mt-1">{p.role}</h3>
-                <ul className="mt-3.5 space-y-2 text-xs text-slate-600 flex-1">
-                  {p.items.map((item) => (
-                    <li key={item} className="flex items-start gap-2">
-                      <Check className="w-3.5 h-3.5 text-teal-600 shrink-0 mt-0.5" />
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
+                <div className={`h-1 w-full ${p.bar}`} aria-hidden="true" />
+                <div className="p-5 flex flex-col flex-1">
+                  <p className={`text-xs font-semibold ${p.accent}`}>{p.scope}</p>
+                  <h3 className="text-base font-bold font-display text-[#0F295C] mt-1">{p.role}</h3>
+                  <ul className="mt-3.5 space-y-2 text-xs text-slate-600 flex-1">
+                    {p.items.map((item) => (
+                      <li key={item} className="flex items-start gap-2">
+                        <Check className={`w-3.5 h-3.5 ${p.check} shrink-0 mt-0.5`} />
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </motion.div>
             ))}
           </motion.div>
@@ -486,8 +532,8 @@ export default function LandingPage() {
       {/* How Onboarding Works */}
       <section id="how-it-works" className="max-w-7xl mx-auto px-6 py-16">
         <div className="max-w-2xl">
-          <p className="text-xs font-semibold text-teal-700 tracking-wide">Onboarding Workflow</p>
-          <h2 className="mt-2 text-2xl sm:text-3xl font-bold font-display text-slate-900 tracking-tight text-balance">
+          <p className="text-xs font-semibold text-green-700 tracking-wide">Onboarding Workflow</p>
+          <h2 className="mt-2 text-2xl sm:text-3xl font-bold font-display text-[#0F295C] tracking-tight text-balance">
             From school registration to live classrooms in four structured steps
           </h2>
         </div>
@@ -500,19 +546,22 @@ export default function LandingPage() {
           className="mt-10 grid md:grid-cols-4 gap-5"
         >
           {[
-            { step: '01', title: 'Free 6-Step Application', desc: 'Submit institutional, GPS-verified campus address, Principal, and academic details to receive a trackable Application Number.' },
-            { step: '02', title: 'Main Head Approval', desc: 'Main Head verifies your school and auto-issues a unique School Code while enabling Principal Email & Google login.' },
-            { step: '03', title: 'Post-Approval Setup', desc: 'Principal configures classes, sections, campus rooms, and pre-registers staff & student email IDs.' },
-            { step: '04', title: 'Smart Member Access', desc: 'Registered emails enter directly on sign-in; unregistered members enter the School Code to apply to the Principal.' },
+            { step: '01', bar: 'bg-blue-600', numColor: 'text-blue-600', title: 'Free 6-Step Application', desc: 'Submit institutional, GPS-verified campus address, Principal, and academic details to receive a trackable Application Number.' },
+            { step: '02', bar: 'bg-red-600', numColor: 'text-red-600', title: 'Main Head Approval', desc: 'Main Head verifies your school and auto-issues a unique School Code while enabling Principal Email & Google login.' },
+            { step: '03', bar: 'bg-yellow-400', numColor: 'text-yellow-600', title: 'Post-Approval Setup', desc: 'Principal configures classes, sections, campus rooms, and pre-registers staff & student email IDs.' },
+            { step: '04', bar: 'bg-green-600', numColor: 'text-green-600', title: 'Smart Member Access', desc: 'Registered emails enter directly on sign-in; members enter their role access code to auto-identify school, role & class.' },
           ].map((item) => (
             <motion.div
               key={item.step}
               variants={getStaggerItemVariants(prefersReducedMotion, 10)}
-              className="bg-white border border-slate-200 rounded-xl p-5 transition-all duration-200 hover:border-slate-300 hover:shadow-sm"
+              className="bg-white border border-slate-200 rounded-xl overflow-hidden transition-all duration-200 hover:border-blue-200 hover:shadow-sm"
             >
-              <p className="text-2xl font-bold font-mono text-teal-600 tabular-nums">{item.step}</p>
-              <h3 className="mt-2.5 text-base font-bold font-display text-slate-900">{item.title}</h3>
-              <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">{item.desc}</p>
+              <div className={`h-1 w-full ${item.bar}`} aria-hidden="true" />
+              <div className="p-5">
+                <p className={`text-2xl font-bold font-mono tabular-nums ${item.numColor}`}>{item.step}</p>
+                <h3 className="mt-2.5 text-base font-bold font-display text-[#0F295C]">{item.title}</h3>
+                <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">{item.desc}</p>
+              </div>
             </motion.div>
           ))}
         </motion.div>
@@ -561,23 +610,25 @@ export default function LandingPage() {
 
             <div className="mt-6 space-y-2 text-sm text-slate-600">
               <div className="flex items-center gap-2.5">
-                <Mail className="w-4 h-4 text-teal-600" />
+                <Mail className="w-4 h-4 text-blue-600" />
                 <span>{settings.supportEmail || 'support@academiaone.edu'}</span>
               </div>
               <div className="flex items-center gap-2.5">
-                <Phone className="w-4 h-4 text-teal-600" />
+                <Phone className="w-4 h-4 text-green-600" />
                 <span>{settings.supportPhone || '+1 (800) 555-0199'}</span>
               </div>
               <div className="flex items-center gap-2.5">
-                <MapPin className="w-4 h-4 text-teal-600" />
+                <MapPin className="w-4 h-4 text-red-600" />
                 <span>Multi-Region Cloud Platform · 100% Free for Schools</span>
               </div>
             </div>
           </div>
 
           {/* School Registration Enquiry Form */}
-          <div id="contact" className="lg:col-span-7 bg-[#F8FAFC] border border-slate-200 rounded-xl p-7">
-            <h3 className="text-xl font-bold font-display text-slate-900">
+          <div id="contact" className="lg:col-span-7 bg-[#F8FAFC] border border-slate-200 rounded-xl overflow-hidden">
+            <div className="h-1 w-full brand-spectrum-bar" aria-hidden="true" />
+            <div className="p-7">
+            <h3 className="text-xl font-bold font-display text-[#0F295C]">
               School Onboarding Enquiry
             </h3>
             <p className="text-sm text-slate-600 mt-1">
@@ -590,9 +641,9 @@ export default function LandingPage() {
                 <span className="font-semibold text-slate-900">{settings.supportEmail}</span> directly.
               </div>
             ) : enquirySubmitted ? (
-              <div className="mt-6 p-6 bg-emerald-50 border border-emerald-200 rounded-lg">
-                <p className="text-sm font-semibold text-emerald-900">Enquiry received</p>
-                <p className="text-sm text-emerald-800 mt-1">
+              <div className="mt-6 p-6 bg-green-50 border border-green-200 rounded-lg">
+                <p className="text-sm font-semibold text-green-900">Enquiry received</p>
+                <p className="text-sm text-green-800 mt-1">
                   Thank you. Your school enquiry has been logged for review by the Main Head team.
                 </p>
                 <Button
@@ -615,7 +666,7 @@ export default function LandingPage() {
                       value={enquiry.schoolName}
                       onChange={(e) => setEnquiry({ ...enquiry, schoolName: e.target.value })}
                       placeholder="e.g. Oakwood Science Academy"
-                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                     />
                   </div>
                   <div>
@@ -626,7 +677,7 @@ export default function LandingPage() {
                       value={enquiry.contactName}
                       onChange={(e) => setEnquiry({ ...enquiry, contactName: e.target.value })}
                       placeholder="e.g. Dr. Miriam Alcott"
-                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                     />
                   </div>
                 </div>
@@ -640,7 +691,7 @@ export default function LandingPage() {
                       value={enquiry.email}
                       onChange={(e) => setEnquiry({ ...enquiry, email: e.target.value })}
                       placeholder="principal@school.edu"
-                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                     />
                   </div>
                   <div>
@@ -653,7 +704,7 @@ export default function LandingPage() {
                       value={enquiry.phone}
                       onChange={(e) => setEnquiry({ ...enquiry, phone: sanitizePhoneDigits(e.target.value) })}
                       placeholder="e.g. 9876543210"
-                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg tabular-nums transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg tabular-nums transition-colors focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                     />
                   </div>
                   <div>
@@ -664,7 +715,7 @@ export default function LandingPage() {
                       max={20000}
                       value={enquiry.estimatedStudents}
                       onChange={(e) => setEnquiry({ ...enquiry, estimatedStudents: e.target.value })}
-                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg tabular-nums transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg tabular-nums transition-colors focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                     />
                   </div>
                 </div>
@@ -676,7 +727,7 @@ export default function LandingPage() {
                     value={enquiry.message}
                     onChange={(e) => setEnquiry({ ...enquiry, message: e.target.value })}
                     placeholder="Share grade levels, target start semester, or migration needs..."
-                    className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                    className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                   />
                 </div>
 
@@ -689,12 +740,14 @@ export default function LandingPage() {
                 </div>
               </form>
             )}
+            </div>
           </div>
         </div>
       </section>
 
       {/* Quiet Footer */}
-      <footer className="bg-[#101C35] text-slate-400 border-t border-slate-800">
+      <footer className="bg-[#0F295C] text-blue-200/80 border-t border-blue-900">
+        <div className="h-1 w-full brand-spectrum-bar" aria-hidden="true" />
         <div className="max-w-7xl mx-auto px-6 py-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div>
             <BrandLogo
@@ -704,7 +757,7 @@ export default function LandingPage() {
             />
           </div>
           <div className="flex flex-wrap items-center gap-6 text-xs">
-            <Link to="/register-school" className="text-teal-400 hover:text-teal-300 font-medium transition-colors">Register School</Link>
+            <Link to="/register-school" className="text-yellow-300 hover:text-yellow-200 font-medium transition-colors">Register School</Link>
             <Link to="/application-status" className="hover:text-white transition-colors">Track Application</Link>
             <a href="#features" className="hover:text-white transition-colors">Features</a>
             <Link to="/login" className="hover:text-white transition-colors">Sign In</Link>

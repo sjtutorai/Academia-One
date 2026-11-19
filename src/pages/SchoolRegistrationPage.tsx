@@ -50,7 +50,7 @@ import {
   MOTION_EASE,
 } from '../lib/motion';
 import { useAuth } from '../contexts/AuthContext';
-import { Button, useToast } from '../components/ui/Primitives';
+import { Button, GoogleLogo, useToast } from '../components/ui/Primitives';
 import { BrandLogo } from '../components/ui/BrandLogo';
 import {
   DetectLocationAddressPicker,
@@ -793,21 +793,22 @@ export default function SchoolRegistrationPage() {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] pb-16">
-      {/* Top Bar */}
-      <header className="bg-[#101C35] text-white border-b border-slate-800">
+      {/* Top 4-Color Brand Spectrum Bar & Header */}
+      <div className="h-1 w-full brand-spectrum-bar" aria-hidden="true" />
+      <header className="bg-[#0F295C] text-white border-b border-blue-900">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <Link to="/" className="hover:opacity-90 transition-opacity">
               <BrandLogo size="sm" tone="dark" />
             </Link>
-            <span className="text-slate-600 hidden sm:inline">/</span>
-            <span className="text-xs text-slate-300 hidden sm:inline">Free School Registration</span>
+            <span className="text-blue-400/60 hidden sm:inline">/</span>
+            <span className="text-xs text-blue-100 hidden sm:inline">Free School Registration</span>
           </div>
           <div className="flex items-center gap-4 text-xs">
-            <Link to="/application-status" className="text-teal-300 hover:text-teal-200 font-medium transition-colors">
+            <Link to="/application-status" className="text-yellow-300 hover:text-yellow-200 font-medium transition-colors">
               Track Application
             </Link>
-            <Link to="/login" className="text-slate-300 hover:text-white font-medium transition-colors">
+            <Link to="/login" className="text-blue-100 hover:text-white font-medium transition-colors">
               Sign In
             </Link>
           </div>
@@ -955,6 +956,7 @@ export default function SchoolRegistrationPage() {
                           loading={googleSubmitting}
                           disabled={authBusy}
                         >
+                          {!googleSubmitting && <GoogleLogo className="w-4 h-4 shrink-0" />}
                           {googleSubmitting ? 'Connecting to Google…' : 'Continue with Google'}
                         </Button>
                       </div>

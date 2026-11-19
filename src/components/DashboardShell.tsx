@@ -92,8 +92,9 @@ export function DashboardShell({
   };
 
   const renderSidebarNav = (isMobile = false) => (
-    <div className="flex flex-col h-full bg-[#101C35] text-slate-200">
-      <div className="h-14 px-3.5 flex items-center justify-between border-b border-slate-800/80 shrink-0">
+    <div className="flex flex-col h-full bg-[#0F295C] text-blue-100">
+      <div className="h-1 w-full brand-spectrum-bar shrink-0" aria-hidden="true" />
+      <div className="h-14 px-3.5 flex items-center justify-between border-b border-blue-900/80 shrink-0">
         {(!collapsed || isMobile) ? (
           <Link to="/" className="min-w-0 hover:opacity-90 transition-opacity">
             <BrandLogo size="xs" tone="dark" />
@@ -107,7 +108,7 @@ export function DashboardShell({
           <button
             type="button"
             onClick={() => setCollapsed((v) => !v)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            className="p-1.5 rounded-lg text-blue-300 hover:text-white hover:bg-blue-900/70 transition-colors cursor-pointer"
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
@@ -117,7 +118,7 @@ export function DashboardShell({
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            className="p-1.5 rounded-lg text-blue-300 hover:text-white hover:bg-blue-900/70 transition-colors cursor-pointer"
             aria-label="Close menu"
           >
             <X className="w-5 h-5" />
@@ -127,8 +128,8 @@ export function DashboardShell({
 
       {/* Role & Tenant Context Header */}
       {(!collapsed || isMobile) && activeUser && (
-        <div className="px-4 py-2.5 border-b border-slate-800/80 shrink-0">
-          <p className="text-[11px] font-medium text-teal-400">
+        <div className="px-4 py-2.5 border-b border-blue-900/80 shrink-0">
+          <p className="text-[11px] font-semibold text-yellow-300">
             {ROLE_LABELS[activeUser.role]}
           </p>
           <p className="text-xs font-semibold text-white truncate mt-0.5">
@@ -152,14 +153,14 @@ export function DashboardShell({
               className={`relative flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors duration-150 ${
                 active
                   ? 'text-white'
-                  : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
+                  : 'text-blue-100/85 hover:bg-blue-900/60 hover:text-white'
               }`}
             >
               {active && (
                 <motion.span
                   layoutId={isMobile ? 'sidebar-active-mobile' : 'sidebar-active-desktop'}
                   transition={{ duration: prefersReducedMotion ? 0 : 0.22, ease: MOTION_EASE.out }}
-                  className="absolute inset-0 rounded-lg bg-teal-600 shadow-sm"
+                  className="absolute inset-0 rounded-lg bg-blue-600 shadow-sm"
                   aria-hidden="true"
                 />
               )}
@@ -170,13 +171,13 @@ export function DashboardShell({
         })}
       </nav>
 
-      <div className="p-2.5 border-t border-slate-800/80 space-y-0.5 shrink-0">
+      <div className="p-2.5 border-t border-blue-900/80 space-y-0.5 shrink-0">
         <Link
           to={`${basePortalPath}/profile`}
           onClick={() => isMobile && setMobileOpen(false)}
-          className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
+          className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs font-medium text-blue-100 hover:bg-blue-900/60 hover:text-white transition-colors"
         >
-          <UserCircle2 className="w-4 h-4 shrink-0" />
+          <UserCircle2 className="w-4 h-4 shrink-0 text-green-400" />
           {(!collapsed || isMobile) && <span className="truncate">{activeUser?.displayName}</span>}
         </Link>
         <button
@@ -185,7 +186,7 @@ export function DashboardShell({
             await logout();
             navigate('/login');
           }}
-          className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:bg-slate-800 hover:text-red-300 transition-colors cursor-pointer"
+          className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs font-medium text-blue-200 hover:bg-red-950/60 hover:text-red-300 transition-colors cursor-pointer"
         >
           <LogOut className="w-4 h-4 shrink-0" />
           {(!collapsed || isMobile) && <span>Sign Out</span>}
@@ -264,20 +265,23 @@ export function DashboardShell({
           </div>
         )}
 
+        {/* Top 4-Color Brand Spectrum Bar */}
+        <div className="h-1 w-full brand-spectrum-bar shrink-0" aria-hidden="true" />
+
         {/* Top Navigation Bar */}
         <header className="sticky top-0 z-30 h-16 bg-white/95 backdrop-blur-sm border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setMobileOpen(true)}
-              className="lg:hidden p-2 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+              className="lg:hidden p-2 rounded-lg text-slate-600 hover:bg-blue-50 transition-colors cursor-pointer"
               aria-label="Open navigation menu"
             >
               <Menu className="w-5 h-5" />
             </button>
             <div className="min-w-0">
-              {breadcrumb && <p className="text-[11px] text-slate-400 truncate">{breadcrumb}</p>}
-              <h1 className="text-base sm:text-lg font-bold font-display text-slate-900 truncate">
+              {breadcrumb && <p className="text-[11px] font-medium text-blue-600 truncate">{breadcrumb}</p>}
+              <h1 className="text-base sm:text-lg font-bold font-display text-[#0F295C] truncate">
                 {title}
               </h1>
             </div>
@@ -292,14 +296,14 @@ export function DashboardShell({
                   value={searchValue}
                   onChange={(e) => handleSearch(e.target.value)}
                   placeholder={globalSearchPlaceholder}
-                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg transition-all duration-150 focus:outline-none focus:bg-white focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg transition-all duration-150 focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                 />
               </div>
             )}
 
             <Link
               to={`${basePortalPath}/notifications`}
-              className="relative p-2 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors"
+              className="relative p-2 rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700 transition-colors"
               aria-label="Notifications"
             >
               <Bell className="w-5 h-5" />
@@ -311,7 +315,7 @@ export function DashboardShell({
                     animate={{ scale: 1, opacity: 1 }}
                     exit={{ scale: 0.75, opacity: 0 }}
                     transition={{ duration: 0.16, ease: MOTION_EASE.out }}
-                    className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-teal-600 text-white text-[10px] font-bold flex items-center justify-center tabular-nums"
+                    className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center tabular-nums"
                   >
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </motion.span>
@@ -324,11 +328,11 @@ export function DashboardShell({
               <button
                 type="button"
                 onClick={() => setProfileMenuOpen((v) => !v)}
-                className="flex items-center gap-2 text-xs text-slate-700 hover:text-slate-900 rounded-lg px-1.5 py-1 hover:bg-slate-50 transition-colors cursor-pointer"
+                className="flex items-center gap-2 text-xs text-slate-700 hover:text-slate-900 rounded-lg px-1.5 py-1 hover:bg-blue-50/60 transition-colors cursor-pointer"
                 aria-expanded={profileMenuOpen}
                 aria-haspopup="menu"
               >
-                <div className="w-8 h-8 rounded-lg bg-[#101C35] text-white font-display font-bold text-xs flex items-center justify-center shrink-0">
+                <div className="w-8 h-8 rounded-lg bg-blue-600 text-white font-display font-bold text-xs flex items-center justify-center shrink-0">
                   {(activeUser?.displayName || 'A').slice(0, 2).toUpperCase()}
                 </div>
                 <div className="text-left leading-tight max-w-[120px]">
