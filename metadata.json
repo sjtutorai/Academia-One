@@ -1,0 +1,6 @@
+{
+  "name": "AcademiaOne — Multi-School Management System",
+  "description": "Multi-tenant School Management SaaS platform with unified authentication, push and in-app notifications, and five role-based portals for Main Head, Principals, Coordinators, Teachers, and Students.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

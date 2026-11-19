@@ -1,0 +1,1670 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import {
+  LayoutDashboard,
+  CalendarDays,
+  BookOpen,
+  ClipboardCheck,
+  ClipboardList,
+  Award,
+  FolderOpen,
+  Megaphone,
+  Bell,
+  UserCircle2,
+  Plus,
+  CheckCircle2,
+  Save,
+  Upload,
+} from 'lucide-react';
+import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { db, generateId, handleFirestoreError, OperationType, formatFirestoreDate } from '../../lib/firebase';
+import { getSchoolAccessMode, computeLetterGrade } from '../../lib/permissions';
+import { recordAuditLog } from '../../lib/audit';
+import { useAuth } from '../../contexts/AuthContext';
+import { useSchoolData, type SchoolDataBundle } from '../../hooks/useSchoolData';
+import { DashboardShell, type NavItem } from '../../components/DashboardShell';
+import {
+  Button,
+  EmptyState,
+  Modal,
+  SkeletonTable,
+  StatCard,
+  StatusText,
+  useToast,
+} from '../../components/ui/Primitives';
+import { NotificationsAndPreferencesView } from '../../components/shared/NotificationsAndPreferencesView';
+import { ProfileSecurityView } from '../../components/shared/ProfileSecurityView';
+import type {
+  AttendanceEntry,
+  DayOfWeek,
+  ExamResult,
+  Homework,
+  HomeworkSubmission,
+  LearningMaterial,
+  PlatformUser,
+} from '../../types/models';
+
+const TEACHER_NAV: NavItem[] = [
+  { id: 'dashboard', label: 'Dashboard', path: '/teacher/dashboard', icon: LayoutDashboard },
+  { id: 'timetable', label: 'My Timetable', path: '/teacher/timetable', icon: CalendarDays },
+  { id: 'classes', label: 'My Classes', path: '/teacher/classes', icon: BookOpen },
+  { id: 'attendance', label: 'Attendance', path: '/teacher/attendance', icon: ClipboardCheck },
+  { id: 'homework', label: 'Homework & Reviews', path: '/teacher/homework', icon: ClipboardList },
+  { id: 'marks', label: 'Exams & Marks', path: '/teacher/marks', icon: Award },
+  { id: 'materials', label: 'Learning Materials', path: '/teacher/materials', icon: FolderOpen },
+  { id: 'announcements', label: 'Announcements', path: '/teacher/announcements', icon: Megaphone },
+  { id: 'notifications', label: 'Notifications', path: '/teacher/notifications', icon: Bell },
+  { id: 'profile', label: 'Profile', path: '/teacher/profile', icon: UserCircle2 },
+];
+
+const DAYS: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function getTodayDayName(): DayOfWeek {
+  const map: DayOfWeek[] = ['Monday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return map[new Date().getDay()] || 'Monday';
+}
+
+export default function TeacherPortal() {
+  const { activeUser, activeSchool } = useAuth();
+  const schoolId = activeUser?.schoolId || '';
+  const data = useSchoolData(schoolId, false);
+  const access = getSchoolAccessMode(activeSchool);
+  const [globalSearch, setGlobalSearch] = useState('');
+
+  // Resolve teacher profile & assigned classes
+  const teacherProfile = useMemo(() => {
+    if (!activeUser) return undefined;
+    return data.teachers.find(
+      (t) => t.userId === activeUser.uid || t.email.toLowerCase() === activeUser.email.toLowerCase(),
+    );
+  }, [data.teachers, activeUser]);
+
+  const assignedClassSet = useMemo(() => {
+    const ids = new Set<string>([
+      ...(activeUser?.assignedClassIds || []),
+      ...(teacherProfile?.assignedClassIds || []),
+    ]);
+    if (teacherProfile?.id) {
+      data.classes.forEach((c) => {
+        if (c.classTeacherId === teacherProfile.id) ids.add(c.id);
+      });
+      data.subjects.forEach((s) => {
+        if (s.teacherId === teacherProfile.id) ids.add(s.classId);
+      });
+      data.timetable.forEach((p) => {
+        if (p.teacherId === teacherProfile.id) ids.add(p.classId);
+      });
+    }
+    return ids;
+  }, [activeUser?.assignedClassIds, teacherProfile, data.classes, data.subjects, data.timetable]);
+
+  const scopedData = useMemo<SchoolDataBundle>(() => {
+    const inClass = (cid?: string) => Boolean(cid && assignedClassSet.has(cid));
+    return {
+      ...data,
+      classes: data.classes.filter((c) => inClass(c.id)),
+      subjects: data.subjects.filter(
+        (s) =>
+          inClass(s.classId) &&
+          (!teacherProfile?.id || !s.teacherId || s.teacherId === teacherProfile.id || (activeUser?.assignedSubjectIds || []).includes(s.id)),
+      ),
+      students: data.students.filter((st) => inClass(st.classId)),
+      timetable: data.timetable.filter(
+        (p) =>
+          (teacherProfile?.id && p.teacherId === teacherProfile.id) ||
+          (p.teacherName && activeUser && p.teacherName.toLowerCase() === activeUser.displayName.toLowerCase()),
+      ),
+      attendance: data.attendance.filter((a) => inClass(a.classId)),
+      homework: data.homework.filter((h) => inClass(h.classId)),
+      submissions: data.submissions.filter((sub) => inClass(sub.classId)),
+      examinations: data.examinations.filter((ex) => inClass(ex.classId)),
+      examResults: data.examResults.filter((r) => inClass(r.classId)),
+      materials: data.materials.filter((m) => inClass(m.classId)),
+      announcements: data.announcements.filter(
+        (a) =>
+          a.audience === 'school_wide' ||
+          (a.audience === 'role_specific' && a.targetRole === 'teacher') ||
+          (a.audience === 'class_specific' && inClass(a.targetClassId)),
+      ),
+    };
+  }, [data, assignedClassSet, teacherProfile?.id, activeUser]);
+
+  if (!activeUser) return null;
+
+  return (
+    <DashboardShell
+      title="Teacher Portal"
+      breadcrumb={`${activeSchool?.name || 'School'} · Classroom Workspace`}
+      navItems={TEACHER_NAV}
+      onGlobalSearch={setGlobalSearch}
+      globalSearchPlaceholder="Search classes, students, homework…"
+    >
+      <Routes>
+        <Route index element={<Navigate to="dashboard" replace />} />
+        <Route
+          path="dashboard"
+          element={<TeacherOverview user={activeUser} data={scopedData} teacherId={teacherProfile?.id} />}
+        />
+        <Route path="timetable" element={<TeacherTimetableView data={scopedData} />} />
+        <Route path="classes" element={<TeacherClassesView data={scopedData} search={globalSearch} />} />
+        <Route
+          path="attendance"
+          element={
+            <TeacherAttendanceView
+              user={activeUser}
+              teacherId={teacherProfile?.id || activeUser.uid}
+              data={scopedData}
+              canWrite={access.canWrite}
+            />
+          }
+        />
+        <Route
+          path="homework"
+          element={
+            <TeacherHomeworkView
+              user={activeUser}
+              teacherId={teacherProfile?.id || activeUser.uid}
+              data={scopedData}
+              canWrite={access.canWrite}
+              search={globalSearch}
+            />
+          }
+        />
+        <Route
+          path="marks"
+          element={<TeacherMarksView user={activeUser} data={scopedData} canWrite={access.canWrite} />}
+        />
+        <Route
+          path="materials"
+          element={
+            <TeacherMaterialsView
+              user={activeUser}
+              teacherId={teacherProfile?.id || activeUser.uid}
+              data={scopedData}
+              canWrite={access.canWrite}
+            />
+          }
+        />
+        <Route
+          path="announcements"
+          element={<TeacherAnnouncementsView user={activeUser} data={scopedData} canWrite={access.canWrite} />}
+        />
+        <Route path="notifications" element={<NotificationsAndPreferencesView />} />
+        <Route path="profile" element={<ProfileSecurityView />} />
+        <Route path="*" element={<Navigate to="dashboard" replace />} />
+      </Routes>
+    </DashboardShell>
+  );
+}
+
+// ============================================================================
+// 1. Teacher Overview
+// ============================================================================
+function TeacherOverview({
+  user,
+  data,
+}: {
+  user: PlatformUser;
+  data: SchoolDataBundle;
+  teacherId?: string;
+}) {
+  if (data.loading) return <SkeletonTable rows={6} cols={4} />;
+
+  const today = getTodayDayName();
+  const todayPeriods = data.timetable
+    .filter((p) => p.dayOfWeek === today && !p.isBreak)
+    .sort((a, b) => a.periodNumber - b.periodNumber);
+
+  const pendingReviews = data.submissions.filter((s) => s.reviewStatus === 'submitted');
+  const upcomingExams = data.examinations
+    .filter((ex) => ex.status === 'scheduled' && ex.schedulePublished)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const todayDate = new Date().toISOString().slice(0, 10);
+  const markedTodayCount = data.attendance.filter((a) => a.date === todayDate && a.status === 'submitted').length;
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p className="text-xs font-medium text-teal-700">{today} Teaching Summary</p>
+          <h2 className="text-lg font-bold font-display text-slate-900 mt-0.5">Welcome, {user.displayName}</h2>
+          <p className="text-xs text-slate-500 mt-1">
+            {data.classes.length} assigned classes · {data.subjects.length} subjects · {data.students.length} students
+          </p>
+        </div>
+        {todayPeriods[0] && (
+          <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-xs">
+            <p className="text-slate-500">Next Scheduled Period ({today})</p>
+            <p className="font-semibold text-slate-900 mt-0.5">
+              {todayPeriods[0].subjectName} · {todayPeriods[0].className} ({todayPeriods[0].startTime}–{todayPeriods[0].endTime})
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard
+          label="Today's Periods"
+          value={todayPeriods.length}
+          subtext={todayPeriods.length > 0 ? `${todayPeriods[0].roomName || 'Assigned Room'}` : 'No periods today'}
+          tone="teal"
+        />
+        <StatCard
+          label="Pending Homework Reviews"
+          value={pendingReviews.length}
+          subtext={`${data.homework.length} active assignments`}
+          tone={pendingReviews.length > 0 ? 'amber' : 'default'}
+        />
+        <StatCard
+          label="Today's Attendance"
+          value={`${markedTodayCount} / ${data.classes.length}`}
+          subtext="Classes submitted today"
+        />
+        <StatCard
+          label="Upcoming Exams"
+          value={upcomingExams.length}
+          subtext={`${data.materials.length} learning resources shared`}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white border border-slate-200 rounded-xl p-5">
+          <h3 className="text-sm font-bold font-display text-slate-900 mb-4">Today's Teaching Schedule ({today})</h3>
+          {todayPeriods.length === 0 ? (
+            <p className="text-sm text-slate-500 py-4">No classes scheduled on {today}.</p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {todayPeriods.map((p) => (
+                <div key={p.id} className="py-3 flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">
+                      Period {p.periodNumber} · {p.subjectName}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {p.className || p.classId} · {p.roomName || 'Room TBD'}
+                    </p>
+                  </div>
+                  <span className="text-xs font-mono text-slate-600 tabular-nums">
+                    {p.startTime}–{p.endTime}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-xl p-5">
+          <h3 className="text-sm font-bold font-display text-slate-900 mb-4">School & Class Announcements</h3>
+          {data.announcements.length === 0 ? (
+            <p className="text-sm text-slate-500 py-4">No announcements posted.</p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {data.announcements.slice(0, 5).map((an) => (
+                <div key={an.id} className="py-2.5">
+                  <p className="text-sm font-semibold text-slate-900">{an.title}</p>
+                  <p className="text-xs text-slate-600 mt-0.5 line-clamp-2">{an.body}</p>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    {an.authorName} · {formatFirestoreDate(an.createdAt)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// 2. Personal Teaching Timetable
+// ============================================================================
+function TeacherTimetableView({ data }: { data: SchoolDataBundle }) {
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-base font-bold font-display text-slate-900">My Weekly Teaching Timetable</h2>
+        <p className="text-xs text-slate-500">Published periods assigned to you across your classes.</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {DAYS.slice(0, 5).map((day) => {
+          const periods = data.timetable
+            .filter((p) => p.dayOfWeek === day && !p.isBreak)
+            .sort((a, b) => a.periodNumber - b.periodNumber);
+          return (
+            <div key={day} className="bg-white border border-slate-200 rounded-xl p-4">
+              <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider pb-2.5 border-b border-slate-100">
+                {day}
+              </h3>
+              {periods.length === 0 ? (
+                <p className="text-xs text-slate-400 py-4">No periods assigned</p>
+              ) : (
+                <div className="divide-y divide-slate-100 mt-1">
+                  {periods.map((p) => (
+                    <div key={p.id} className="py-2.5 flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold text-slate-900">
+                          P{p.periodNumber} · {p.subjectName}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {p.className || p.classId} · {p.roomName || 'Room TBD'}
+                        </p>
+                      </div>
+                      <span className="text-[11px] font-mono text-slate-500 tabular-nums shrink-0">
+                        {p.startTime}–{p.endTime}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// 3. Assigned Classes & Roster
+// ============================================================================
+function TeacherClassesView({ data, search }: { data: SchoolDataBundle; search: string }) {
+  const [selectedClassId, setSelectedClassId] = useState(data.classes[0]?.id || '');
+  const activeClassId = selectedClassId || data.classes[0]?.id || '';
+  const q = search.trim().toLowerCase();
+
+  const roster = data.students.filter(
+    (s) =>
+      s.classId === activeClassId &&
+      (!q || s.name.toLowerCase().includes(q) || s.rollNumber.toLowerCase().includes(q)),
+  );
+
+  if (data.classes.length === 0) {
+    return (
+      <EmptyState
+        title="No Assigned Classes Yet"
+        description="Your school Principal assigns classes and subjects to your profile."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap gap-2">
+        {data.classes.map((cls) => (
+          <button
+            key={cls.id}
+            type="button"
+            onClick={() => setSelectedClassId(cls.id)}
+            className={`px-3.5 py-2 rounded-lg text-xs font-semibold border cursor-pointer ${
+              activeClassId === cls.id
+                ? 'bg-[#0B1528] text-white border-[#0B1528]'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            {cls.name} ({cls.code})
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <h3 className="text-sm font-bold font-display text-slate-900">Class Roster ({roster.length} students)</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500">
+              <tr>
+                <th className="py-2.5 px-4 font-semibold">Roll</th>
+                <th className="py-2.5 px-4 font-semibold">Student Name</th>
+                <th className="py-2.5 px-4 font-semibold">Admission #</th>
+                <th className="py-2.5 px-4 font-semibold">Guardian Contact</th>
+                <th className="py-2.5 px-4 font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {roster.map((st) => (
+                <tr key={st.id} className="hover:bg-slate-50/70">
+                  <td className="py-3 px-4 font-mono text-xs tabular-nums text-slate-600">{st.rollNumber}</td>
+                  <td className="py-3 px-4 font-medium text-slate-900">{st.name}</td>
+                  <td className="py-3 px-4 font-mono text-xs text-slate-600">{st.admissionNumber}</td>
+                  <td className="py-3 px-4 text-xs text-slate-600">
+                    {st.guardianName || '—'} {st.guardianPhone ? `· ${st.guardianPhone}` : ''}
+                  </td>
+                  <td className="py-3 px-4">
+                    <StatusText status={st.status} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// 4. Daily Attendance Marking (Duplicate-Safe + Edit Audit Trail)
+// ============================================================================
+function TeacherAttendanceView({
+  user,
+  teacherId,
+  data,
+  canWrite,
+}: {
+  user: PlatformUser;
+  teacherId: string;
+  data: SchoolDataBundle;
+  canWrite: boolean;
+}) {
+  const { pushToast } = useToast();
+  const [selectedClassId, setSelectedClassId] = useState(data.classes[0]?.id || '');
+  const activeClassId = selectedClassId || data.classes[0]?.id || '';
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [entries, setEntries] = useState<AttendanceEntry[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  const existingRecord = useMemo(
+    () => data.attendance.find((a) => a.classId === activeClassId && a.date === date),
+    [data.attendance, activeClassId, date],
+  );
+
+  const classStudents = useMemo(
+    () =>
+      data.students
+        .filter((s) => s.classId === activeClassId && s.status === 'active')
+        .sort((a, b) => a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true })),
+    [data.students, activeClassId],
+  );
+
+  useEffect(() => {
+    if (existingRecord) {
+      setEntries(existingRecord.entries.map((e) => ({ ...e })));
+    } else {
+      setEntries(
+        classStudents.map((st) => ({
+          studentId: st.id,
+          studentName: st.name,
+          rollNumber: st.rollNumber,
+          status: 'present',
+        })),
+      );
+    }
+  }, [existingRecord, classStudents]);
+
+  const markAll = (status: AttendanceEntry['status']) => {
+    setEntries((prev) => prev.map((e) => ({ ...e, status })));
+  };
+
+  const handleSave = async (status: 'draft' | 'submitted') => {
+    if (!activeClassId || entries.length === 0) return;
+    setSaving(true);
+    const cls = data.classes.find((c) => c.id === activeClassId);
+    try {
+      if (existingRecord) {
+        const nextHistory = [
+          ...(existingRecord.editHistory || []),
+          {
+            editedBy: user.displayName,
+            editedAt: new Date().toISOString(),
+            note: `Updated register (${status})`,
+          },
+        ];
+        await updateDoc(doc(db, 'attendanceRecords', existingRecord.id), {
+          status,
+          entries,
+          editHistory: nextHistory,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        const id = generateId('att');
+        await setDoc(doc(db, 'attendanceRecords', id), {
+          id,
+          schoolId: user.schoolId,
+          classId: activeClassId,
+          className: cls?.name || '',
+          date,
+          teacherId,
+          status,
+          entries,
+          editHistory: [],
+          createdBy: user.uid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await recordAuditLog({
+        schoolId: user.schoolId,
+        actorUid: user.uid,
+        actorName: user.displayName,
+        actorRole: user.role,
+        action: status === 'submitted' ? 'ATTENDANCE_SUBMITTED' : 'ATTENDANCE_DRAFT_SAVED',
+        targetType: 'attendance',
+        targetId: existingRecord?.id || `${activeClassId}_${date}`,
+        targetLabel: `${cls?.name || activeClassId} · ${date}`,
+      });
+      pushToast('success', status === 'submitted' ? 'Attendance register submitted.' : 'Attendance saved as draft.');
+    } catch (err) {
+      pushToast('error', 'Failed to save attendance register.');
+      handleFirestoreError(err, OperationType.WRITE, 'attendanceRecords');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const summary = {
+    present: entries.filter((e) => e.status === 'present').length,
+    absent: entries.filter((e) => e.status === 'absent').length,
+    late: entries.filter((e) => e.status === 'late').length,
+    excused: entries.filter((e) => e.status === 'excused').length,
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-wrap items-end justify-between gap-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Assigned Class</label>
+            <select
+              value={activeClassId}
+              onChange={(e) => setSelectedClassId(e.target.value)}
+              className="text-sm border border-slate-300 rounded-lg px-3 py-2"
+            >
+              {data.classes.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Attendance Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="text-sm border border-slate-300 rounded-lg px-3 py-2"
+            />
+          </div>
+          {existingRecord && (
+            <div className="pb-2 text-xs text-slate-500">
+              Existing register loaded · <StatusText status={existingRecord.status} />
+            </div>
+          )}
+        </div>
+
+        {canWrite && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => markAll('present')}>
+              Mark All Present
+            </Button>
+            <Button variant="secondary" size="sm" disabled={saving || entries.length === 0} onClick={() => handleSave('draft')}>
+              <Save className="w-4 h-4" />
+              Save Draft
+            </Button>
+            <Button variant="primary" size="sm" disabled={saving || entries.length === 0} onClick={() => handleSave('submitted')}>
+              <CheckCircle2 className="w-4 h-4" />
+              {existingRecord ? 'Update Submission' : 'Submit Attendance'}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard label="Present" value={summary.present} tone="teal" />
+        <StatCard label="Absent" value={summary.absent} tone={summary.absent > 0 ? 'red' : 'default'} />
+        <StatCard label="Late" value={summary.late} tone={summary.late > 0 ? 'amber' : 'default'} />
+        <StatCard label="Excused" value={summary.excused} />
+      </div>
+
+      {entries.length === 0 ? (
+        <EmptyState
+          title="No Active Students in Selected Class"
+          description="Select an assigned class with active enrolled students to mark daily attendance."
+        />
+      ) : (
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          <div className="divide-y divide-slate-100">
+            {entries.map((entry, idx) => (
+              <div key={entry.studentId} className="px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">{entry.studentName}</p>
+                  <p className="text-xs text-slate-500 font-mono">Roll #{entry.rollNumber}</p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {(['present', 'absent', 'late', 'excused'] as const).map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      disabled={!canWrite}
+                      onClick={() => {
+                        const next = [...entries];
+                        next[idx] = { ...entry, status: st };
+                        setEntries(next);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize border transition-colors cursor-pointer ${
+                        entry.status === st
+                          ? st === 'present'
+                            ? 'bg-emerald-600 text-white border-emerald-600'
+                            : st === 'absent'
+                              ? 'bg-red-600 text-white border-red-600'
+                              : st === 'late'
+                                ? 'bg-amber-600 text-white border-amber-600'
+                                : 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// 5. Homework Creation & Submission Reviews
+// ============================================================================
+function TeacherHomeworkView({
+  user,
+  teacherId,
+  data,
+  canWrite,
+  search,
+}: {
+  user: PlatformUser;
+  teacherId: string;
+  data: SchoolDataBundle;
+  canWrite: boolean;
+  search: string;
+}) {
+  const { pushToast } = useToast();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [reviewHw, setReviewHw] = useState<Homework | null>(null);
+  const [feedbackDrafts, setFeedbackDrafts] = useState<Record<string, { status: HomeworkSubmission['reviewStatus']; feedback: string }>>({});
+  const [saving, setSaving] = useState(false);
+
+  const [form, setForm] = useState({
+    classId: data.classes[0]?.id || '',
+    subjectName: data.subjects[0]?.name || 'Mathematics',
+    title: '',
+    instructions: '',
+    dueDate: new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10),
+    allowOnlineSubmission: true,
+  });
+
+  const q = search.trim().toLowerCase();
+  const visibleHw = data.homework
+    .filter((h) => !q || h.title.toLowerCase().includes(q) || h.subjectName.toLowerCase().includes(q))
+    .sort((a, b) => b.dueDate.localeCompare(a.dueDate));
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cls = data.classes.find((c) => c.id === form.classId);
+    setSaving(true);
+    const id = generateId('hw');
+    try {
+      await setDoc(doc(db, 'homework', id), {
+        id,
+        schoolId: user.schoolId,
+        classId: form.classId,
+        className: cls?.name || '',
+        subjectName: form.subjectName.trim(),
+        teacherId,
+        teacherName: user.displayName,
+        title: form.title.trim(),
+        instructions: form.instructions.trim(),
+        assignedDate: new Date().toISOString().slice(0, 10),
+        dueDate: form.dueDate,
+        allowOnlineSubmission: form.allowOnlineSubmission,
+        status: 'published',
+        createdBy: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      await recordAuditLog({
+        schoolId: user.schoolId,
+        actorUid: user.uid,
+        actorName: user.displayName,
+        actorRole: user.role,
+        action: 'HOMEWORK_PUBLISHED',
+        targetType: 'homework',
+        targetId: id,
+        targetLabel: form.title.trim(),
+      });
+      pushToast('success', 'Homework published to students.');
+      setCreateOpen(false);
+      setForm((prev) => ({ ...prev, title: '', instructions: '' }));
+    } catch (err) {
+      pushToast('error', 'Failed to publish homework.');
+      handleFirestoreError(err, OperationType.CREATE, `homework/${id}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openReviewModal = (hw: Homework) => {
+    const subs = data.submissions.filter((s) => s.homeworkId === hw.id);
+    const map: Record<string, { status: HomeworkSubmission['reviewStatus']; feedback: string }> = {};
+    subs.forEach((s) => {
+      map[s.id] = { status: s.reviewStatus, feedback: s.feedback || '' };
+    });
+    setFeedbackDrafts(map);
+    setReviewHw(hw);
+  };
+
+  const saveReview = async (sub: HomeworkSubmission) => {
+    const draft = feedbackDrafts[sub.id];
+    if (!draft) return;
+    try {
+      await updateDoc(doc(db, 'homeworkSubmissions', sub.id), {
+        reviewStatus: draft.status,
+        feedback: draft.feedback.trim(),
+        updatedAt: serverTimestamp(),
+      });
+      pushToast('success', `Saved feedback for ${sub.studentName}.`);
+    } catch (err) {
+      pushToast('error', 'Failed to save review.');
+      handleFirestoreError(err, OperationType.UPDATE, `homeworkSubmissions/${sub.id}`);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-bold font-display text-slate-900">Homework & Student Submissions</h2>
+          <p className="text-xs text-slate-500">Create assignments and review online student work with inline feedback.</p>
+        </div>
+        {canWrite && data.classes.length > 0 && (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => {
+              setForm((prev) => ({ ...prev, classId: prev.classId || data.classes[0]?.id || '' }));
+              setCreateOpen(true);
+            }}
+          >
+            <Plus className="w-4 h-4" />
+            New Homework
+          </Button>
+        )}
+      </div>
+
+      {visibleHw.length === 0 ? (
+        <EmptyState
+          title="No Homework Assignments"
+          description="Publish an assignment for your assigned classes to start collecting and reviewing submissions."
+        />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {visibleHw.map((hw) => {
+            const subs = data.submissions.filter((s) => s.homeworkId === hw.id);
+            const reviewedCount = subs.filter((s) => s.reviewStatus === 'reviewed' || s.reviewStatus === 'completed').length;
+            return (
+              <div key={hw.id} className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-4">
+                <div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-medium text-teal-700">
+                        {hw.className || hw.classId} · {hw.subjectName}
+                      </p>
+                      <h3 className="text-sm font-bold text-slate-900 mt-0.5">{hw.title}</h3>
+                    </div>
+                    <StatusText status={hw.status} />
+                  </div>
+                  <p className="text-xs text-slate-600 mt-2 leading-relaxed">{hw.instructions || 'No extra notes.'}</p>
+                </div>
+                <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-xs">
+                  <span className="text-slate-500 tabular-nums">
+                    Due {hw.dueDate} · {subs.length} submitted ({reviewedCount} reviewed)
+                  </span>
+                  <Button variant="secondary" size="sm" onClick={() => openReviewModal(hw)}>
+                    Review ({subs.length})
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Create Homework Modal */}
+      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Publish Homework Assignment">
+        <form onSubmit={handleCreate} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Class</label>
+              <select
+                required
+                value={form.classId}
+                onChange={(e) => setForm({ ...form, classId: e.target.value })}
+                className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+              >
+                {data.classes.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Subject</label>
+              <input
+                required
+                value={form.subjectName}
+                onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
+                className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Assignment Title</label>
+            <input
+              required
+              minLength={3}
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              placeholder="e.g., Chapter 6 Problem Set"
+              className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Instructions</label>
+            <textarea
+              rows={3}
+              value={form.instructions}
+              onChange={(e) => setForm({ ...form, instructions: e.target.value })}
+              placeholder="Detail questions, page references, and formatting rules…"
+              className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Due Date</label>
+              <input
+                type="date"
+                required
+                value={form.dueDate}
+                onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
+                className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-xs text-slate-700 mt-4 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.allowOnlineSubmission}
+                onChange={(e) => setForm({ ...form, allowOnlineSubmission: e.target.checked })}
+                className="rounded border-slate-300 text-teal-600"
+              />
+              Enable online student file/text submission
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={saving}>
+              {saving ? 'Publishing…' : 'Publish Assignment'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Review Submissions Modal */}
+      <Modal
+        open={Boolean(reviewHw)}
+        onClose={() => setReviewHw(null)}
+        title={`Submissions — ${reviewHw?.title || ''}`}
+        subtitle={`${reviewHw?.className || ''} · Due ${reviewHw?.dueDate || ''}`}
+        maxWidth="max-w-2xl"
+      >
+        {reviewHw && (
+          <div className="space-y-4">
+            {data.submissions.filter((s) => s.homeworkId === reviewHw.id).length === 0 ? (
+              <p className="text-sm text-slate-500 py-4">No student submissions received for this assignment yet.</p>
+            ) : (
+              data.submissions
+                .filter((s) => s.homeworkId === reviewHw.id)
+                .map((sub) => {
+                  const draft = feedbackDrafts[sub.id] || { status: sub.reviewStatus, feedback: sub.feedback || '' };
+                  return (
+                    <div key={sub.id} className="border border-slate-200 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{sub.studentName}</p>
+                          <p className="text-xs text-slate-500">
+                            {sub.fileName ? `File: ${sub.fileName} (${sub.fileSizeKb || 0} KB)` : 'Text response'}
+                            {sub.isLate ? ' · Submitted Late' : ''}
+                          </p>
+                        </div>
+                        <StatusText status={sub.reviewStatus} />
+                      </div>
+                      {sub.submissionText && (
+                        <p className="text-xs text-slate-700 bg-slate-50 border border-slate-100 rounded-lg p-3">
+                          {sub.submissionText}
+                        </p>
+                      )}
+                      {canWrite && (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">Review Status</label>
+                            <select
+                              value={draft.status}
+                              onChange={(e) =>
+                                setFeedbackDrafts((prev) => ({
+                                  ...prev,
+                                  [sub.id]: { ...draft, status: e.target.value as HomeworkSubmission['reviewStatus'] },
+                                }))
+                              }
+                              className="w-full text-xs border border-slate-300 rounded-lg px-2.5 py-2"
+                            >
+                              <option value="submitted">Submitted</option>
+                              <option value="reviewed">Reviewed</option>
+                              <option value="needs_correction">Needs Correction</option>
+                              <option value="completed">Completed</option>
+                            </select>
+                          </div>
+                          <div className="sm:col-span-2 flex gap-2">
+                            <input
+                              type="text"
+                              value={draft.feedback}
+                              onChange={(e) =>
+                                setFeedbackDrafts((prev) => ({
+                                  ...prev,
+                                  [sub.id]: { ...draft, feedback: e.target.value },
+                                }))
+                              }
+                              placeholder="Write constructive feedback…"
+                              className="flex-1 text-xs border border-slate-300 rounded-lg px-3 py-2"
+                            />
+                            <Button variant="primary" size="sm" onClick={() => saveReview(sub)}>
+                              Save
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+            )}
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+// ============================================================================
+// 6. Examinations & Bounded Marks Entry
+// ============================================================================
+function TeacherMarksView({
+  user,
+  data,
+  canWrite,
+}: {
+  user: PlatformUser;
+  data: SchoolDataBundle;
+  canWrite: boolean;
+}) {
+  const { pushToast } = useToast();
+  const [selectedExamId, setSelectedExamId] = useState(data.examinations[0]?.id || '');
+  const activeExamId = selectedExamId || data.examinations[0]?.id || '';
+  const selectedExam = data.examinations.find((ex) => ex.id === activeExamId);
+
+  const [scoreInputs, setScoreInputs] = useState<Record<string, { marks: string; remarks: string }>>({});
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  const examStudents = useMemo(
+    () =>
+      selectedExam
+        ? data.students
+            .filter((s) => s.classId === selectedExam.classId && s.status === 'active')
+            .sort((a, b) => a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true }))
+        : [],
+    [data.students, selectedExam],
+  );
+
+  useEffect(() => {
+    if (!selectedExam) return;
+    const map: Record<string, { marks: string; remarks: string }> = {};
+    examStudents.forEach((st) => {
+      const existing = data.examResults.find((r) => r.examId === selectedExam.id && r.studentId === st.id);
+      map[st.id] = {
+        marks: existing ? String(existing.obtainedMarks) : '',
+        remarks: existing?.remarks || '',
+      };
+    });
+    setScoreInputs(map);
+  }, [selectedExam, examStudents, data.examResults]);
+
+  const handleSaveMark = async (studentId: string, status: ExamResult['status']) => {
+    if (!selectedExam) return;
+    const st = examStudents.find((s) => s.id === studentId);
+    const input = scoreInputs[studentId];
+    if (!st || !input) return;
+
+    const num = Number(input.marks);
+    if (Number.isNaN(num) || num < 0 || num > selectedExam.maxMarks) {
+      pushToast('error', `Marks for ${st.name} must be between 0 and ${selectedExam.maxMarks}.`);
+      return;
+    }
+
+    setSavingId(studentId);
+    const existing = data.examResults.find((r) => r.examId === selectedExam.id && r.studentId === st.id);
+    const grade = computeLetterGrade(num, selectedExam.maxMarks, selectedExam.passingMarks);
+
+    try {
+      if (existing) {
+        const nextAudit = [
+          ...(existing.auditHistory || []),
+          {
+            updatedBy: user.displayName,
+            updatedAt: new Date().toISOString(),
+            previousMarks: existing.obtainedMarks,
+            newMarks: num,
+          },
+        ];
+        await updateDoc(doc(db, 'examResults', existing.id), {
+          obtainedMarks: num,
+          grade,
+          remarks: input.remarks.trim(),
+          status,
+          auditHistory: nextAudit,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        const id = generateId('res');
+        await setDoc(doc(db, 'examResults', id), {
+          id,
+          schoolId: user.schoolId,
+          examId: selectedExam.id,
+          examName: selectedExam.name,
+          classId: selectedExam.classId,
+          subjectName: selectedExam.subjectName,
+          studentId: st.id,
+          studentUid: st.userId || '',
+          studentName: st.name,
+          maxMarks: selectedExam.maxMarks,
+          passingMarks: selectedExam.passingMarks,
+          obtainedMarks: num,
+          grade,
+          remarks: input.remarks.trim(),
+          status,
+          auditHistory: [],
+          createdBy: user.uid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      pushToast('success', `Saved ${num}/${selectedExam.maxMarks} (${grade}) for ${st.name}.`);
+    } catch (err) {
+      pushToast('error', 'Failed to save student marks.');
+      handleFirestoreError(err, OperationType.WRITE, 'examResults');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  if (data.examinations.length === 0) {
+    return (
+      <EmptyState
+        title="No Examinations Assigned"
+        description="Published examinations for your assigned classes will appear here for marks entry."
+      />
+    );
+  }
+
+  const resultsForExam = data.examResults.filter((r) => r.examId === activeExamId);
+  const avgScore =
+    resultsForExam.length > 0
+      ? Math.round(resultsForExam.reduce((sum, r) => sum + r.obtainedMarks, 0) / resultsForExam.length)
+      : 0;
+
+  return (
+    <div className="space-y-5">
+      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">Select Examination</label>
+          <select
+            value={activeExamId}
+            onChange={(e) => setSelectedExamId(e.target.value)}
+            className="text-sm border border-slate-300 rounded-lg px-3 py-2 min-w-[260px]"
+          >
+            {data.examinations.map((ex) => (
+              <option key={ex.id} value={ex.id}>
+                {ex.name} · {ex.subjectName} ({ex.className || ex.classId})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {selectedExam && (
+          <div className="text-xs text-slate-600 flex flex-wrap gap-5 tabular-nums">
+            <div>
+              <p className="text-slate-400">Date</p>
+              <p className="font-semibold text-slate-900">{selectedExam.date}</p>
+            </div>
+            <div>
+              <p className="text-slate-400">Max / Passing</p>
+              <p className="font-semibold text-slate-900">
+                {selectedExam.maxMarks} / {selectedExam.passingMarks}
+              </p>
+            </div>
+            <div>
+              <p className="text-slate-400">Recorded Avg</p>
+              <p className="font-semibold text-teal-700">{resultsForExam.length > 0 ? `${avgScore} / ${selectedExam.maxMarks}` : '—'}</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {selectedExam && (
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500">
+                <tr>
+                  <th className="py-3 px-4 font-semibold">Roll</th>
+                  <th className="py-3 px-4 font-semibold">Student</th>
+                  <th className="py-3 px-4 font-semibold">Marks (0–{selectedExam.maxMarks})</th>
+                  <th className="py-3 px-4 font-semibold">Grade</th>
+                  <th className="py-3 px-4 font-semibold">Remarks</th>
+                  <th className="py-3 px-4 font-semibold">Status</th>
+                  {canWrite && <th className="py-3 px-4 font-semibold text-right">Save</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {examStudents.map((st) => {
+                  const existing = data.examResults.find((r) => r.examId === selectedExam.id && r.studentId === st.id);
+                  const inp = scoreInputs[st.id] || { marks: '', remarks: '' };
+                  const previewNum = inp.marks !== '' ? Number(inp.marks) : null;
+                  const previewGrade =
+                    previewNum !== null && !Number.isNaN(previewNum) && previewNum >= 0 && previewNum <= selectedExam.maxMarks
+                      ? computeLetterGrade(previewNum, selectedExam.maxMarks, selectedExam.passingMarks)
+                      : '—';
+
+                  return (
+                    <tr key={st.id} className="hover:bg-slate-50/50">
+                      <td className="py-3 px-4 font-mono text-xs text-slate-600 tabular-nums">{st.rollNumber}</td>
+                      <td className="py-3 px-4 font-medium text-slate-900">{st.name}</td>
+                      <td className="py-3 px-4">
+                        <input
+                          type="number"
+                          min={0}
+                          max={selectedExam.maxMarks}
+                          disabled={!canWrite}
+                          value={inp.marks}
+                          onChange={(e) =>
+                            setScoreInputs((prev) => ({
+                              ...prev,
+                              [st.id]: { ...inp, marks: e.target.value },
+                            }))
+                          }
+                          placeholder="0"
+                          className="w-24 text-sm tabular-nums border border-slate-300 rounded-lg px-2.5 py-1.5"
+                        />
+                      </td>
+                      <td className="py-3 px-4 font-bold text-slate-900 tabular-nums">{previewGrade}</td>
+                      <td className="py-3 px-4">
+                        <input
+                          type="text"
+                          disabled={!canWrite}
+                          value={inp.remarks}
+                          onChange={(e) =>
+                            setScoreInputs((prev) => ({
+                              ...prev,
+                              [st.id]: { ...inp, remarks: e.target.value },
+                            }))
+                          }
+                          placeholder="Optional remark"
+                          className="w-44 text-xs border border-slate-300 rounded-lg px-2.5 py-1.5"
+                        />
+                      </td>
+                      <td className="py-3 px-4">
+                        <StatusText status={existing?.status || 'draft'} />
+                      </td>
+                      {canWrite && (
+                        <td className="py-3 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled={savingId === st.id || inp.marks === ''}
+                              onClick={() => handleSaveMark(st.id, 'submitted')}
+                            >
+                              Submit
+                            </Button>
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              disabled={savingId === st.id || inp.marks === ''}
+                              onClick={() => handleSaveMark(st.id, 'published')}
+                            >
+                              Publish
+                            </Button>
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// 7. Learning Materials Upload & Management
+// ============================================================================
+function TeacherMaterialsView({
+  user,
+  teacherId,
+  data,
+  canWrite,
+}: {
+  user: PlatformUser;
+  teacherId: string;
+  data: SchoolDataBundle;
+  canWrite: boolean;
+}) {
+  const { pushToast } = useToast();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    classId: data.classes[0]?.id || '',
+    subjectName: data.subjects[0]?.name || 'Mathematics',
+    title: '',
+    topic: '',
+    description: '',
+    fileName: '',
+    fileType: 'PDF' as LearningMaterial['fileType'],
+    fileSizeKb: 240,
+    contentPreview: '',
+  });
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      pushToast('error', 'File exceeds 10 MB maximum limit.');
+      return;
+    }
+    const ext = file.name.split('.').pop()?.toUpperCase() || '';
+    const allowed: Record<string, LearningMaterial['fileType']> = {
+      PDF: 'PDF',
+      DOCX: 'DOCX',
+      DOC: 'DOCX',
+      PNG: 'PNG',
+      JPG: 'JPG',
+      JPEG: 'JPG',
+      PPTX: 'SLIDES',
+      TXT: 'NOTE',
+    };
+    const mapped = allowed[ext];
+    if (!mapped) {
+      pushToast('error', 'Allowed file types: PDF, DOCX, PNG, JPG, PPTX, TXT.');
+      return;
+    }
+    setForm((prev) => ({
+      ...prev,
+      fileName: file.name,
+      fileType: mapped,
+      fileSizeKb: Math.max(1, Math.round(file.size / 1024)),
+    }));
+  };
+
+  const handleUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cls = data.classes.find((c) => c.id === form.classId);
+    setSaving(true);
+    const id = generateId('mat');
+    try {
+      await setDoc(doc(db, 'learningMaterials', id), {
+        id,
+        schoolId: user.schoolId,
+        classId: form.classId,
+        className: cls?.name || '',
+        subjectName: form.subjectName.trim(),
+        teacherId,
+        teacherName: user.displayName,
+        title: form.title.trim(),
+        topic: form.topic.trim(),
+        description: form.description.trim(),
+        fileName: (form.fileName || `${form.title.trim().replace(/\s+/g, '_')}.pdf`).slice(0, 155),
+        fileType: form.fileType,
+        fileSizeKb: form.fileSizeKb,
+        contentPreview: form.contentPreview.trim(),
+        status: 'published',
+        createdBy: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      pushToast('success', 'Learning material published to class students.');
+      setModalOpen(false);
+      setForm((prev) => ({ ...prev, title: '', topic: '', description: '', fileName: '', contentPreview: '' }));
+    } catch (err) {
+      pushToast('error', 'Failed to publish material.');
+      handleFirestoreError(err, OperationType.CREATE, `learningMaterials/${id}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleArchive = async (mat: LearningMaterial) => {
+    const next = mat.status === 'published' ? 'archived' : 'published';
+    try {
+      await updateDoc(doc(db, 'learningMaterials', mat.id), {
+        status: next,
+        updatedAt: serverTimestamp(),
+      });
+      pushToast('success', next === 'archived' ? 'Material archived.' : 'Material restored.');
+    } catch (err) {
+      pushToast('error', 'Failed to update material status.');
+      handleFirestoreError(err, OperationType.UPDATE, `learningMaterials/${mat.id}`);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-bold font-display text-slate-900">Learning Materials & Study Notes</h2>
+          <p className="text-xs text-slate-500">Share validated PDFs, slides, diagrams, and topic notes with your classes.</p>
+        </div>
+        {canWrite && data.classes.length > 0 && (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => {
+              setForm((prev) => ({ ...prev, classId: prev.classId || data.classes[0]?.id || '' }));
+              setModalOpen(true);
+            }}
+          >
+            <Upload className="w-4 h-4" />
+            Upload Material
+          </Button>
+        )}
+      </div>
+
+      {data.materials.length === 0 ? (
+        <EmptyState
+          title="No Learning Materials Shared"
+          description="Upload notes, worksheets, or slide decks so students can review them anytime."
+        />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {data.materials.map((mat) => (
+            <div key={mat.id} className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-3">
+              <div>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-medium text-teal-700">
+                      {mat.className || mat.classId} · {mat.subjectName} · {mat.fileType}
+                    </p>
+                    <h3 className="text-sm font-bold text-slate-900 mt-0.5">{mat.title}</h3>
+                  </div>
+                  <StatusText status={mat.status} />
+                </div>
+                {mat.topic && <p className="text-xs text-slate-500 mt-1">Topic: {mat.topic}</p>}
+                {mat.description && <p className="text-xs text-slate-600 mt-2">{mat.description}</p>}
+              </div>
+              <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-xs text-slate-500">
+                <span className="truncate max-w-[220px]">
+                  {mat.fileName} · {mat.fileSizeKb || 0} KB
+                </span>
+                {canWrite && (
+                  <Button variant="ghost" size="sm" onClick={() => toggleArchive(mat)}>
+                    {mat.status === 'published' ? 'Archive' : 'Restore'}
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Upload Class Learning Material">
+        <form onSubmit={handleUpload} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Assigned Class</label>
+              <select
+                required
+                value={form.classId}
+                onChange={(e) => setForm({ ...form, classId: e.target.value })}
+                className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+              >
+                {data.classes.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Subject</label>
+              <input
+                required
+                value={form.subjectName}
+                onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
+                className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Title</label>
+              <input
+                required
+                minLength={3}
+                value={form.title}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+                placeholder="e.g., Quadratic Formula Reference Sheet"
+                className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Topic / Unit</label>
+              <input
+                value={form.topic}
+                onChange={(e) => setForm({ ...form, topic: e.target.value })}
+                placeholder="e.g., Unit 3 Algebra"
+                className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Attach File (PDF, DOCX, PNG, JPG, PPTX · max 10 MB)</label>
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.pptx,.txt"
+              onChange={handleFileSelect}
+              className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 bg-slate-50"
+            />
+            {form.fileName && (
+              <p className="text-[11px] text-teal-700 mt-1">
+                Selected: {form.fileName} ({form.fileType} · {form.fileSizeKb} KB)
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Summary Notes / Study Key Points</label>
+            <textarea
+              rows={3}
+              value={form.contentPreview}
+              onChange={(e) => setForm({ ...form, contentPreview: e.target.value })}
+              placeholder="Paste key definitions or study bullets students can read directly in-app…"
+              className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={saving}>
+              {saving ? 'Publishing…' : 'Publish Material'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
+// ============================================================================
+// 8. Class Announcements
+// ============================================================================
+function TeacherAnnouncementsView({
+  user,
+  data,
+  canWrite,
+}: {
+  user: PlatformUser;
+  data: SchoolDataBundle;
+  canWrite: boolean;
+}) {
+  const { pushToast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [classId, setClassId] = useState(data.classes[0]?.id || '');
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handlePublish = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    const id = generateId('ann');
+    try {
+      await setDoc(doc(db, 'announcements', id), {
+        id,
+        schoolId: user.schoolId,
+        title: title.trim(),
+        body: body.trim(),
+        audience: 'class_specific',
+        targetClassId: classId,
+        authorId: user.uid,
+        authorName: user.displayName,
+        authorRole: 'teacher',
+        status: 'published',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      pushToast('success', 'Class announcement published.');
+      setTitle('');
+      setBody('');
+      setOpen(false);
+    } catch (err) {
+      pushToast('error', 'Failed to publish announcement.');
+      handleFirestoreError(err, OperationType.CREATE, `announcements/${id}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-bold font-display text-slate-900">Class & School Announcements</h2>
+          <p className="text-xs text-slate-500">View school notices and send class-specific updates to your students.</p>
+        </div>
+        {canWrite && data.classes.length > 0 && (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => {
+              setClassId((prev) => prev || data.classes[0]?.id || '');
+              setOpen(true);
+            }}
+          >
+            <Plus className="w-4 h-4" />
+            Post Class Notice
+          </Button>
+        )}
+      </div>
+
+      <div className="space-y-3">
+        {data.announcements.map((an) => (
+          <div key={an.id} className="bg-white border border-slate-200 rounded-xl p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium text-teal-700">{an.audience.replace('_', ' ')}</p>
+                <h3 className="text-sm font-bold text-slate-900 mt-0.5">{an.title}</h3>
+              </div>
+              <StatusText status={an.status} />
+            </div>
+            <p className="text-sm text-slate-600 mt-2 leading-relaxed">{an.body}</p>
+            <p className="text-xs text-slate-400 mt-3">
+              {an.authorName} ({an.authorRole}) · {formatFirestoreDate(an.createdAt)}
+            </p>
+          </div>
+        ))}
+        {data.announcements.length === 0 && (
+          <EmptyState title="No Announcements" description="School-wide and class announcements appear here." />
+        )}
+      </div>
+
+      <Modal open={open} onClose={() => setOpen(false)} title="Post Class Announcement">
+        <form onSubmit={handlePublish} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Class</label>
+            <select
+              required
+              value={classId}
+              onChange={(e) => setClassId(e.target.value)}
+              className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+            >
+              {data.classes.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Title</label>
+            <input
+              required
+              minLength={3}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Message</label>
+            <textarea
+              required
+              rows={4}
+              minLength={5}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={saving}>
+              {saving ? 'Posting…' : 'Publish Notice'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}

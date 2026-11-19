@@ -1,0 +1,513 @@
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+  sendPasswordResetEmail,
+  sendEmailVerification,
+  updatePassword,
+  signOut,
+  type User as FirebaseUser,
+} from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { DEFAULT_NOTIFICATION_PREFS } from '../lib/notifications';
+import { recordAuditLog } from '../lib/audit';
+import { emailToKey } from '../lib/schoolProvisioning';
+import type { EmailDirectoryEntry, PlatformUser, School } from '../types/models';
+
+const BOOTSTRAPPED_MAIN_HEAD_EMAIL = 'sjtutorai@gmail.com';
+const SESSION_IDLE_MS = 60 * 60 * 1000; // 60 minutes default
+const DEFAULT_COORD_PERMS = {
+  canEditAttendance: false,
+  canEditMarks: false,
+  canAssignTeachers: false,
+  canPublishNotices: false,
+  canCoordinateExams: false,
+};
+
+interface AuthContextValue {
+  firebaseUser: FirebaseUser | null;
+  realProfile: PlatformUser | null;
+  activeUser: PlatformUser | null;
+  activeSchool: School | null;
+  loading: boolean;
+  authError: string | null;
+  previewPersona: PlatformUser | null;
+  isPreviewMode: boolean;
+  signInUnified: (identifier: string, password: string) => Promise<{ ok: boolean; error?: string; needsEmailAuthSetup?: boolean; profile?: PlatformUser }>;
+  signUpEmailPassword: (params: { displayName: string; username: string; email: string; password: string }) => Promise<{ ok: boolean; error?: string; needsEmailAuthSetup?: boolean; profile?: PlatformUser }>;
+  signInGoogle: () => Promise<{ ok: boolean; error?: string; profile?: PlatformUser }>;
+  requestPasswordRecovery: (identifier: string) => Promise<void>;
+  replaceTemporaryPassword: (newPassword: string) => Promise<{ ok: boolean; error?: string }>;
+  logout: () => Promise<void>;
+  enterDemoPreview: (persona: PlatformUser) => void;
+  exitDemoPreview: () => void;
+  refreshProfile: () => Promise<PlatformUser | null>;
+}
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+function normalizeIdentifierToEmail(identifier: string): string {
+  const trimmed = identifier.trim().toLowerCase();
+  if (trimmed.includes('@')) return trimmed;
+  return `${trimmed}@academiaone.edu`;
+}
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [realProfile, setRealProfile] = useState<PlatformUser | null>(null);
+  const [previewPersona, setPreviewPersona] = useState<PlatformUser | null>(null);
+  const [activeSchool, setActiveSchool] = useState<School | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const idleTimerRef = useRef<number | null>(null);
+
+  const activeUser = previewPersona || realProfile;
+
+  const ensureUserProfile = useCallback(async (fbUser: FirebaseUser): Promise<PlatformUser> => {
+    const userRef = doc(db, 'users', fbUser.uid);
+    const email = (fbUser.email || '').trim().toLowerCase();
+    const isMainHeadEmail = email === BOOTSTRAPPED_MAIN_HEAD_EMAIL;
+
+    let snap;
+    try {
+      snap = await getDoc(userRef);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, `users/${fbUser.uid}`);
+    }
+
+    // Check emailDirectory for pre-registered school membership (works identically for Email/Password & Google)
+    let dirEntry: EmailDirectoryEntry | null = null;
+    if (email && !isMainHeadEmail) {
+      try {
+        const dirSnap = await getDoc(doc(db, 'emailDirectory', emailToKey(email)));
+        if (dirSnap.exists()) {
+          const candidate = dirSnap.data() as EmailDirectoryEntry;
+          if (candidate.status === 'active' && candidate.schoolId) {
+            dirEntry = candidate;
+          }
+        }
+      } catch (err) {
+        console.warn('Email directory check warning:', err instanceof Error ? err.message : err);
+      }
+    }
+
+    const bindRosterProfileUid = async (entry: EmailDirectoryEntry) => {
+      if (!entry.linkedProfileId) return;
+      try {
+        if (entry.role === 'student') {
+          await updateDoc(doc(db, 'students', entry.linkedProfileId), {
+            userId: fbUser.uid,
+            updatedAt: serverTimestamp(),
+          });
+        } else if (entry.role === 'teacher') {
+          await updateDoc(doc(db, 'teachers', entry.linkedProfileId), {
+            userId: fbUser.uid,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch {
+        // Non-blocking: principal may have already linked UID
+      }
+    };
+
+    if (snap.exists()) {
+      const existing = snap.data() as PlatformUser;
+
+      // Guarantee Main Head upgrade if sjtutorai@gmail.com signed in previously with a different role
+      if (isMainHeadEmail && (existing.role !== 'main_head' || existing.schoolId !== 'platform')) {
+        const upgraded: PlatformUser = {
+          ...existing,
+          role: 'main_head',
+          schoolId: 'platform',
+          status: 'active',
+        };
+        await updateDoc(userRef, {
+          role: 'main_head',
+          schoolId: 'platform',
+          status: 'active',
+          updatedAt: serverTimestamp(),
+        }).catch(() => undefined);
+        return upgraded;
+      }
+
+      // Auto-claim newly approved/registered school emailDirectory entry if user was previously unassigned
+      if (
+        dirEntry &&
+        (existing.schoolId === 'unassigned' ||
+          existing.schoolId !== dirEntry.schoolId ||
+          existing.role !== dirEntry.role)
+      ) {
+        const claimed: PlatformUser = {
+          ...existing,
+          displayName: existing.displayName || dirEntry.displayName || 'AcademiaOne User',
+          role: dirEntry.role,
+          schoolId: dirEntry.schoolId,
+          status: 'active',
+          classId: dirEntry.classId || existing.classId || '',
+          section: dirEntry.section || existing.section || '',
+          assignedClassIds: dirEntry.assignedClassIds || existing.assignedClassIds || [],
+          coordinatorPermissions: dirEntry.coordinatorPermissions || existing.coordinatorPermissions || DEFAULT_COORD_PERMS,
+        };
+        await updateDoc(userRef, {
+          displayName: claimed.displayName,
+          role: claimed.role,
+          schoolId: claimed.schoolId,
+          status: 'active',
+          classId: claimed.classId,
+          section: claimed.section,
+          assignedClassIds: claimed.assignedClassIds,
+          coordinatorPermissions: claimed.coordinatorPermissions,
+          updatedAt: serverTimestamp(),
+        }).catch((err) => console.warn('Claim directory update warning:', err));
+        await bindRosterProfileUid(dirEntry);
+        return claimed;
+      }
+
+      if (dirEntry) {
+        await bindRosterProfileUid(dirEntry);
+      }
+
+      return existing;
+    }
+
+    const derivedUsername = (email.split('@')[0] || `user_${fbUser.uid.slice(0, 6)}`)
+      .replace(/[^a-zA-Z0-9._-]/g, '')
+      .slice(0, 48);
+
+    const newProfile: PlatformUser = {
+      uid: fbUser.uid,
+      username: derivedUsername.length >= 3 ? derivedUsername : `usr_${fbUser.uid.slice(0, 6)}`,
+      email: email || `${fbUser.uid}@academiaone.edu`,
+      displayName: (fbUser.displayName || dirEntry?.displayName || derivedUsername || 'AcademiaOne User').slice(0, 120),
+      role: isMainHeadEmail ? 'main_head' : dirEntry ? dirEntry.role : 'student',
+      schoolId: isMainHeadEmail ? 'platform' : dirEntry ? dirEntry.schoolId : 'unassigned',
+      status: 'active',
+      mustChangePassword: false,
+      phone: '',
+      classId: dirEntry?.classId || '',
+      section: dirEntry?.section || '',
+      assignedClassIds: dirEntry?.assignedClassIds || [],
+      assignedSubjectIds: [],
+      coordinatorPermissions: dirEntry?.coordinatorPermissions || DEFAULT_COORD_PERMS,
+      isDemo: false,
+    };
+
+    try {
+      await setDoc(userRef, {
+        ...newProfile,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      await setDoc(doc(db, 'notificationPreferences', fbUser.uid), {
+        ...DEFAULT_NOTIFICATION_PREFS(fbUser.uid),
+        updatedAt: serverTimestamp(),
+      });
+      if (dirEntry) {
+        await bindRosterProfileUid(dirEntry);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `users/${fbUser.uid}`);
+    }
+
+    return newProfile;
+  }, []);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      setFirebaseUser(fbUser);
+      if (!fbUser) {
+        setRealProfile(null);
+        setPreviewPersona(null);
+        setActiveSchool(null);
+        setLoading(false);
+        return;
+      }
+      try {
+        const prof = await ensureUserProfile(fbUser);
+        setRealProfile(prof);
+        setAuthError(null);
+      } catch (err) {
+        setAuthError(err instanceof Error ? err.message : 'Unable to load account profile.');
+      } finally {
+        setLoading(false);
+      }
+    });
+    return () => unsub();
+  }, [ensureUserProfile]);
+
+  // Real-time subscription to active user's school document (for tenant enforcement & read-only grace mode)
+  useEffect(() => {
+    if (!activeUser || !activeUser.schoolId || activeUser.schoolId === 'platform' || activeUser.schoolId === 'unassigned') {
+      setActiveSchool(null);
+      return;
+    }
+    const path = `schools/${activeUser.schoolId}`;
+    const unsub = onSnapshot(
+      doc(db, 'schools', activeUser.schoolId),
+      (snap) => {
+        setActiveSchool(snap.exists() ? (snap.data() as School) : null);
+      },
+      (err) => {
+        console.warn('School subscription listener warning:', err.message);
+        setActiveSchool(null);
+      },
+    );
+    return () => unsub();
+  }, [activeUser?.schoolId, activeUser?.uid]);
+
+  // Session idle timeout guard
+  const logout = useCallback(async () => {
+    setPreviewPersona(null);
+    await signOut(auth);
+    setRealProfile(null);
+    setActiveSchool(null);
+  }, []);
+
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const resetIdle = () => {
+      if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = window.setTimeout(() => {
+        logout();
+      }, SESSION_IDLE_MS);
+    };
+    resetIdle();
+    const events = ['mousemove', 'keydown', 'click'];
+    events.forEach((ev) => window.addEventListener(ev, resetIdle, { passive: true }));
+    return () => {
+      if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
+      events.forEach((ev) => window.removeEventListener(ev, resetIdle));
+    };
+  }, [firebaseUser, logout]);
+
+  const signInUnified = useCallback(
+    async (identifier: string, password: string) => {
+      const email = normalizeIdentifierToEmail(identifier);
+      try {
+        const cred = await signInWithEmailAndPassword(auth, email, password);
+        const prof = await ensureUserProfile(cred.user);
+        setRealProfile(prof);
+        setPreviewPersona(null);
+        return { ok: true, profile: prof };
+      } catch (err: unknown) {
+        const code = (err as { code?: string })?.code || '';
+        if (code === 'auth/operation-not-allowed') {
+          return {
+            ok: false,
+            needsEmailAuthSetup: true,
+            error:
+              'Email/Password sign-in is not yet enabled in Firebase Console for this project. Enable Authentication -> Sign-in method -> Email/Password, or use Continue with Google below.',
+          };
+        }
+        if (code === 'auth/too-many-requests') {
+          return { ok: false, error: 'Too many sign-in attempts. Please wait a few minutes and try again.' };
+        }
+        return {
+          ok: false,
+          error: 'Invalid credentials. Please verify your username/email and password.',
+        };
+      }
+    },
+    [ensureUserProfile],
+  );
+
+  const signUpEmailPassword = useCallback(
+    async (params: { displayName: string; username: string; email: string; password: string }) => {
+      const cleanEmail = params.email.trim().toLowerCase();
+      const cleanUser = params.username.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
+      try {
+        const cred = await createUserWithEmailAndPassword(auth, cleanEmail, params.password);
+        await sendEmailVerification(cred.user).catch(() => undefined);
+
+        const isMainHead = cleanEmail === BOOTSTRAPPED_MAIN_HEAD_EMAIL;
+
+        let dirEntry: EmailDirectoryEntry | null = null;
+        if (!isMainHead) {
+          try {
+            const dirSnap = await getDoc(doc(db, 'emailDirectory', emailToKey(cleanEmail)));
+            if (dirSnap.exists()) {
+              const candidate = dirSnap.data() as EmailDirectoryEntry;
+              if (candidate.status === 'active' && candidate.schoolId) {
+                dirEntry = candidate;
+              }
+            }
+          } catch {
+            // Proceed as unassigned for School Code join flow
+          }
+        }
+
+        const profile: PlatformUser = {
+          uid: cred.user.uid,
+          username: cleanUser.length >= 3 ? cleanUser : `user_${cred.user.uid.slice(0, 6)}`,
+          email: cleanEmail,
+          displayName: params.displayName.trim().slice(0, 120),
+          role: isMainHead ? 'main_head' : dirEntry ? dirEntry.role : 'student',
+          schoolId: isMainHead ? 'platform' : dirEntry ? dirEntry.schoolId : 'unassigned',
+          status: 'active',
+          mustChangePassword: false,
+          phone: '',
+          classId: dirEntry?.classId || '',
+          section: dirEntry?.section || '',
+          assignedClassIds: dirEntry?.assignedClassIds || [],
+          assignedSubjectIds: [],
+          coordinatorPermissions: dirEntry?.coordinatorPermissions || DEFAULT_COORD_PERMS,
+          isDemo: false,
+        };
+
+        await setDoc(doc(db, 'users', cred.user.uid), {
+          ...profile,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        await setDoc(doc(db, 'notificationPreferences', cred.user.uid), {
+          ...DEFAULT_NOTIFICATION_PREFS(cred.user.uid),
+          updatedAt: serverTimestamp(),
+        });
+
+        if (dirEntry?.linkedProfileId) {
+          const targetCol = dirEntry.role === 'student' ? 'students' : dirEntry.role === 'teacher' ? 'teachers' : null;
+          if (targetCol) {
+            await updateDoc(doc(db, targetCol, dirEntry.linkedProfileId), {
+              userId: cred.user.uid,
+              updatedAt: serverTimestamp(),
+            }).catch(() => undefined);
+          }
+        }
+
+        await recordAuditLog({
+          schoolId: profile.schoolId,
+          actorUid: cred.user.uid,
+          actorName: profile.displayName,
+          actorRole: profile.role,
+          action: dirEntry ? 'ACCOUNT_REGISTERED_EMAIL_MATCHED' : 'ACCOUNT_REGISTERED',
+          targetType: 'user',
+          targetId: cred.user.uid,
+          targetLabel: profile.email,
+          details: dirEntry
+            ? `Auto-matched to ${dirEntry.schoolName || dirEntry.schoolId} as ${dirEntry.role}.`
+            : 'Self-registered via Email & Password.',
+        }).catch(() => undefined);
+
+        setRealProfile(profile);
+        setPreviewPersona(null);
+        return { ok: true, profile };
+      } catch (err: unknown) {
+        const code = (err as { code?: string })?.code || '';
+        if (code === 'auth/operation-not-allowed') {
+          return {
+            ok: false,
+            needsEmailAuthSetup: true,
+            error:
+              'Email/Password registration requires enabling the Email/Password provider in Firebase Console (Authentication -> Sign-in method -> Email/Password).',
+          };
+        }
+        if (code === 'auth/email-already-in-use') {
+          return { ok: false, error: 'An account with this email already exists. Try signing in instead.' };
+        }
+        if (code === 'auth/weak-password') {
+          return { ok: false, error: 'Password must be at least 6 characters with letters and numbers.' };
+        }
+        return { ok: false, error: err instanceof Error ? err.message : 'Unable to complete registration.' };
+      }
+    },
+    [],
+  );
+
+  const signInGoogle = useCallback(async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      const cred = await signInWithPopup(auth, provider);
+      const prof = await ensureUserProfile(cred.user);
+      setRealProfile(prof);
+      setPreviewPersona(null);
+      return { ok: true, profile: prof };
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/popup-closed-by-user') {
+        return { ok: false, error: 'Sign-in popup was closed before completing.' };
+      }
+      return { ok: false, error: 'Unable to sign in with Google right now.' };
+    }
+  }, [ensureUserProfile]);
+
+  const requestPasswordRecovery = useCallback(async (identifier: string) => {
+    const email = normalizeIdentifierToEmail(identifier);
+    // Always succeed silently without revealing whether an arbitrary username/email exists
+    await sendPasswordResetEmail(auth, email).catch(() => undefined);
+  }, []);
+
+  const replaceTemporaryPassword = useCallback(async (newPassword: string) => {
+    if (!auth.currentUser) return { ok: false, error: 'Not signed in.' };
+    try {
+      await updatePassword(auth.currentUser, newPassword);
+      await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+        mustChangePassword: false,
+        updatedAt: serverTimestamp(),
+      });
+      setRealProfile((prev) => (prev ? { ...prev, mustChangePassword: false } : prev));
+      return { ok: true };
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/requires-recent-login') {
+        return { ok: false, error: 'Please sign out and sign back in before changing your password.' };
+      }
+      return { ok: false, error: err instanceof Error ? err.message : 'Failed to update password.' };
+    }
+  }, []);
+
+  const refreshProfile = useCallback(async (): Promise<PlatformUser | null> => {
+    if (!auth.currentUser) return null;
+    const prof = await ensureUserProfile(auth.currentUser);
+    setRealProfile(prof);
+    return prof;
+  }, [ensureUserProfile]);
+
+  const enterDemoPreview = useCallback(
+    (persona: PlatformUser) => {
+      if (realProfile?.role !== 'main_head') return;
+      setPreviewPersona(persona);
+    },
+    [realProfile?.role],
+  );
+
+  const exitDemoPreview = useCallback(() => {
+    setPreviewPersona(null);
+  }, []);
+
+  return (
+    <AuthContext.Provider
+      value={{
+        firebaseUser,
+        realProfile,
+        activeUser,
+        activeSchool,
+        loading,
+        authError,
+        previewPersona,
+        isPreviewMode: Boolean(previewPersona),
+        signInUnified,
+        signUpEmailPassword,
+        signInGoogle,
+        requestPasswordRecovery,
+        replaceTemporaryPassword,
+        logout,
+        enterDemoPreview,
+        exitDemoPreview,
+        refreshProfile,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used inside AuthProvider');
+  return ctx;
+}
