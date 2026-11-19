@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { doc, setDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { Plus, Download, AlertTriangle, Trash2, CheckCircle2, Calendar, List } from 'lucide-react';
 import { db, generateId, handleFirestoreError, OperationType } from '../../lib/firebase';
@@ -6,6 +6,7 @@ import { detectExamConflicts, detectTimetableConflicts } from '../../lib/permiss
 import { exportToCsv } from '../../lib/csv';
 import { recordAuditLog } from '../../lib/audit';
 import { Button, EmptyState, Modal, StatusText, useToast } from '../../components/ui/Primitives';
+import { DetectLocationAddressPicker } from '../../components/shared/DetectLocationAddressPicker';
 import type {
   Announcement,
   DayOfWeek,
@@ -961,68 +962,127 @@ export function PrincipalSchoolSettingsView({
   const [email, setEmail] = useState(school?.email || '');
   const [academicYear, setAcademicYear] = useState(school?.academicYear || '2026-2027');
   const [allowOnline, setAllowOnline] = useState(school?.settings?.allowOnlineHomeworkSubmission !== false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!school) return;
+    setAddress(school.address || '');
+    setPhone(school.phone || '');
+    setEmail(school.email || '');
+    setAcademicYear(school.academicYear || '2026-2027');
+    setAllowOnline(school.settings?.allowOnlineHomeworkSubmission !== false);
+  }, [school?.id, school?.address, school?.phone, school?.email, school?.academicYear, school?.settings?.allowOnlineHomeworkSubmission]);
 
   if (!school) return <EmptyState title="School profile unavailable" description="No school record is linked to this account." />;
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canWrite) return;
-    await updateDoc(doc(db, 'schools', school.id), {
-      address: address.trim().slice(0, 300),
-      phone: phone.trim().slice(0, 32),
-      email: email.trim().slice(0, 160),
-      academicYear: academicYear.trim().slice(0, 24),
-      settings: { ...(school.settings || {}), allowOnlineHomeworkSubmission: allowOnline },
-      updatedAt: serverTimestamp(),
-    });
-    await recordAuditLog({
-      schoolId: school.id,
-      actorUid: actor.uid,
-      actorName: actor.displayName,
-      actorRole: actor.role,
-      action: 'UPDATE_SCHOOL_SETTINGS',
-      targetType: 'school',
-      targetId: school.id,
-      targetLabel: school.name,
-    });
-    pushToast('success', 'School settings saved.');
+    if (!canWrite || saving) return;
+    setSaving(true);
+    try {
+      await updateDoc(doc(db, 'schools', school.id), {
+        address: address.trim().slice(0, 300),
+        phone: phone.trim().slice(0, 32),
+        email: email.trim().slice(0, 160),
+        academicYear: academicYear.trim().slice(0, 24),
+        settings: { ...(school.settings || {}), allowOnlineHomeworkSubmission: allowOnline },
+        updatedAt: serverTimestamp(),
+      });
+      await recordAuditLog({
+        schoolId: school.id,
+        actorUid: actor.uid,
+        actorName: actor.displayName,
+        actorRole: actor.role,
+        action: 'UPDATE_SCHOOL_SETTINGS',
+        targetType: 'school',
+        targetId: school.id,
+        targetLabel: school.name,
+      }).catch(() => undefined);
+      pushToast('success', 'School settings and campus address saved.');
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to save school settings.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <form onSubmit={handleSave} className="max-w-2xl bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+    <form onSubmit={handleSave} className="max-w-2xl bg-white border border-slate-200 rounded-xl p-6 space-y-5">
       <div className="flex items-center justify-between pb-3 border-b border-slate-200">
         <div>
           <h2 className="text-base font-bold font-display text-slate-900">{school.name}</h2>
-          <p className="text-xs text-slate-500">Code: {school.code} · Subscription Status: {school.subscriptionStatus}</p>
+          <p className="text-xs text-slate-500">Code: {school.code} · Free Unlimited Campus Access</p>
         </div>
         <CheckCircle2 className="w-5 h-5 text-teal-600" />
       </div>
+
       <div className="grid sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-medium text-slate-700 mb-1">Academic Year</label>
-          <input type="text" value={academicYear} onChange={(e) => setAcademicYear(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
+          <input
+            type="text"
+            value={academicYear}
+            onChange={(e) => setAcademicYear(e.target.value)}
+            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600"
+          />
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-700 mb-1">Office Email</label>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600"
+          />
         </div>
       </div>
-      <div className="grid sm:grid-cols-2 gap-4">
+
+      <div>
+        <label className="block text-xs font-medium text-slate-700 mb-1">Office Phone</label>
+        <input
+          type="tel"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          className="w-full sm:max-w-xs px-3 py-2 text-sm border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600"
+        />
+      </div>
+
+      <div className="space-y-3 pt-1">
+        <DetectLocationAddressPicker
+          disabled={!canWrite}
+          label="Detect Campus Address"
+          helperText="Detect your current location to populate the official school address, then drag the pin on the map if needed."
+          onAddressDetected={(detected) => {
+            setAddress(detected.formattedAddress.slice(0, 300));
+            pushToast('success', 'Location detected and campus address updated. Click Save School Settings to apply.');
+          }}
+        />
         <div>
-          <label className="block text-xs font-medium text-slate-700 mb-1">Office Phone</label>
-          <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-700 mb-1">Address</label>
-          <input type="text" value={address} onChange={(e) => setAddress(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
+          <label className="block text-xs font-medium text-slate-700 mb-1">School Campus Address</label>
+          <textarea
+            rows={2}
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="Click Detect Current Location above or enter full campus street address"
+            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600"
+          />
         </div>
       </div>
-      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer pt-2">
-        <input type="checkbox" checked={allowOnline} onChange={(e) => setAllowOnline(e.target.checked)} className="rounded border-slate-300 text-teal-600" />
+
+      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer pt-1">
+        <input
+          type="checkbox"
+          checked={allowOnline}
+          onChange={(e) => setAllowOnline(e.target.checked)}
+          className="rounded border-slate-300 text-teal-600"
+        />
         Enable online homework file submissions for students
       </label>
+
       <div className="flex justify-end pt-2">
-        <Button type="submit" variant="navy" disabled={!canWrite}>Save School Settings</Button>
+        <Button type="submit" variant="navy" loading={saving} disabled={!canWrite}>
+          {saving ? 'Saving…' : 'Save School Settings'}
+        </Button>
       </div>
     </form>
   );

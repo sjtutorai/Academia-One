@@ -1,10 +1,7 @@
 import React, { useState } from 'react';
 import { Bell, BellRing, CheckCheck, Send, SlidersHorizontal } from 'lucide-react';
 import { useNotifications } from '../../contexts/NotificationContext';
-import {
-  NOTIFICATION_CATEGORY_META,
-  getFcmIntegrationStatus,
-} from '../../lib/notifications';
+import { NOTIFICATION_CATEGORY_META } from '../../lib/notifications';
 import { formatFirestoreDateTime } from '../../lib/firebase';
 import { Button, EmptyState, useToast } from '../ui/Primitives';
 import type { NotificationCategory } from '../../types/models';
@@ -35,8 +32,6 @@ export function NotificationsAndPreferencesView() {
   const [catFilter, setCatFilter] = useState<'all' | NotificationCategory>('all');
   const [onlyUnread, setOnlyUnread] = useState(false);
   const [sendingTest, setSendingTest] = useState<string | null>(null);
-
-  const fcmStatus = getFcmIntegrationStatus();
 
   const filtered = notifications.filter((n) => {
     if (catFilter !== 'all' && n.category !== catFilter) return false;
@@ -288,14 +283,6 @@ export function NotificationsAndPreferencesView() {
                   </Button>
                 ))}
               </div>
-            </div>
-
-            <div className="bg-white border border-slate-200 rounded-xl p-6">
-              <h3 className="text-sm font-bold font-display text-slate-900">Background Push (FCM) Status</h3>
-              <p className="text-xs text-slate-600 mt-2 leading-relaxed">{fcmStatus.label}</p>
-              <p className="text-xs font-mono text-slate-500 mt-3 bg-slate-50 border border-slate-200 rounded-lg p-2.5">
-                Required env: {fcmStatus.requiredEnv}
-              </p>
             </div>
           </div>
         </div>

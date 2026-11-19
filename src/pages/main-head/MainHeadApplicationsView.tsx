@@ -28,7 +28,6 @@ import type {
   PlatformUser,
   SchoolApplication,
   SchoolApplicationStatus,
-  SubscriptionPlan,
 } from '../../types/models';
 
 const STATUS_TABS: { id: 'all' | SchoolApplicationStatus; label: string }[] = [
@@ -43,13 +42,11 @@ const STATUS_TABS: { id: 'all' | SchoolApplicationStatus; label: string }[] = [
 
 export function MainHeadApplicationsView({
   applications,
-  plans,
   globalSearch,
   loading,
   actor,
 }: {
   applications: SchoolApplication[];
-  plans: SubscriptionPlan[];
   globalSearch: string;
   loading: boolean;
   actor: PlatformUser;
@@ -62,11 +59,10 @@ export function MainHeadApplicationsView({
   // Reviewer controls
   const [internalNotes, setInternalNotes] = useState('');
   const [applicantMessage, setApplicantMessage] = useState('');
-  const [finalPlanId, setFinalPlanId] = useState('plan_standard');
   const [checklist, setChecklist] = useState({
     identityVerified: false,
     principalEmailConfirmed: false,
-    capacityMatchesPlan: false,
+    campusDetailsReviewed: false,
   });
   const [processing, setProcessing] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
@@ -75,11 +71,10 @@ export function MainHeadApplicationsView({
     setSelectedApp(app);
     setInternalNotes(app.internalNotes || '');
     setApplicantMessage(app.applicantMessage || '');
-    setFinalPlanId(app.requestedPlanId || plans[0]?.id || 'plan_standard');
     setChecklist({
       identityVerified: app.status === 'approved',
       principalEmailConfirmed: app.status === 'approved',
-      capacityMatchesPlan: app.status === 'approved',
+      campusDetailsReviewed: app.status === 'approved',
     });
     setSelectedStatusRec(null);
     try {
@@ -201,11 +196,11 @@ export function MainHeadApplicationsView({
 
     setProcessing(true);
     try {
-      const chosenPlan = plans.find((p) => p.id === finalPlanId) || {
-        id: finalPlanId || 'plan_standard',
-        name: 'Standard Academic',
-        priceMonthly: 249,
-        trialDays: 14,
+      const chosenPlan = {
+        id: 'plan_free',
+        name: 'Free Unlimited',
+        priceMonthly: 0,
+        trialDays: 0,
       };
 
       const fullAddress = [
@@ -290,7 +285,7 @@ export function MainHeadApplicationsView({
       {filtered.length === 0 ? (
         <EmptyState
           title="No school applications in this queue"
-          description="Public 7-step school registration submissions from /register-school appear here for verification and approval."
+          description="Public school registration submissions from /register-school appear here for verification and approval."
         />
       ) : (
         <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
@@ -300,7 +295,7 @@ export function MainHeadApplicationsView({
                 <th className="py-3 px-4 font-semibold">Application No.</th>
                 <th className="py-3 px-4 font-semibold">School & Board</th>
                 <th className="py-3 px-4 font-semibold">Principal Contact</th>
-                <th className="py-3 px-4 font-semibold">Plan & Est. Size</th>
+                <th className="py-3 px-4 font-semibold">Access & Est. Size</th>
                 <th className="py-3 px-4 font-semibold">Status</th>
                 <th className="py-3 px-4 font-semibold text-right">Action</th>
               </tr>
@@ -336,9 +331,7 @@ export function MainHeadApplicationsView({
                     <p className="text-slate-500">{app.principalEmail}</p>
                   </td>
                   <td className="py-3 px-4 text-xs">
-                    <p className="font-medium text-slate-800">
-                      {plans.find((p) => p.id === app.requestedPlanId)?.name || app.requestedPlanId}
-                    </p>
+                    <p className="font-medium text-teal-700">Free Unlimited Campus</p>
                     <p className="text-slate-500 tabular-nums">
                       {app.estimatedStudents} students · {app.estimatedTeachers} teachers
                     </p>
@@ -476,9 +469,9 @@ export function MainHeadApplicationsView({
               </div>
 
               <div className="p-4 rounded-xl border border-slate-200 space-y-1.5">
-                <p className="font-semibold text-slate-900">Requested Plan & Compliance</p>
-                <p className="text-slate-600">
-                  Requested Plan: {plans.find((p) => p.id === selectedApp.requestedPlanId)?.name || selectedApp.requestedPlanId}
+                <p className="font-semibold text-slate-900">Campus Access & Compliance</p>
+                <p className="text-teal-700 font-medium">
+                  Access Tier: Free Unlimited Campus (All modules enabled)
                 </p>
                 {selectedApp.workingDaysSummary && (
                   <p className="text-slate-600">Working Schedule: {selectedApp.workingDaysSummary}</p>
@@ -492,7 +485,7 @@ export function MainHeadApplicationsView({
               </div>
             </div>
 
-            {/* Verification Checklist & Plan Confirmation */}
+            {/* Verification Checklist */}
             {selectedApp.status !== 'approved' && (
               <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
                 <div className="flex items-center gap-2 text-xs font-semibold text-slate-900">
@@ -521,30 +514,12 @@ export function MainHeadApplicationsView({
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={checklist.capacityMatchesPlan}
-                      onChange={(e) => setChecklist({ ...checklist, capacityMatchesPlan: e.target.checked })}
+                      checked={checklist.campusDetailsReviewed}
+                      onChange={(e) => setChecklist({ ...checklist, campusDetailsReviewed: e.target.checked })}
                       className="rounded border-slate-300 text-teal-600"
                     />
-                    Capacity fits plan
+                    Campus details reviewed
                   </label>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Confirmed Subscription Plan on Approval
-                  </label>
-                  <select
-                    value={finalPlanId}
-                    onChange={(e) => setFinalPlanId(e.target.value)}
-                    className="w-full sm:w-80 text-xs border border-slate-300 rounded-lg px-3 py-2 bg-white"
-                  >
-                    {plans.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name} (${p.priceMonthly}/mo · {p.maxStudents} students)
-                      </option>
-                    ))}
-                    {plans.length === 0 && <option value="plan_standard">Standard Academic ($249/mo)</option>}
-                  </select>
                 </div>
               </div>
             )}

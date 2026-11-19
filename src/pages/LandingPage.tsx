@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { motion, useReducedMotion } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
   Building2,
   ShieldCheck,
@@ -16,80 +16,36 @@ import {
   Mail,
   Phone,
   MapPin,
+  Sparkles,
 } from 'lucide-react';
-import { collection, doc, getDoc, getDocs, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db, generateId } from '../lib/firebase';
 import { ROLE_HOME_ROUTES } from '../lib/permissions';
+import {
+  getStaggerContainerVariants,
+  getStaggerItemVariants,
+  MOTION_EASE,
+} from '../lib/motion';
 import { useAuth } from '../contexts/AuthContext';
 import { Button, useToast } from '../components/ui/Primitives';
-import type { PlatformSettings, SubscriptionPlan } from '../types/models';
-
-const FALLBACK_PLANS: Pick<SubscriptionPlan, 'id' | 'name' | 'tier' | 'priceMonthly' | 'billingInterval' | 'maxStudents' | 'maxTeachers' | 'storageGb' | 'description' | 'enabledModules'>[] = [
-  {
-    id: 'plan_free',
-    name: 'Free Starter',
-    tier: 'free',
-    priceMonthly: 0,
-    billingInterval: 'monthly',
-    maxStudents: 100,
-    maxTeachers: 12,
-    storageGb: 5,
-    description: 'For small academies piloting structured attendance and timetables.',
-    enabledModules: ['Attendance', 'Weekly Timetable', 'Announcements'],
-  },
-  {
-    id: 'plan_basic',
-    name: 'Basic Campus',
-    tier: 'basic',
-    priceMonthly: 99,
-    billingInterval: 'monthly',
-    maxStudents: 400,
-    maxTeachers: 35,
-    storageGb: 25,
-    description: 'Core daily administration for growing independent schools.',
-    enabledModules: ['Attendance', 'Timetable', 'Homework', 'School Reports'],
-  },
-  {
-    id: 'plan_standard',
-    name: 'Standard Academic',
-    tier: 'standard',
-    priceMonthly: 249,
-    billingInterval: 'monthly',
-    maxStudents: 1500,
-    maxTeachers: 120,
-    storageGb: 100,
-    description: 'Complete exam schedules, marks validation, CSV import, and coordinators.',
-    enabledModules: ['All Basic Modules', 'Examinations & Marks', 'CSV Bulk Import', 'Learning Resources'],
-  },
-  {
-    id: 'plan_premium',
-    name: 'Premium Multi-Campus',
-    tier: 'premium',
-    priceMonthly: 499,
-    billingInterval: 'annual',
-    maxStudents: 5000,
-    maxTeachers: 400,
-    storageGb: 500,
-    description: 'High-capacity campuses with audit exports and priority onboarding.',
-    enabledModules: ['All Standard Modules', 'Audit Log Exports', 'Priority Support', 'Extended Storage'],
-  },
-];
+import { BrandLogo } from '../components/ui/BrandLogo';
+import type { PlatformSettings } from '../types/models';
 
 const PREVIEW_TABS = [
   {
     id: 'main_head',
     label: 'Main Head',
-    headline: 'Multi-School Oversight & Subscription Governance',
+    headline: 'Multi-School Oversight & Campus Governance',
     metrics: [
-      { label: 'Active Schools', value: '2 Demo Tenants' },
+      { label: 'Active Schools', value: 'Free Unlimited' },
       { label: 'Enforced Isolation', value: 'schoolId Rules' },
       { label: 'Audit Logging', value: 'Append-Only' },
     ],
     rows: [
-      { col1: 'Northridge Preparatory Academy', col2: 'Standard Academic', col3: 'Active', col4: '2027-08-31' },
-      { col1: 'Crestview International School', col2: 'Premium Multi-Campus', col3: 'Trial', col4: '2026-12-01' },
+      { col1: 'Northridge Preparatory Academy', col2: 'Free Unlimited', col3: 'Active', col4: 'NRP' },
+      { col1: 'Crestview International School', col2: 'Free Unlimited', col3: 'Active', col4: 'CVI' },
     ],
-    columns: ['School Name', 'Plan', 'Status', 'Renewal'],
+    columns: ['School Name', 'Access Tier', 'Status', 'Code'],
   },
   {
     id: 'principal',
@@ -140,20 +96,20 @@ const PREVIEW_TABS = [
 
 const FAQS = [
   {
+    q: 'Is AcademiaOne completely free for schools?',
+    a: 'Yes. Every verified school receives 100% free unlimited access to all five role portals, attendance tracking, conflict-checked timetables, examinations, homework submissions, CSV imports, and analytics—with no paid tiers or hidden fees.',
+  },
+  {
     q: 'How does AcademiaOne isolate data between independent schools?',
-    a: 'Every school-owned document—students, teachers, classes, timetables, exams, marks, homework, and announcements—carries an immutable schoolId tenant key. Firestore security rules validate the signed-in user profile against that schoolId on every read and write, denying cross-school requests at the data layer.',
+    a: 'Every school-owned document—students, teachers, classes, timetables, exams, marks, homework, and announcements—carries an immutable schoolId tenant key. Firestore security rules validate the signed-in user profile against that schoolId on every read and write.',
   },
   {
     q: 'Why is there no role dropdown on the Sign In screen?',
-    a: 'AcademiaOne uses a single unified login page with Username/Email and Password only. After authentication, the platform resolves your verified role and school assignment from Firestore and automatically directs you to the authorized portal.',
+    a: 'AcademiaOne uses a single unified login page with Username/Email and Password or Google Sign-In. After authentication, the platform resolves your verified role and school assignment from Firestore and automatically directs you to the authorized portal.',
   },
   {
-    q: 'What happens if a school subscription expires?',
-    a: 'School records are never silently deleted on expiry. Expired schools transition into a safe read-only grace mode until the Main Head records a manual renewal or extends the subscription term.',
-  },
-  {
-    q: 'How do push notifications and user preferences work?',
-    a: 'Users receive real-time in-app alerts and optional Browser Push notifications for new messages, task/homework reminders, published exams, and special offers. Every user can toggle Push vs. In-App delivery per category in Notification Preferences.',
+    q: 'How do notifications and user preferences work?',
+    a: 'Users receive real-time in-app alerts and optional Browser Push notifications for announcements, homework reminders, and published exams, with per-category controls in Notification Preferences.',
   },
 ];
 
@@ -167,7 +123,6 @@ export default function LandingPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [previewTab, setPreviewTab] = useState('main_head');
   const [openFaq, setOpenFaq] = useState<number | null>(0);
-  const [plans, setPlans] = useState(FALLBACK_PLANS);
   const [settings, setSettings] = useState<Partial<PlatformSettings>>({
     platformName: 'AcademiaOne',
     supportEmail: 'support@academiaone.edu',
@@ -198,18 +153,6 @@ export default function LandingPage() {
     getDoc(doc(db, 'platformSettings', 'global'))
       .then((snap) => {
         if (snap.exists()) setSettings(snap.data() as PlatformSettings);
-      })
-      .catch(() => undefined);
-
-    getDocs(collection(db, 'subscriptionPlans'))
-      .then((snap) => {
-        if (!snap.empty) {
-          const loaded = snap.docs
-            .map((d) => d.data() as SubscriptionPlan)
-            .filter((p) => p.status === 'active')
-            .sort((a, b) => a.priceMonthly - b.priceMonthly);
-          if (loaded.length > 0) setPlans(loaded);
-        }
       })
       .catch(() => undefined);
   }, []);
@@ -252,51 +195,43 @@ export default function LandingPage() {
   const activePreview = PREVIEW_TABS.find((t) => t.id === previewTab) || PREVIEW_TABS[0];
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      {/* Strict 3-Zone Sticky Top Navigation */}
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900">
+      {/* Sticky Top Navigation */}
       <header
-        className={`sticky top-0 z-40 transition-all duration-150 border-b ${
+        className={`sticky top-0 z-40 transition-all duration-200 border-b ${
           scrolled
-            ? 'bg-white/95 backdrop-blur-sm border-slate-200 py-3'
-            : 'bg-[#0B1528] border-slate-800/80 py-4'
+            ? 'bg-white/95 backdrop-blur-md border-slate-200 py-3 shadow-xs'
+            : 'bg-[#101C35] border-slate-800/80 py-4'
         }`}
       >
         <div className="max-w-7xl mx-auto px-6 flex items-center justify-between gap-8">
-          {/* Zone 1: Single-line Brand Wordmark */}
           <Link
             to="/"
-            className={`text-lg font-extrabold font-display tracking-tight whitespace-nowrap shrink-0 ${
-              scrolled ? 'text-[#0B1528]' : 'text-white'
-            }`}
+            className="whitespace-nowrap shrink-0 hover:opacity-90 transition-opacity"
           >
-            {settings.platformName || 'AcademiaOne'}
+            <BrandLogo size="md" tone={scrolled ? 'light' : 'dark'} />
           </Link>
 
-          {/* Zone 2: 5 Concise Single-line Nav Links */}
           <nav
             aria-label="Primary Navigation"
             className={`hidden lg:flex items-center gap-7 text-sm font-medium ${
               scrolled ? 'text-slate-600' : 'text-slate-300'
             }`}
           >
-            <a href="#features" className="hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
+            <a href="#features" className="nav-link-underline hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
               Features
             </a>
-            <a href="#how-it-works" className="hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
-              How It Works
-            </a>
-            <a href="#portals" className="hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
+            <a href="#portals" className="nav-link-underline hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
               For Schools
             </a>
-            <a href="#plans" className="hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
-              Plans
+            <a href="#how-it-works" className="nav-link-underline hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
+              How It Works
             </a>
-            <a href="#contact" className="hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
+            <a href="#contact" className="nav-link-underline hover:text-teal-500 transition-colors whitespace-nowrap shrink-0">
               Contact
             </a>
           </nav>
 
-          {/* Zone 3: Primary Action */}
           <div className="hidden lg:flex items-center gap-4 shrink-0">
             {activeUser ? (
               <Button
@@ -310,7 +245,7 @@ export default function LandingPage() {
               <>
                 <Link
                   to="/application-status"
-                  className={`text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  className={`nav-link-underline text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
                     scrolled ? 'text-slate-600 hover:text-slate-900' : 'text-slate-300 hover:text-white'
                   }`}
                 >
@@ -318,14 +253,14 @@ export default function LandingPage() {
                 </Link>
                 <Link
                   to="/login"
-                  className={`text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  className={`nav-link-underline text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
                     scrolled ? 'text-slate-700 hover:text-slate-900' : 'text-slate-200 hover:text-white'
                   }`}
                 >
                   Sign In
                 </Link>
                 <Button variant="primary" size="sm" onClick={() => navigate('/register-school')}>
-                  Register School
+                  Register School Free
                 </Button>
               </>
             )}
@@ -333,7 +268,7 @@ export default function LandingPage() {
 
           <button
             type="button"
-            className={`lg:hidden p-2 rounded-lg ${scrolled ? 'text-slate-700' : 'text-white'}`}
+            className={`lg:hidden p-2 rounded-lg transition-colors cursor-pointer ${scrolled ? 'text-slate-700 hover:bg-slate-100' : 'text-white hover:bg-slate-800'}`}
             onClick={() => setMobileMenuOpen((v) => !v)}
             aria-label="Toggle navigation menu"
           >
@@ -342,66 +277,92 @@ export default function LandingPage() {
         </div>
 
         {/* Responsive Mobile Drawer */}
-        {mobileMenuOpen && (
-          <div className="lg:hidden bg-white border-t border-slate-200 px-6 py-5 space-y-4">
-            <div className="flex flex-col gap-3 text-sm font-medium text-slate-700">
-              <a href="#features" onClick={() => setMobileMenuOpen(false)}>Features</a>
-              <a href="#how-it-works" onClick={() => setMobileMenuOpen(false)}>How It Works</a>
-              <a href="#portals" onClick={() => setMobileMenuOpen(false)}>For Schools</a>
-              <a href="#plans" onClick={() => setMobileMenuOpen(false)}>Plans</a>
-              <a href="#faq" onClick={() => setMobileMenuOpen(false)}>FAQ</a>
-              <a href="#contact" onClick={() => setMobileMenuOpen(false)}>Contact</a>
-              <Link to="/application-status" onClick={() => setMobileMenuOpen(false)} className="text-teal-700">
-                Track Application Status
-              </Link>
-            </div>
-            <div className="pt-3 border-t border-slate-100 flex items-center gap-3">
-              <Button variant="secondary" className="flex-1" onClick={() => navigate('/login')}>
-                Sign In
-              </Button>
-              <Button variant="primary" className="flex-1" onClick={() => navigate('/register-school')}>
-                Register School
-              </Button>
-            </div>
-          </div>
-        )}
+        <AnimatePresence>
+          {mobileMenuOpen && (
+            <motion.div
+              initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+              transition={{ duration: 0.18, ease: MOTION_EASE.out }}
+              className="lg:hidden bg-white border-t border-slate-200 px-6 py-5 space-y-4 shadow-md"
+            >
+              <div className="flex flex-col gap-3 text-sm font-medium text-slate-700">
+                <a href="#features" onClick={() => setMobileMenuOpen(false)}>Features</a>
+                <a href="#portals" onClick={() => setMobileMenuOpen(false)}>For Schools</a>
+                <a href="#how-it-works" onClick={() => setMobileMenuOpen(false)}>How It Works</a>
+                <a href="#faq" onClick={() => setMobileMenuOpen(false)}>FAQ</a>
+                <a href="#contact" onClick={() => setMobileMenuOpen(false)}>Contact</a>
+                <Link to="/application-status" onClick={() => setMobileMenuOpen(false)} className="text-teal-700">
+                  Track Application Status
+                </Link>
+              </div>
+              <div className="pt-3 border-t border-slate-100 flex items-center gap-3">
+                <Button variant="secondary" className="flex-1" onClick={() => navigate('/login')}>
+                  Sign In
+                </Button>
+                <Button variant="primary" className="flex-1" onClick={() => navigate('/register-school')}>
+                  Register School
+                </Button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </header>
 
-      {/* Hero Section: Deep Navy Architectural Canvas */}
-      <section className="bg-[#0B1528] text-white relative overflow-hidden">
+      {/* Hero Section: Deep Navy -> Midnight Indigo with Subtle Ambient Orbs */}
+      <section className="bg-gradient-to-br from-[#101C35] via-[#132245] to-[#172554] text-white relative overflow-hidden">
         <div
-          className="absolute inset-0 pointer-events-none opacity-25"
+          className="hidden md:block absolute -top-24 -right-24 w-[440px] h-[440px] rounded-full pointer-events-none opacity-25 blur-3xl animate-orb-slow"
+          style={{ background: 'radial-gradient(circle, #2563EB 0%, transparent 70%)' }}
+          aria-hidden="true"
+        />
+        <div
+          className="hidden md:block absolute -bottom-28 -left-24 w-[420px] h-[420px] rounded-full pointer-events-none opacity-20 blur-3xl animate-orb-reverse"
+          style={{ background: 'radial-gradient(circle, #8B5CF6 0%, transparent 70%)' }}
+          aria-hidden="true"
+        />
+        <div
+          className="absolute inset-0 pointer-events-none opacity-20"
           style={{
-            backgroundImage:
-              'radial-gradient(rgba(148,163,184,0.28) 1px, transparent 1px), radial-gradient(circle at 75% 20%, rgba(13,148,136,0.45), transparent 45%), radial-gradient(circle at 15% 80%, rgba(37,99,235,0.35), transparent 40%)',
-            backgroundSize: '28px 28px, 100% 100%, 100% 100%',
+            backgroundImage: 'radial-gradient(rgba(148,163,184,0.28) 1px, transparent 1px)',
+            backgroundSize: '28px 28px',
           }}
         />
-        <div className="max-w-7xl mx-auto px-6 py-20 lg:py-28 relative">
+
+        <div className="max-w-7xl mx-auto px-6 py-16 lg:py-24 relative">
           <div className="grid lg:grid-cols-12 gap-12 items-stretch">
             <motion.div
-              initial={prefersReducedMotion ? false : { opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35 }}
+              variants={getStaggerContainerVariants(prefersReducedMotion, 0.08)}
+              initial="hidden"
+              animate="visible"
               className="lg:col-span-6 flex flex-col justify-center"
             >
-              <p className="text-xs font-medium text-teal-400 tracking-wide mb-4">
-                Multi-School Academic Operations · Main Head Verified Onboarding · Strict Tenant Isolation
-              </p>
-              <h1
+              <motion.p
+                variants={getStaggerItemVariants(prefersReducedMotion, 10)}
+                className="text-xs font-medium text-teal-400 tracking-wide mb-3.5"
+              >
+                100% Free for All Schools · Main Head Verified · Strict Tenant Isolation
+              </motion.p>
+              <motion.h1
+                variants={getStaggerItemVariants(prefersReducedMotion, 14)}
                 className="font-display font-bold tracking-tight text-white text-balance leading-[1.1]"
-                style={{ fontSize: 'clamp(2.25rem, 4vw, 3.6rem)' }}
+                style={{ fontSize: 'clamp(2.2rem, 3.8vw, 3.4rem)' }}
               >
                 One unified platform connecting school leadership, teachers, and students.
-              </h1>
-              <p className="mt-6 text-base text-slate-300 leading-relaxed max-w-xl">
-                Submit your school registration for Main Head verification, receive your unique School
-                Code upon approval, and onboard Coordinators, Teachers, and Students via Email &
-                Password or Google Sign-In.
-              </p>
-              <div className="mt-8 flex flex-wrap items-center gap-3.5">
+              </motion.h1>
+              <motion.p
+                variants={getStaggerItemVariants(prefersReducedMotion, 12)}
+                className="mt-5 text-base text-slate-300 leading-relaxed max-w-xl"
+              >
+                Register your school completely free, receive your unique School Code upon Main Head approval, and run
+                conflict-checked timetables, attendance, exams, and homework across five role-based portals.
+              </motion.p>
+              <motion.div
+                variants={getStaggerItemVariants(prefersReducedMotion, 10)}
+                className="mt-7 flex flex-wrap items-center gap-3.5"
+              >
                 <Button variant="primary" size="lg" onClick={() => navigate('/register-school')}>
-                  Register Your School
+                  Register Your School Free
                   <ArrowRight className="w-4 h-4" />
                 </Button>
                 <Button
@@ -414,38 +375,38 @@ export default function LandingPage() {
                 </Button>
                 <Link
                   to="/application-status"
-                  className="inline-flex items-center justify-center px-4 py-3 text-sm font-medium text-teal-300 hover:text-teal-200 transition-colors whitespace-nowrap"
+                  className="inline-flex items-center justify-center px-3 py-3 text-sm font-medium text-teal-300 hover:text-teal-200 transition-colors whitespace-nowrap"
                 >
                   Track Application →
                 </Link>
-              </div>
-              <p className="mt-3 text-xs text-slate-400">
-                Public school applications are reviewed and approved by the Main Head before activating your campus workspace and Principal login.
-              </p>
-              <div className="mt-9 pt-8 border-t border-slate-800 grid grid-cols-3 gap-6">
+              </motion.div>
+              <motion.div
+                variants={getStaggerItemVariants(prefersReducedMotion, 10)}
+                className="mt-8 pt-7 border-t border-slate-700/70 grid grid-cols-3 gap-6"
+              >
                 <div>
                   <p className="text-xl font-bold font-display tabular-nums text-white">5 Portals</p>
                   <p className="text-xs text-slate-400 mt-1">Email & Google auto-routing</p>
                 </div>
                 <div>
-                  <p className="text-xl font-bold font-display tabular-nums text-white">100%</p>
-                  <p className="text-xs text-slate-400 mt-1">schoolId rule isolation</p>
+                  <p className="text-xl font-bold font-display tabular-nums text-white">100% Free</p>
+                  <p className="text-xs text-slate-400 mt-1">All modules included</p>
                 </div>
                 <div>
                   <p className="text-xl font-bold font-display tabular-nums text-white">Unique Code</p>
                   <p className="text-xs text-slate-400 mt-1">Auto-issued on approval</p>
                 </div>
-              </div>
+              </motion.div>
             </motion.div>
 
             {/* Interactive Live Architecture Preview Card */}
             <motion.div
-              initial={prefersReducedMotion ? false : { opacity: 0, y: 18 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.08 }}
+              initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              transition={{ duration: 0.45, delay: 0.12, ease: MOTION_EASE.out }}
               className="lg:col-span-6 flex"
             >
-              <div className="w-full bg-[#111E36] border border-slate-700/80 rounded-2xl p-6 flex flex-col justify-between shadow-2xl">
+              <div className="w-full bg-[#0F1B33]/95 border border-slate-700/80 rounded-2xl p-6 flex flex-col justify-between shadow-2xl">
                 <div>
                   <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
                     <div>
@@ -461,48 +422,64 @@ export default function LandingPage() {
                         key={tab.id}
                         type="button"
                         onClick={() => setPreviewTab(tab.id)}
-                        className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                          previewTab === tab.id
-                            ? 'bg-teal-600 text-white'
-                            : 'text-slate-400 hover:text-white'
+                        className={`relative flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                          previewTab === tab.id ? 'text-white' : 'text-slate-400 hover:text-white'
                         }`}
                       >
-                        {tab.label}
+                        {previewTab === tab.id && (
+                          <motion.span
+                            layoutId="hero-preview-tab"
+                            transition={{ duration: prefersReducedMotion ? 0 : 0.2, ease: MOTION_EASE.out }}
+                            className="absolute inset-0 bg-teal-600 rounded-md"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span className="relative z-10">{tab.label}</span>
                       </button>
                     ))}
                   </div>
 
-                  <div className="grid grid-cols-3 gap-3 mt-5">
-                    {activePreview.metrics.map((m) => (
-                      <div key={m.label} className="bg-[#0B1528]/90 border border-slate-800 rounded-lg p-3">
-                        <p className="text-[11px] text-slate-400">{m.label}</p>
-                        <p className="text-xs font-semibold text-teal-300 mt-1 tabular-nums">{m.value}</p>
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key={activePreview.id}
+                      initial={prefersReducedMotion ? false : { opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={prefersReducedMotion ? undefined : { opacity: 0, y: -4 }}
+                      transition={{ duration: 0.18, ease: MOTION_EASE.out }}
+                    >
+                      <div className="grid grid-cols-3 gap-3 mt-5">
+                        {activePreview.metrics.map((m) => (
+                          <div key={m.label} className="bg-[#0B1528]/90 border border-slate-800 rounded-lg p-3">
+                            <p className="text-[11px] text-slate-400">{m.label}</p>
+                            <p className="text-xs font-semibold text-teal-300 mt-1 tabular-nums">{m.value}</p>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
 
-                  <div className="mt-5 border border-slate-800 rounded-lg overflow-hidden">
-                    <div className="grid grid-cols-4 bg-[#0B1528] px-3.5 py-2 text-[11px] font-medium text-slate-400">
-                      {activePreview.columns.map((c) => (
-                        <span key={c}>{c}</span>
-                      ))}
-                    </div>
-                    <div className="divide-y divide-slate-800/80">
-                      {activePreview.rows.map((r, i) => (
-                        <div key={i} className="grid grid-cols-4 px-3.5 py-2.5 text-xs text-slate-200 items-center">
-                          <span className="font-medium truncate pr-2">{r.col1}</span>
-                          <span className="text-slate-400 truncate pr-2">{r.col2}</span>
-                          <span className="text-teal-400 font-medium">{r.col3}</span>
-                          <span className="text-slate-400 tabular-nums text-right">{r.col4}</span>
+                      <div className="mt-5 border border-slate-800 rounded-lg overflow-hidden">
+                        <div className="grid grid-cols-4 bg-[#0B1528] px-3.5 py-2 text-[11px] font-medium text-slate-400">
+                          {activePreview.columns.map((c) => (
+                            <span key={c}>{c}</span>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  </div>
+                        <div className="divide-y divide-slate-800/80">
+                          {activePreview.rows.map((r, i) => (
+                            <div key={i} className="grid grid-cols-4 px-3.5 py-2.5 text-xs text-slate-200 items-center">
+                              <span className="font-medium truncate pr-2">{r.col1}</span>
+                              <span className="text-slate-400 truncate pr-2">{r.col2}</span>
+                              <span className="text-teal-400 font-medium">{r.col3}</span>
+                              <span className="text-slate-400 tabular-nums text-right">{r.col4}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </motion.div>
+                  </AnimatePresence>
                 </div>
 
                 <div className="mt-5 pt-4 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
-                  <span>Demo sample preview · Live Firestore backend</span>
-                  <Link to="/login" className="text-teal-400 hover:text-teal-300 font-medium">
+                  <span>Live Firestore multi-tenant backend</span>
+                  <Link to="/login" className="text-teal-400 hover:text-teal-300 font-medium transition-colors">
                     Sign in to live portal →
                   </Link>
                 </div>
@@ -512,20 +489,22 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Core Capabilities — Editorial Asymmetric Grid */}
-      <section id="features" className="max-w-7xl mx-auto px-6 py-24">
+      {/* Core Capabilities */}
+      <section id="features" className="max-w-7xl mx-auto px-6 py-16">
         <div className="max-w-2xl">
           <p className="text-xs font-semibold text-teal-700 tracking-wide">Platform Capabilities</p>
-          <h2 className="mt-2 text-3xl font-bold font-display text-slate-900 tracking-tight text-balance">
+          <h2 className="mt-2 text-2xl sm:text-3xl font-bold font-display text-slate-900 tracking-tight text-balance">
             Structured school administration without fragmented spreadsheets
           </h2>
-          <p className="mt-3 text-base text-slate-600 leading-relaxed">
-            Every workflow is built around real institutional boundaries—preventing scheduling
-            overlaps, enforcing marks limits, and preserving student histories across academic years.
-          </p>
         </div>
 
-        <div className="mt-12 grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <motion.div
+          variants={getStaggerContainerVariants(prefersReducedMotion, 0.06)}
+          initial="hidden"
+          whileInView="visible"
+          viewport={{ once: true, amount: 0.15 }}
+          className="mt-10 grid md:grid-cols-2 lg:grid-cols-3 gap-5"
+        >
           {[
             {
               num: '01',
@@ -537,72 +516,85 @@ export default function LandingPage() {
               num: '02',
               icon: ShieldCheck,
               title: 'Unified Role-Free Sign-In',
-              body: 'One login form for every user. Credentials automatically resolve role, school scope, forced password resets, and subscription status.',
+              body: 'One login form for every user. Credentials automatically resolve role, school scope, and forced password resets.',
             },
             {
               num: '03',
               icon: CalendarClock,
               title: 'Conflict-Checked Timetables & Rooms',
-              body: 'Detect teacher, class, and room double-bookings plus room capacity conflicts before publishing weekly or exam schedules.',
+              body: 'Detect teacher, class, and room double-bookings plus room capacity conflicts before publishing schedules.',
             },
             {
               num: '04',
               icon: ClipboardCheck,
               title: 'Audited Attendance & Bounded Marks',
-              body: 'Teachers draft and submit daily attendance with change histories and enter exam marks validated strictly against maximum marks.',
+              body: 'Teachers draft and submit daily attendance with change histories and enter exam marks validated against max marks.',
             },
             {
               num: '05',
               icon: BookOpenCheck,
               title: 'Homework, Submissions & CSV Bulk Ops',
-              body: 'Import students via validated CSV templates with duplicate detection, assign homework, collect files, and return inline teacher feedback.',
+              body: 'Import students via validated CSV templates, assign homework, collect files, and return inline teacher feedback.',
             },
             {
               num: '06',
               icon: BellRing,
               title: 'Push & In-App Notification Engine',
-              body: 'Real-time alerts for new messages, task reminders, published exams, and special offers with per-user delivery preference controls.',
+              body: 'Real-time alerts for announcements, homework reminders, and published exams with per-user preference controls.',
             },
           ].map((f) => {
             const Icon = f.icon;
             return (
-              <div
+              <motion.div
                 key={f.num}
-                className="bg-white border border-slate-200 rounded-xl p-6 transition-transform duration-150 hover:-translate-y-0.5"
+                variants={getStaggerItemVariants(prefersReducedMotion, 12)}
+                className="bg-white border border-slate-200 rounded-xl p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm"
               >
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center justify-between mb-3.5">
                   <span className="text-xs font-mono text-slate-400">{f.num}</span>
                   <Icon className="w-5 h-5 text-teal-600" />
                 </div>
                 <h3 className="text-base font-bold font-display text-slate-900">{f.title}</h3>
-                <p className="mt-2 text-sm text-slate-600 leading-relaxed">{f.body}</p>
-              </div>
+                <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">{f.body}</p>
+              </motion.div>
             );
           })}
-        </div>
+        </motion.div>
       </section>
 
-      {/* Five Role-Based Portals */}
-      <section id="portals" className="bg-white border-y border-slate-200 py-24">
+      {/* Five Role-Based Portals + Free Forever Banner */}
+      <section id="portals" className="bg-white border-y border-slate-200 py-16">
         <div className="max-w-7xl mx-auto px-6">
-          <div className="max-w-2xl">
-            <p className="text-xs font-semibold text-teal-700 tracking-wide">Role-Based Portals</p>
-            <h2 className="mt-2 text-3xl font-bold font-display text-slate-900 tracking-tight text-balance">
-              Least-privilege workspaces tailored to every school role
-            </h2>
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div className="max-w-2xl">
+              <p className="text-xs font-semibold text-teal-700 tracking-wide">Role-Based Portals</p>
+              <h2 className="mt-2 text-2xl sm:text-3xl font-bold font-display text-slate-900 tracking-tight text-balance">
+                Least-privilege workspaces tailored to every school role
+              </h2>
+            </div>
+            <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-teal-50 border border-teal-200 text-xs font-semibold text-teal-800">
+              <Sparkles className="w-4 h-4 text-teal-600 shrink-0" />
+              100% Free Unlimited Access for Every School
+            </div>
           </div>
 
-          <div className="mt-12 grid md:grid-cols-2 lg:grid-cols-5 gap-5">
+          <motion.div
+            variants={getStaggerContainerVariants(prefersReducedMotion, 0.05)}
+            initial="hidden"
+            whileInView="visible"
+            viewport={{ once: true, amount: 0.15 }}
+            className="mt-10 grid md:grid-cols-2 lg:grid-cols-5 gap-4"
+          >
             {[
               {
                 role: 'Main Head',
                 scope: 'Platform Owner',
-                items: ['Register & govern schools', 'Provision Principal logins', 'Plans, renewals & billing', 'Platform analytics & audit log'],
+                items: ['Verify & approve schools', 'Issue unique School Codes', 'Platform analytics & users', 'Append-only audit logs'],
               },
               {
                 role: 'Principal',
                 scope: 'Single School Admin',
-                items: ['Coordinators & permissions', 'Teachers, students & CSV', 'Classes, rooms & timetables', 'Exams, notices & reports'],
+                items: ['GPS campus address setup', 'Coordinators, teachers & CSV', 'Classes, rooms & timetables', 'Exams, notices & reports'],
               },
               {
                 role: 'Coordinator',
@@ -620,10 +612,14 @@ export default function LandingPage() {
                 items: ['Weekly class timetable', 'Online homework upload', 'Published exam results', 'Attendance & resources'],
               },
             ].map((p) => (
-              <div key={p.role} className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex flex-col">
+              <motion.div
+                key={p.role}
+                variants={getStaggerItemVariants(prefersReducedMotion, 10)}
+                className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex flex-col transition-all duration-200 hover:border-slate-300 hover:bg-white"
+              >
                 <p className="text-xs text-teal-700 font-medium">{p.scope}</p>
                 <h3 className="text-base font-bold font-display text-slate-900 mt-1">{p.role}</h3>
-                <ul className="mt-4 space-y-2 text-xs text-slate-600 flex-1">
+                <ul className="mt-3.5 space-y-2 text-xs text-slate-600 flex-1">
                   {p.items.map((item) => (
                     <li key={item} className="flex items-start gap-2">
                       <Check className="w-3.5 h-3.5 text-teal-600 shrink-0 mt-0.5" />
@@ -631,121 +627,59 @@ export default function LandingPage() {
                     </li>
                   ))}
                 </ul>
-              </div>
+              </motion.div>
             ))}
-          </div>
+          </motion.div>
         </div>
       </section>
 
       {/* How Onboarding Works */}
-      <section id="how-it-works" className="max-w-7xl mx-auto px-6 py-24">
+      <section id="how-it-works" className="max-w-7xl mx-auto px-6 py-16">
         <div className="max-w-2xl">
           <p className="text-xs font-semibold text-teal-700 tracking-wide">Onboarding Workflow</p>
-          <h2 className="mt-2 text-3xl font-bold font-display text-slate-900 tracking-tight text-balance">
+          <h2 className="mt-2 text-2xl sm:text-3xl font-bold font-display text-slate-900 tracking-tight text-balance">
             From school registration to live classrooms in four structured steps
           </h2>
         </div>
 
-        <div className="mt-12 grid md:grid-cols-4 gap-6">
+        <motion.div
+          variants={getStaggerContainerVariants(prefersReducedMotion, 0.06)}
+          initial="hidden"
+          whileInView="visible"
+          viewport={{ once: true, amount: 0.15 }}
+          className="mt-10 grid md:grid-cols-4 gap-5"
+        >
           {[
-            { step: '01', title: '7-Step Application', desc: 'Schools submit official institutional, Principal, academic, and plan details and receive a trackable Application Number.' },
-            { step: '02', title: 'Main Head Approval', desc: 'Main Head verifies the application and auto-issues a unique School Code while enabling Principal Email & Google login.' },
-            { step: '03', title: 'Post-Approval Setup', desc: 'Principal configures classes, separate sections per class, exam/campus rooms, and registers staff & student email IDs.' },
+            { step: '01', title: 'Free 6-Step Application', desc: 'Submit institutional, GPS-verified campus address, Principal, and academic details to receive a trackable Application Number.' },
+            { step: '02', title: 'Main Head Approval', desc: 'Main Head verifies your school and auto-issues a unique School Code while enabling Principal Email & Google login.' },
+            { step: '03', title: 'Post-Approval Setup', desc: 'Principal configures classes, sections, campus rooms, and pre-registers staff & student email IDs.' },
             { step: '04', title: 'Smart Member Access', desc: 'Registered emails enter directly on sign-in; unregistered members enter the School Code to apply to the Principal.' },
           ].map((item) => (
-            <div key={item.step} className="bg-white border border-slate-200 rounded-xl p-6">
+            <motion.div
+              key={item.step}
+              variants={getStaggerItemVariants(prefersReducedMotion, 10)}
+              className="bg-white border border-slate-200 rounded-xl p-5 transition-all duration-200 hover:border-slate-300 hover:shadow-sm"
+            >
               <p className="text-2xl font-bold font-mono text-teal-600 tabular-nums">{item.step}</p>
-              <h3 className="mt-3 text-base font-bold font-display text-slate-900">{item.title}</h3>
-              <p className="mt-2 text-sm text-slate-600 leading-relaxed">{item.desc}</p>
-            </div>
+              <h3 className="mt-2.5 text-base font-bold font-display text-slate-900">{item.title}</h3>
+              <p className="mt-1.5 text-sm text-slate-600 leading-relaxed">{item.desc}</p>
+            </motion.div>
           ))}
-        </div>
-      </section>
-
-      {/* Subscription Plans */}
-      <section id="plans" className="bg-white border-y border-slate-200 py-24">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="max-w-2xl">
-            <p className="text-xs font-semibold text-teal-700 tracking-wide">Subscription Plans</p>
-            <h2 className="mt-2 text-3xl font-bold font-display text-slate-900 tracking-tight text-balance">
-              Transparent capacity tiers managed centrally by the platform owner
-            </h2>
-          </div>
-
-          <div className="mt-12 grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {plans.map((plan) => {
-              const featured = plan.tier === 'standard';
-              return (
-                <div
-                  key={plan.id}
-                  className={`rounded-xl p-6 flex flex-col justify-between border ${
-                    featured
-                      ? 'bg-[#0B1528] text-white border-[#0B1528]'
-                      : 'bg-slate-50 text-slate-900 border-slate-200'
-                  }`}
-                >
-                  <div>
-                    <p className={`text-xs font-medium ${featured ? 'text-teal-400' : 'text-teal-700'}`}>
-                      {plan.billingInterval === 'annual' ? 'Annual Billing' : 'Monthly Billing'}
-                    </p>
-                    <h3 className="mt-1 text-lg font-bold font-display">{plan.name}</h3>
-                    <div className="mt-4 flex items-baseline gap-1">
-                      <span className="text-3xl font-bold font-display tabular-nums">
-                        ${plan.priceMonthly}
-                      </span>
-                      <span className={`text-xs ${featured ? 'text-slate-400' : 'text-slate-500'}`}>/month</span>
-                    </div>
-                    <p className={`mt-3 text-xs leading-relaxed ${featured ? 'text-slate-300' : 'text-slate-600'}`}>
-                      {plan.description}
-                    </p>
-
-                    <div className={`mt-5 pt-5 border-t space-y-2 text-xs tabular-nums ${featured ? 'border-slate-800 text-slate-200' : 'border-slate-200 text-slate-700'}`}>
-                      <div className="flex justify-between">
-                        <span className={featured ? 'text-slate-400' : 'text-slate-500'}>Student Capacity</span>
-                        <span className="font-semibold">{plan.maxStudents.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className={featured ? 'text-slate-400' : 'text-slate-500'}>Teacher Capacity</span>
-                        <span className="font-semibold">{plan.maxTeachers.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className={featured ? 'text-slate-400' : 'text-slate-500'}>Storage Allocation</span>
-                        <span className="font-semibold">{plan.storageGb} GB</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-6">
-                    <Link
-                      to={`/register-school?plan=${encodeURIComponent(plan.id)}`}
-                      className={`w-full inline-flex items-center justify-center px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${
-                        featured
-                          ? 'bg-teal-600 text-white hover:bg-teal-500'
-                          : 'bg-white text-slate-900 border border-slate-300 hover:bg-slate-100'
-                      }`}
-                    >
-                      Register With This Plan
-                    </Link>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        </motion.div>
       </section>
 
       {/* FAQ + School Registration Enquiry & Contact */}
-      <section id="faq" className="max-w-7xl mx-auto px-6 py-24">
-        <div className="grid lg:grid-cols-12 gap-14 items-start">
+      <section id="faq" className="bg-white border-t border-slate-200 py-16">
+        <div className="max-w-7xl mx-auto px-6 grid lg:grid-cols-12 gap-12 items-start">
           {/* FAQ Column */}
           <div className="lg:col-span-5">
             <p className="text-xs font-semibold text-teal-700 tracking-wide">Frequently Asked Questions</p>
             <h2 className="mt-2 text-2xl font-bold font-display text-slate-900 tracking-tight">
               Security, access & onboarding answers
             </h2>
-            <div className="mt-6 divide-y divide-slate-200 border-y border-slate-200">
+            <div className="mt-5 divide-y divide-slate-200 border-y border-slate-200">
               {FAQS.map((item, idx) => (
-                <div key={item.q} className="py-4">
+                <div key={item.q} className="py-3.5">
                   <button
                     type="button"
                     onClick={() => setOpenFaq(openFaq === idx ? null : idx)}
@@ -753,19 +687,29 @@ export default function LandingPage() {
                   >
                     <span>{item.q}</span>
                     <ChevronDown
-                      className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${
+                      className={`w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200 ${
                         openFaq === idx ? 'rotate-180' : ''
                       }`}
                     />
                   </button>
-                  {openFaq === idx && (
-                    <p className="mt-2.5 text-sm text-slate-600 leading-relaxed">{item.a}</p>
-                  )}
+                  <AnimatePresence initial={false}>
+                    {openFaq === idx && (
+                      <motion.p
+                        initial={prefersReducedMotion ? false : { opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={prefersReducedMotion ? undefined : { opacity: 0, height: 0 }}
+                        transition={{ duration: 0.2, ease: MOTION_EASE.out }}
+                        className="mt-2 text-sm text-slate-600 leading-relaxed overflow-hidden"
+                      >
+                        {item.a}
+                      </motion.p>
+                    )}
+                  </AnimatePresence>
                 </div>
               ))}
             </div>
 
-            <div className="mt-8 space-y-2.5 text-sm text-slate-600">
+            <div className="mt-6 space-y-2 text-sm text-slate-600">
               <div className="flex items-center gap-2.5">
                 <Mail className="w-4 h-4 text-teal-600" />
                 <span>{settings.supportEmail || 'support@academiaone.edu'}</span>
@@ -776,22 +720,22 @@ export default function LandingPage() {
               </div>
               <div className="flex items-center gap-2.5">
                 <MapPin className="w-4 h-4 text-teal-600" />
-                <span>Multi-Region Cloud Platform · HTTPS Enforced</span>
+                <span>Multi-Region Cloud Platform · 100% Free for Schools</span>
               </div>
             </div>
           </div>
 
           {/* School Registration Enquiry Form */}
-          <div id="contact" className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-8">
+          <div id="contact" className="lg:col-span-7 bg-[#F8FAFC] border border-slate-200 rounded-xl p-7">
             <h3 className="text-xl font-bold font-display text-slate-900">
-              School Registration & Onboarding Enquiry
+              School Onboarding Enquiry
             </h3>
             <p className="text-sm text-slate-600 mt-1">
-              Register interest for your institution. Submissions route directly to the Main Head dashboard.
+              Have questions before submitting your free school application? Send a message directly to the Main Head team.
             </p>
 
             {settings.allowPublicRegistration === false ? (
-              <div className="mt-6 p-5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-600">
+              <div className="mt-6 p-5 bg-white border border-slate-200 rounded-lg text-sm text-slate-600">
                 Public school self-enquiries are currently paused by the platform administrator. Please contact{' '}
                 <span className="font-semibold text-slate-900">{settings.supportEmail}</span> directly.
               </div>
@@ -799,7 +743,7 @@ export default function LandingPage() {
               <div className="mt-6 p-6 bg-emerald-50 border border-emerald-200 rounded-lg">
                 <p className="text-sm font-semibold text-emerald-900">Enquiry received</p>
                 <p className="text-sm text-emerald-800 mt-1">
-                  Thank you. Your school registration request has been logged for review by the Main Head team.
+                  Thank you. Your school enquiry has been logged for review by the Main Head team.
                 </p>
                 <Button
                   variant="secondary"
@@ -811,7 +755,7 @@ export default function LandingPage() {
                 </Button>
               </div>
             ) : (
-              <form onSubmit={handleEnquirySubmit} className="mt-6 space-y-4">
+              <form onSubmit={handleEnquirySubmit} className="mt-5 space-y-4">
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-medium text-slate-700 mb-1">School Name *</label>
@@ -821,7 +765,7 @@ export default function LandingPage() {
                       value={enquiry.schoolName}
                       onChange={(e) => setEnquiry({ ...enquiry, schoolName: e.target.value })}
                       placeholder="e.g. Oakwood Science Academy"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                     />
                   </div>
                   <div>
@@ -832,7 +776,7 @@ export default function LandingPage() {
                       value={enquiry.contactName}
                       onChange={(e) => setEnquiry({ ...enquiry, contactName: e.target.value })}
                       placeholder="e.g. Dr. Miriam Alcott"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                     />
                   </div>
                 </div>
@@ -846,7 +790,7 @@ export default function LandingPage() {
                       value={enquiry.email}
                       onChange={(e) => setEnquiry({ ...enquiry, email: e.target.value })}
                       placeholder="principal@school.edu"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                     />
                   </div>
                   <div>
@@ -856,7 +800,7 @@ export default function LandingPage() {
                       value={enquiry.phone}
                       onChange={(e) => setEnquiry({ ...enquiry, phone: e.target.value })}
                       placeholder="+1 (555) 012-3456"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                     />
                   </div>
                   <div>
@@ -867,7 +811,7 @@ export default function LandingPage() {
                       max={20000}
                       value={enquiry.estimatedStudents}
                       onChange={(e) => setEnquiry({ ...enquiry, estimatedStudents: e.target.value })}
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg tabular-nums focus:outline-none focus:border-teal-600"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg tabular-nums transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                     />
                   </div>
                 </div>
@@ -879,14 +823,14 @@ export default function LandingPage() {
                     value={enquiry.message}
                     onChange={(e) => setEnquiry({ ...enquiry, message: e.target.value })}
                     placeholder="Share grade levels, target start semester, or migration needs..."
-                    className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                    className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                   />
                 </div>
 
                 {enquiryError && <p className="text-xs text-red-600">{enquiryError}</p>}
 
                 <div className="flex items-center justify-end">
-                  <Button type="submit" variant="navy" disabled={submittingEnquiry}>
+                  <Button type="submit" variant="navy" loading={submittingEnquiry}>
                     {submittingEnquiry ? 'Submitting…' : 'Submit School Enquiry'}
                   </Button>
                 </div>
@@ -897,21 +841,19 @@ export default function LandingPage() {
       </section>
 
       {/* Quiet Footer */}
-      <footer className="bg-[#0B1528] text-slate-400 border-t border-slate-800">
-        <div className="max-w-7xl mx-auto px-6 py-12 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+      <footer className="bg-[#101C35] text-slate-400 border-t border-slate-800">
+        <div className="max-w-7xl mx-auto px-6 py-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div>
-            <p className="text-base font-bold font-display text-white">
-              {settings.platformName || 'AcademiaOne'}
-            </p>
-            <p className="text-xs text-slate-400 mt-1">
-              Multi-School Management Platform · Strict Tenant Isolation
-            </p>
+            <BrandLogo
+              size="sm"
+              tone="dark"
+              subtitle="Free Multi-School Management Platform · Strict Tenant Isolation"
+            />
           </div>
           <div className="flex flex-wrap items-center gap-6 text-xs">
             <Link to="/register-school" className="text-teal-400 hover:text-teal-300 font-medium transition-colors">Register School</Link>
             <Link to="/application-status" className="hover:text-white transition-colors">Track Application</Link>
             <a href="#features" className="hover:text-white transition-colors">Features</a>
-            <a href="#plans" className="hover:text-white transition-colors">Plans</a>
             <Link to="/login" className="hover:text-white transition-colors">Sign In</Link>
             <Link to="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>
             <Link to="/terms" className="hover:text-white transition-colors">Terms of Service</Link>

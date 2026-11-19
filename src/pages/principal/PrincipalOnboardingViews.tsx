@@ -35,6 +35,7 @@ import {
   StatusText,
   useToast,
 } from '../../components/ui/Primitives';
+import { DetectLocationAddressPicker } from '../../components/shared/DetectLocationAddressPicker';
 import type {
   CoordinatorPermissions,
   PlatformUser,
@@ -80,6 +81,8 @@ export function PrincipalSetupWizardView({
   const [step, setStep] = useState(1);
   const [copiedCode, setCopiedCode] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [campusAddress, setCampusAddress] = useState(school?.address || '');
+  const [savingAddress, setSavingAddress] = useState(false);
 
   // Step 2: Classes & Separate Sections Builder
   const [classDrafts, setClassDrafts] = useState<ClassDraft[]>([
@@ -108,7 +111,43 @@ export function PrincipalSetupWizardView({
     }
   }, [existingClasses, studentClassId]);
 
+  useEffect(() => {
+    if (school?.address) {
+      setCampusAddress((prev) => prev || school.address || '');
+    }
+  }, [school?.address]);
+
   if (!school) return null;
+
+  const handleSaveCampusAddress = async () => {
+    if (!canWrite || savingAddress) return;
+    if (campusAddress.trim().length < 4) {
+      pushToast('error', 'Detect your location or enter a valid campus address (at least 4 characters).');
+      return;
+    }
+    setSavingAddress(true);
+    try {
+      await updateDoc(doc(db, 'schools', school.id), {
+        address: campusAddress.trim().slice(0, 300),
+        updatedAt: serverTimestamp(),
+      });
+      await recordAuditLog({
+        schoolId: school.id,
+        actorUid: actor.uid,
+        actorName: actor.displayName,
+        actorRole: actor.role,
+        action: 'UPDATE_CAMPUS_ADDRESS',
+        targetType: 'school',
+        targetId: school.id,
+        targetLabel: campusAddress.trim().slice(0, 120),
+      }).catch(() => undefined);
+      pushToast('success', 'School campus address saved.');
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to save campus address.');
+    } finally {
+      setSavingAddress(false);
+    }
+  };
 
   const generatedSectionsCount = classDrafts.reduce((acc, row) => {
     const secs = row.sectionsCsv
@@ -285,12 +324,19 @@ export function PrincipalSetupWizardView({
 
   const handleSaveDirectoryAndFinish = async () => {
     if (!canWrite) return;
+    const coords = parseEmailLines(coordLines);
+    const teachers = parseEmailLines(teacherLines);
+    const students = parseEmailLines(studentLines);
+    const targetCls = existingClasses.find((c) => c.id === studentClassId) || existingClasses[0];
+
+    if (students.length > 0 && !targetCls) {
+      pushToast('error', 'Please create at least one Class & Section in Step 2 before registering student email IDs.');
+      setStep(2);
+      return;
+    }
+
     setSaving(true);
     try {
-      const coords = parseEmailLines(coordLines);
-      const teachers = parseEmailLines(teacherLines);
-      const students = parseEmailLines(studentLines);
-      const targetCls = existingClasses.find((c) => c.id === studentClassId) || existingClasses[0];
 
       let registeredCount = 0;
 
@@ -504,22 +550,58 @@ export function PrincipalSetupWizardView({
 
       {/* Step 1 */}
       {step === 1 && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-          <h3 className="text-base font-bold font-display text-slate-900">
-            Step 1 — Your Issued Unique School Code & Overview
-          </h3>
-          <p className="text-sm text-slate-600 leading-relaxed max-w-2xl">
-            Share <span className="font-mono font-bold text-slate-900">{school.code}</span> with Coordinators, Teachers,
-            and Students who are not yet pre-registered. When they sign in with Email & Password or Google, anyone whose
-            email is pre-registered in Step 4 enters directly; unregistered members enter{' '}
-            <span className="font-mono font-semibold">{school.code}</span> to send you a join request.
-          </p>
-          <div className="grid sm:grid-cols-3 gap-4 pt-2">
+        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+          <div>
+            <h3 className="text-base font-bold font-display text-slate-900">
+              Step 1 — School Code & Campus Address
+            </h3>
+            <p className="text-sm text-slate-600 leading-relaxed max-w-2xl mt-1">
+              Share <span className="font-mono font-bold text-slate-900">{school.code}</span> with Coordinators, Teachers,
+              and Students who are not yet pre-registered. Pre-registered emails in Step 4 enter directly on sign-in.
+            </p>
+          </div>
+
+          <div className="grid sm:grid-cols-3 gap-4">
             <StatCard label="Current Classes & Sections" value={existingClasses.length} subtext="Configured in Firestore" />
             <StatCard label="Campus & Exam Rooms" value={existingRooms.length} subtext="Available for timetables & exams" />
-            <StatCard label="Academic Year" value={school.academicYear || '2026-2027'} subtext={school.board || 'Active Session'} />
+            <StatCard label="Academic Year" value={school.academicYear || '2026-2027'} subtext={school.board || 'Free Unlimited Campus'} />
           </div>
-          <div className="flex justify-end pt-3">
+
+          <div className="pt-2 border-t border-slate-100 space-y-3">
+            <DetectLocationAddressPicker
+              disabled={!canWrite}
+              compact
+              label="Detect Campus Address"
+              helperText="Use GPS to auto-fill your school's physical address and verify your campus pin on the map."
+              onAddressDetected={(detected) => {
+                setCampusAddress(detected.formattedAddress.slice(0, 300));
+                pushToast('success', 'Location detected. Click Save Address to update your school profile.');
+              }}
+            />
+            <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-end">
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-slate-700 mb-1">Registered Campus Address</label>
+                <input
+                  type="text"
+                  value={campusAddress}
+                  onChange={(e) => setCampusAddress(e.target.value)}
+                  placeholder="Detect location above or type full school address"
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                />
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                loading={savingAddress}
+                disabled={!canWrite}
+                onClick={handleSaveCampusAddress}
+              >
+                Save Address
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-2">
             <Button variant="primary" onClick={() => setStep(2)}>
               Continue to Classes & Separate Sections →
             </Button>

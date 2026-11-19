@@ -46,9 +46,7 @@ export function DetectLocationAddressPicker({
   label = 'Detect School Location',
   helperText = 'Use your device GPS to automatically fill your campus street address, city, state, and postal code.',
 }: DetectLocationAddressPickerProps) {
-  const [mapsApiKey, setMapsApiKey] = useState<string>(
-    () => (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined)?.trim() || '',
-  );
+  const [mapsApiKey, setMapsApiKey] = useState<string>('');
   const [detecting, setDetecting] = useState(false);
   const [resolvingPin, setResolvingPin] = useState(false);
   const [error, setError] = useState('');
@@ -180,7 +178,7 @@ export function DetectLocationAddressPicker({
   );
 
   const handleMarkerDragEnd = useCallback(
-    (ev: google.maps.MapMouseEvent) => {
+    (ev: { latLng?: { lat(): number; lng(): number } | null }) => {
       if (disabled || resolvingPin) return;
       const lat = ev.latLng?.lat();
       const lng = ev.latLng?.lng();

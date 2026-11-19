@@ -16,6 +16,7 @@ import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db, formatFirestoreDateTime } from '../lib/firebase';
 import { hashVerificationEmail } from '../lib/schoolProvisioning';
 import { Button, StatusText, useToast } from '../components/ui/Primitives';
+import { BrandLogo } from '../components/ui/BrandLogo';
 import type { ApplicationStatusRecord } from '../types/models';
 
 export default function ApplicationStatusPage() {
@@ -112,8 +113,8 @@ export default function ApplicationStatusPage() {
     <div className="min-h-screen bg-slate-50 pb-16">
       <header className="bg-[#0B1528] text-white border-b border-slate-800">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-          <Link to="/" className="font-display font-extrabold text-lg tracking-tight">
-            AcademiaOne
+          <Link to="/" className="hover:opacity-90 transition-opacity">
+            <BrandLogo size="sm" tone="dark" />
           </Link>
           <div className="flex items-center gap-4 text-xs">
             <Link to="/register-school" className="text-slate-300 hover:text-white font-medium">

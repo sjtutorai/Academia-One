@@ -18,6 +18,7 @@ import { ROLE_HOME_ROUTES } from '../lib/permissions';
 import { generateApplicationNumber, hashVerificationEmail } from '../lib/schoolProvisioning';
 import { useAuth } from '../contexts/AuthContext';
 import { Button, StatusText, useToast } from '../components/ui/Primitives';
+import { BrandLogo } from '../components/ui/BrandLogo';
 import type { SchoolCodeEntry, SchoolJoinRequest } from '../types/models';
 
 const JOIN_ROLES = [
@@ -193,6 +194,9 @@ export default function JoinSchoolPage() {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
         <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-md w-full text-center">
+          <div className="flex justify-center mb-4">
+            <BrandLogo size="lg" />
+          </div>
           <h1 className="text-lg font-bold font-display text-slate-900">Sign In Required</h1>
           <p className="text-sm text-slate-500 mt-2">
             Sign in with Email & Password or Google first so we can check your email against registered schools.
@@ -211,8 +215,8 @@ export default function JoinSchoolPage() {
     <div className="min-h-screen bg-slate-50 pb-16">
       <header className="bg-[#0B1528] text-white border-b border-slate-800">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-          <Link to="/" className="font-display font-extrabold text-lg tracking-tight">
-            AcademiaOne
+          <Link to="/" className="hover:opacity-90 transition-opacity">
+            <BrandLogo size="sm" tone="dark" />
           </Link>
           <div className="flex items-center gap-3 text-xs">
             <span className="text-slate-300 hidden sm:inline">{activeUser.email}</span>

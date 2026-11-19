@@ -4,13 +4,10 @@ import {
   LayoutDashboard,
   Building2,
   ClipboardCheck,
-  CreditCard,
-  Layers,
   BarChart3,
   Users,
   Bell,
   FileClock,
-  Settings,
   UserCircle2,
   Plus,
   RefreshCw,
@@ -70,35 +67,26 @@ import { ProfileSecurityView } from '../../components/shared/ProfileSecurityView
 import { provisionSchoolTenant } from '../../lib/schoolProvisioning';
 import { MainHeadApplicationsView } from './MainHeadApplicationsView';
 import {
-  MainHeadSubscriptionsView,
-  MainHeadPlansView,
   MainHeadAnalyticsView,
   MainHeadAuditLogsView,
-  MainHeadSettingsView,
 } from './MainHeadSubViews';
 import type {
   School,
   SchoolApplication,
-  SubscriptionPlan,
-  SchoolSubscription,
   SchoolEnquiry,
   PlatformUser,
-  PlatformSettings,
   AuditLog,
   UserRole,
 } from '../../types/models';
 
 const MAIN_HEAD_NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', path: '/main-head/dashboard', icon: LayoutDashboard },
-  { id: 'applications', label: 'School Applications', path: '/main-head/applications', icon: ClipboardCheck },
+  { id: 'applications', label: 'Applications', path: '/main-head/applications', icon: ClipboardCheck },
   { id: 'schools', label: 'Schools', path: '/main-head/schools', icon: Building2 },
-  { id: 'subscriptions', label: 'Subscriptions', path: '/main-head/subscriptions', icon: CreditCard },
-  { id: 'plans', label: 'Plans', path: '/main-head/plans', icon: Layers },
   { id: 'analytics', label: 'Analytics', path: '/main-head/analytics', icon: BarChart3 },
   { id: 'users', label: 'Platform Users', path: '/main-head/users', icon: Users },
   { id: 'notifications', label: 'Notifications', path: '/main-head/notifications', icon: Bell },
   { id: 'audit', label: 'Audit Logs', path: '/main-head/audit-logs', icon: FileClock },
-  { id: 'settings', label: 'Settings', path: '/main-head/settings', icon: Settings },
   { id: 'profile', label: 'Profile', path: '/main-head/profile', icon: UserCircle2 },
 ];
 
@@ -109,19 +97,9 @@ export default function MainHeadPortal() {
 
   const [schools, setSchools] = useState<School[]>([]);
   const [applications, setApplications] = useState<SchoolApplication[]>([]);
-  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
-  const [subscriptions, setSubscriptions] = useState<SchoolSubscription[]>([]);
   const [enquiries, setEnquiries] = useState<SchoolEnquiry[]>([]);
   const [users, setUsers] = useState<PlatformUser[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [platformSettings, setPlatformSettings] = useState<PlatformSettings>({
-    platformName: 'AcademiaOne',
-    supportEmail: 'support@academiaone.edu',
-    supportPhone: '+1 (800) 555-0199',
-    allowPublicRegistration: true,
-    defaultTrialDays: 14,
-    sessionTimeoutMinutes: 60,
-  });
   const [loading, setLoading] = useState(true);
   const [globalSearch, setGlobalSearch] = useState('');
   const [seeding, setSeeding] = useState(false);
@@ -130,11 +108,9 @@ export default function MainHeadPortal() {
     let settled = 0;
     const done = () => {
       settled += 1;
-      if (settled >= 6) setLoading(false);
+      if (settled >= 4) setLoading(false);
     };
     const u1 = onSnapshot(collection(db, 'schools'), (s) => { setSchools(s.docs.map((d) => d.data() as School)); done(); }, () => done());
-    const u2 = onSnapshot(collection(db, 'subscriptionPlans'), (s) => { setPlans(s.docs.map((d) => d.data() as SubscriptionPlan)); done(); }, () => done());
-    const u3 = onSnapshot(collection(db, 'schoolSubscriptions'), (s) => { setSubscriptions(s.docs.map((d) => d.data() as SchoolSubscription)); done(); }, () => done());
     const u4 = onSnapshot(collection(db, 'schoolEnquiries'), (s) => { setEnquiries(s.docs.map((d) => d.data() as SchoolEnquiry)); done(); }, () => done());
     const u5 = onSnapshot(collection(db, 'users'), (s) => { setUsers(s.docs.map((d) => d.data() as PlatformUser)); done(); }, () => done());
     const u6 = onSnapshot(collection(db, 'auditLogs'), (s) => {
@@ -143,13 +119,10 @@ export default function MainHeadPortal() {
       setAuditLogs(logs);
       done();
     }, () => done());
-    const u7 = onSnapshot(doc(db, 'platformSettings', 'global'), (snap) => {
-      if (snap.exists()) setPlatformSettings(snap.data() as PlatformSettings);
-    });
-    const u8 = onSnapshot(collection(db, 'schoolApplications'), (s) => {
+    const u7 = onSnapshot(collection(db, 'schoolApplications'), (s) => {
       setApplications(s.docs.map((d) => d.data() as SchoolApplication));
     }, () => undefined);
-    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); };
+    return () => { u1(); u4(); u5(); u6(); u7(); };
   }, []);
 
   const handleSeedDemo = async () => {
@@ -198,7 +171,7 @@ export default function MainHeadPortal() {
       breadcrumb="AcademiaOne / Main Head"
       navItems={MAIN_HEAD_NAV}
       onGlobalSearch={setGlobalSearch}
-      globalSearchPlaceholder="Search schools, users, plans…"
+      globalSearchPlaceholder="Search schools, applications, users…"
     >
       <Routes>
         <Route index element={<Navigate to="dashboard" replace />} />
@@ -208,7 +181,6 @@ export default function MainHeadPortal() {
             <MainHeadOverview
               schools={schools}
               applications={applications}
-              subscriptions={subscriptions}
               auditLogs={auditLogs}
               enquiries={enquiries}
               loading={loading}
@@ -223,7 +195,6 @@ export default function MainHeadPortal() {
           element={
             <MainHeadApplicationsView
               applications={applications}
-              plans={plans}
               globalSearch={globalSearch}
               loading={loading}
               actor={activeUser!}
@@ -235,7 +206,6 @@ export default function MainHeadPortal() {
           element={
             <MainHeadSchoolsView
               schools={schools}
-              plans={plans}
               enquiries={enquiries}
               globalSearch={globalSearch}
               loading={loading}
@@ -244,29 +214,8 @@ export default function MainHeadPortal() {
           }
         />
         <Route
-          path="subscriptions"
-          element={
-            <MainHeadSubscriptionsView
-              schools={schools}
-              plans={plans}
-              subscriptions={subscriptions}
-              actor={activeUser!}
-            />
-          }
-        />
-        <Route
-          path="plans"
-          element={<MainHeadPlansView plans={plans} actor={activeUser!} />}
-        />
-        <Route
           path="analytics"
-          element={
-            <MainHeadAnalyticsView
-              schools={schools}
-              plans={plans}
-              subscriptions={subscriptions}
-            />
-          }
+          element={<MainHeadAnalyticsView schools={schools} />}
         />
         <Route
           path="users"
@@ -282,17 +231,6 @@ export default function MainHeadPortal() {
         />
         <Route path="notifications" element={<NotificationsAndPreferencesView />} />
         <Route path="audit-logs" element={<MainHeadAuditLogsView auditLogs={auditLogs} />} />
-        <Route
-          path="settings"
-          element={
-            <MainHeadSettingsView
-              settings={platformSettings}
-              actor={activeUser!}
-              onResetDemo={handleSeedDemo}
-              seeding={seeding}
-            />
-          }
-        />
         <Route path="profile" element={<ProfileSecurityView />} />
         <Route path="*" element={<Navigate to="dashboard" replace />} />
       </Routes>
@@ -306,7 +244,6 @@ export default function MainHeadPortal() {
 function MainHeadOverview({
   schools,
   applications,
-  subscriptions,
   auditLogs,
   enquiries,
   loading,
@@ -316,7 +253,6 @@ function MainHeadOverview({
 }: {
   schools: School[];
   applications: SchoolApplication[];
-  subscriptions: SchoolSubscription[];
   auditLogs: AuditLog[];
   enquiries: SchoolEnquiry[];
   loading: boolean;
@@ -328,19 +264,12 @@ function MainHeadOverview({
   const pendingApps = applications.filter((a) => a.status === 'submitted' || a.status === 'under_review' || a.status === 'more_info_required');
 
   const metrics = useMemo(() => {
-    const active = schools.filter((s) => s.status === 'active').length;
+    const active = schools.filter((s) => s.status === 'active' || s.status === 'trial').length;
     const suspended = schools.filter((s) => s.status === 'suspended').length;
-    const trial = schools.filter((s) => s.status === 'trial').length;
-    const activeSubs = subscriptions.filter((s) => s.status === 'active' || s.status === 'trial').length;
-    const expiringSoon = subscriptions.filter((s) => {
-      const end = new Date(s.endDate).getTime();
-      const diffDays = (end - Date.now()) / (1000 * 60 * 60 * 24);
-      return diffDays >= 0 && diffDays <= 30;
-    }).length;
     const teachers = schools.reduce((acc, s) => acc + (s.teacherCount || 0), 0);
     const students = schools.reduce((acc, s) => acc + (s.studentCount || 0), 0);
-    return { active, suspended, trial, activeSubs, expiringSoon, teachers, students };
-  }, [schools, subscriptions]);
+    return { active, suspended, teachers, students };
+  }, [schools]);
 
   const chartData = schools.map((s) => ({
     name: s.code || s.name.slice(0, 10),
@@ -395,14 +324,12 @@ function MainHeadOverview({
         </div>
       </div>
 
-      {/* 8 Overview Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Schools" value={schools.length} subtext={`${pendingApps.length} pending applications`} />
-        <StatCard label="Active Schools" value={metrics.active} tone="teal" subtext="Full operational access" />
-        <StatCard label="Trial Schools" value={metrics.trial} tone="amber" subtext="Active trial evaluation" />
+      {/* 6 Focused Overview Cards (100% Free Platform) */}
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+        <StatCard label="Total Schools" value={schools.length} subtext="All modules included free" />
+        <StatCard label="Active Campuses" value={metrics.active} tone="teal" subtext="Full operational access" />
+        <StatCard label="Pending Applications" value={pendingApps.length} tone="amber" subtext="Awaiting Main Head review" />
         <StatCard label="Suspended Schools" value={metrics.suspended} tone="red" subtext="Access paused" />
-        <StatCard label="Active Subscriptions" value={metrics.activeSubs} subtext="Manual & trial plans" />
-        <StatCard label="Expiring Within 30d" value={metrics.expiringSoon} tone="amber" subtext="Renewal reminders" />
         <StatCard label="Total Teachers" value={metrics.teachers} subtext="Across registered campuses" />
         <StatCard label="Total Students" value={metrics.students} subtext={`${enquiries.filter((e) => e.status === 'new').length} new enquiries`} />
       </div>
@@ -524,14 +451,12 @@ function MainHeadOverview({
 // ============================================================================
 function MainHeadSchoolsView({
   schools,
-  plans,
   enquiries,
   globalSearch,
   loading,
   actor,
 }: {
   schools: School[];
-  plans: SubscriptionPlan[];
   enquiries: SchoolEnquiry[];
   globalSearch: string;
   loading: boolean;
@@ -597,7 +522,7 @@ function MainHeadSchoolsView({
       phone: prefill?.phone || '',
       academicYear: '2026-2027',
       status: 'active',
-      subscriptionPlanId: plans[0]?.id || 'plan_standard',
+      subscriptionPlanId: 'plan_free',
       principalName: prefill?.contactName || '',
       principalUsername: prefill ? `principal.${prefill.schoolName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12)}` : '',
       principalEmail: prefill?.email || '',
@@ -616,7 +541,7 @@ function MainHeadSchoolsView({
       phone: s.phone || '',
       academicYear: s.academicYear,
       status: s.status,
-      subscriptionPlanId: s.subscriptionPlanId,
+      subscriptionPlanId: 'plan_free',
       principalName: s.principalName || '',
       principalUsername: s.principalUsername || '',
       principalEmail: s.principalEmail || '',
@@ -658,11 +583,11 @@ function MainHeadSchoolsView({
         });
         pushToast('success', `Updated ${form.name.trim()}.`);
       } else {
-        const plan = plans.find((p) => p.id === form.subscriptionPlanId) || {
-          id: form.subscriptionPlanId || 'plan_standard',
-          name: 'Standard Academic',
-          priceMonthly: 249,
-          trialDays: 14,
+        const plan = {
+          id: 'plan_free',
+          name: 'Free Unlimited',
+          priceMonthly: 0,
+          trialDays: 0,
         };
         let principalUid = '';
         let provisionNote = '';
@@ -875,7 +800,7 @@ function MainHeadSchoolsView({
                   <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
                     <th className="py-3 px-4 font-semibold">School</th>
                     <th className="py-3 px-4 font-semibold">Principal</th>
-                    <th className="py-3 px-4 font-semibold">Plan & Expiry</th>
+                    <th className="py-3 px-4 font-semibold">Access Tier</th>
                     <th className="py-3 px-4 font-semibold text-right">Teachers</th>
                     <th className="py-3 px-4 font-semibold text-right">Students</th>
                     <th className="py-3 px-4 font-semibold">Status</th>
@@ -896,10 +821,8 @@ function MainHeadSchoolsView({
                         <p className="text-xs text-slate-500">{s.principalEmail || '—'}</p>
                       </td>
                       <td className="py-3 px-4 text-xs">
-                        <p className="font-medium text-slate-800">
-                          {plans.find((p) => p.id === s.subscriptionPlanId)?.name || s.subscriptionPlanId}
-                        </p>
-                        <p className="text-slate-500 tabular-nums">Ends {s.subscriptionEnd || '—'}</p>
+                        <p className="font-medium text-teal-700">Free Unlimited</p>
+                        <p className="text-slate-500">All modules included</p>
                       </td>
                       <td className="py-3 px-4 text-right font-mono text-xs tabular-nums">{s.teacherCount || 0}</td>
                       <td className="py-3 px-4 text-right font-mono text-xs tabular-nums">{s.studentCount || 0}</td>
@@ -993,7 +916,7 @@ function MainHeadSchoolsView({
             </div>
           </div>
 
-          <div className="grid sm:grid-cols-3 gap-4">
+          <div className="grid sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Academic Year</label>
               <input
@@ -1004,27 +927,13 @@ function MainHeadSchoolsView({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Subscription Plan</label>
-              <select
-                value={form.subscriptionPlanId}
-                onChange={(e) => setForm({ ...form, subscriptionPlanId: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-              >
-                {plans.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name} (${p.priceMonthly}/mo)</option>
-                ))}
-                {plans.length === 0 && <option value="plan_standard">Standard Academic</option>}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Status</label>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Campus Status</label>
               <select
                 value={form.status}
                 onChange={(e) => setForm({ ...form, status: e.target.value as School['status'] })}
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
               >
-                <option value="active">Active</option>
-                <option value="trial">Trial</option>
+                <option value="active">Active (Free Unlimited)</option>
                 <option value="suspended">Suspended</option>
                 <option value="archived">Archived</option>
               </select>

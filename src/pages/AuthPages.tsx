@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Eye, EyeOff, Lock, ArrowLeft, ShieldAlert, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { ROLE_HOME_ROUTES } from '../lib/permissions';
+import { MOTION_EASE } from '../lib/motion';
 import { Button, useToast } from '../components/ui/Primitives';
+import { BrandLogo } from '../components/ui/BrandLogo';
 
 // ============================================================================
 // Unified Login Page (Strictly NO Role Selector Dropdown)
@@ -12,12 +15,14 @@ export function SignInPage() {
   const { signInUnified, signInGoogle } = useAuth();
   const navigate = useNavigate();
   const { pushToast } = useToast();
+  const prefersReducedMotion = useReducedMotion();
 
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberSession, setRememberSession] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [googleSubmitting, setGoogleSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [needsEmailSetup, setNeedsEmailSetup] = useState(false);
 
@@ -59,7 +64,7 @@ export function SignInPage() {
 
   const handleGoogleSignIn = async () => {
     setError('');
-    setSubmitting(true);
+    setGoogleSubmitting(true);
     try {
       const res = await signInGoogle();
       if (!res.ok) {
@@ -82,25 +87,32 @@ export function SignInPage() {
         navigate(ROLE_HOME_ROUTES[res.profile.role]);
       }
     } finally {
-      setSubmitting(false);
+      setGoogleSubmitting(false);
     }
   };
 
+  const busy = submitting || googleSubmitting;
+
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 px-4 sm:px-6">
+    <div className="min-h-screen bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex flex-col justify-center py-12 px-4 sm:px-6">
       <div className="max-w-md w-full mx-auto">
         <Link
           to="/"
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 mb-6"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors mb-6"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
           Back to AcademiaOne
         </Link>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-8">
+        <motion.div
+          initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: 0.28, ease: MOTION_EASE.out }}
+          className="bg-white border border-slate-200/90 rounded-xl p-8 shadow-sm"
+        >
           <div className="mb-6">
-            <p className="text-lg font-extrabold font-display text-[#0B1528]">AcademiaOne</p>
-            <h1 className="text-xl font-bold font-display text-slate-900 mt-2">Sign in to your account</h1>
+            <BrandLogo size="md" />
+            <h1 className="text-xl font-bold font-display text-slate-900 mt-4">Sign in to your account</h1>
             <p className="text-sm text-slate-500 mt-1">
               Enter your credentials. You will be routed automatically to your authorized portal.
             </p>
@@ -116,11 +128,11 @@ export function SignInPage() {
                 type="text"
                 autoComplete="username"
                 required
-                disabled={submitting}
+                disabled={busy}
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 placeholder="name@school.edu or username"
-                className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600 disabled:bg-slate-50"
+                className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15 disabled:bg-slate-50"
               />
             </div>
 
@@ -131,7 +143,7 @@ export function SignInPage() {
                 </label>
                 <Link
                   to="/forgot-password"
-                  className="text-xs font-medium text-teal-700 hover:text-teal-800"
+                  className="text-xs font-medium text-teal-700 hover:text-teal-800 transition-colors"
                 >
                   Forgot Password?
                 </Link>
@@ -142,19 +154,30 @@ export function SignInPage() {
                   type={showPassword ? 'text' : 'password'}
                   autoComplete="current-password"
                   required
-                  disabled={submitting}
+                  disabled={busy}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your password"
-                  className="w-full pl-3.5 pr-10 py-2.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600 disabled:bg-slate-50"
+                  className="w-full pl-3.5 pr-10 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15 disabled:bg-slate-50"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.span
+                      key={showPassword ? 'hide' : 'show'}
+                      initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={prefersReducedMotion ? undefined : { opacity: 0, scale: 0.85 }}
+                      transition={{ duration: 0.12 }}
+                      className="block"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </motion.span>
+                  </AnimatePresence>
                 </button>
               </div>
             </div>
@@ -169,19 +192,28 @@ export function SignInPage() {
               Keep session active on this trusted device (60 min idle timeout enforced)
             </label>
 
-            {error && (
-              <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed">
-                {error}
-                {needsEmailSetup && (
-                  <p className="mt-2 text-slate-700">
-                    Firebase Console path:{' '}
-                    <span className="font-mono">Authentication → Sign-in method → Email/Password → Enable</span>
-                  </p>
-                )}
-              </div>
-            )}
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  initial={prefersReducedMotion ? false : { opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.16, ease: MOTION_EASE.out }}
+                  role="alert"
+                  className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed"
+                >
+                  {error}
+                  {needsEmailSetup && (
+                    <p className="mt-2 text-slate-700">
+                      Firebase Console path:{' '}
+                      <span className="font-mono">Authentication → Sign-in method → Email/Password → Enable</span>
+                    </p>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-            <Button type="submit" variant="navy" className="w-full" disabled={submitting}>
+            <Button type="submit" variant="navy" className="w-full" loading={submitting} disabled={busy}>
               {submitting ? 'Signing in…' : 'Sign In'}
             </Button>
           </form>
@@ -200,26 +232,27 @@ export function SignInPage() {
             variant="secondary"
             className="w-full"
             onClick={handleGoogleSignIn}
-            disabled={submitting}
+            loading={googleSubmitting}
+            disabled={busy}
           >
-            Continue with Google
+            {googleSubmitting ? 'Connecting to Google…' : 'Continue with Google'}
           </Button>
 
           <p className="mt-6 text-center text-xs text-slate-500">
             New user?{' '}
-            <Link to="/signup" className="font-semibold text-teal-700 hover:text-teal-800">
+            <Link to="/signup" className="font-semibold text-teal-700 hover:text-teal-800 transition-colors">
               Create an Email & Password account
             </Link>
           </p>
           <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-            <Link to="/register-school" className="hover:text-slate-900 font-medium">
-              Register Your School
+            <Link to="/register-school" className="hover:text-slate-900 font-medium transition-colors">
+              Register Your School Free
             </Link>
-            <Link to="/application-status" className="hover:text-teal-700 font-medium">
+            <Link to="/application-status" className="hover:text-teal-700 font-medium transition-colors">
               Track Application →
             </Link>
           </div>
-        </div>
+        </motion.div>
       </div>
     </div>
   );
@@ -232,6 +265,7 @@ export function SignUpPage() {
   const { signUpEmailPassword, signInGoogle } = useAuth();
   const navigate = useNavigate();
   const { pushToast } = useToast();
+  const prefersReducedMotion = useReducedMotion();
 
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
@@ -291,20 +325,25 @@ export function SignUpPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 px-4 sm:px-6">
+    <div className="min-h-screen bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex flex-col justify-center py-12 px-4 sm:px-6">
       <div className="max-w-md w-full mx-auto">
         <Link
           to="/"
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 mb-6"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors mb-6"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
           Back to AcademiaOne
         </Link>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-8">
+        <motion.div
+          initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: 0.28, ease: MOTION_EASE.out }}
+          className="bg-white border border-slate-200/90 rounded-xl p-8 shadow-sm"
+        >
           <div className="mb-6">
-            <p className="text-lg font-extrabold font-display text-[#0B1528]">AcademiaOne</p>
-            <h1 className="text-xl font-bold font-display text-slate-900 mt-2">Create your account</h1>
+            <BrandLogo size="md" />
+            <h1 className="text-xl font-bold font-display text-slate-900 mt-4">Create your account</h1>
             <p className="text-sm text-slate-500 mt-1">
               Sign up with email and password. School administrators can link your account to your school roster.
             </p>
@@ -319,7 +358,7 @@ export function SignUpPage() {
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="Jordan Taylor"
-                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
               />
             </div>
 
@@ -331,7 +370,7 @@ export function SignUpPage() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="jordan.taylor"
-                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
               />
             </div>
 
@@ -343,7 +382,7 @@ export function SignUpPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="jordan@school.edu"
-                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
               />
             </div>
 
@@ -357,12 +396,12 @@ export function SignUpPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Min 8 characters"
-                    className="w-full pl-3 pr-9 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                    className="w-full pl-3 pr-9 py-2 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPw((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                     aria-label="Toggle password visibility"
                   >
                     {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -377,23 +416,32 @@ export function SignUpPage() {
                   value={confirmPw}
                   onChange={(e) => setConfirmPw(e.target.value)}
                   placeholder="Repeat password"
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                 />
               </div>
             </div>
 
-            {error && (
-              <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed">
-                {error}
-                {needsEmailSetup && (
-                  <p className="mt-2 text-slate-700">
-                    Open Firebase Console → <span className="font-mono">Authentication → Sign-in method → Email/Password</span> and toggle Enable. You may also sign in immediately with Google below.
-                  </p>
-                )}
-              </div>
-            )}
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  initial={prefersReducedMotion ? false : { opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.16, ease: MOTION_EASE.out }}
+                  role="alert"
+                  className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed"
+                >
+                  {error}
+                  {needsEmailSetup && (
+                    <p className="mt-2 text-slate-700">
+                      Open Firebase Console → <span className="font-mono">Authentication → Sign-in method → Email/Password</span> and toggle Enable. You may also sign in immediately with Google below.
+                    </p>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-            <Button type="submit" variant="primary" className="w-full" disabled={submitting}>
+            <Button type="submit" variant="primary" className="w-full" loading={submitting}>
               {submitting ? 'Creating account…' : 'Create Account'}
             </Button>
           </form>
@@ -421,11 +469,11 @@ export function SignUpPage() {
 
           <p className="mt-6 text-center text-xs text-slate-500">
             Already have an account?{' '}
-            <Link to="/login" className="font-semibold text-teal-700 hover:text-teal-800">
+            <Link to="/login" className="font-semibold text-teal-700 hover:text-teal-800 transition-colors">
               Sign In
             </Link>
           </p>
-        </div>
+        </motion.div>
       </div>
     </div>
   );
@@ -436,6 +484,7 @@ export function SignUpPage() {
 // ============================================================================
 export function ForgotPasswordPage() {
   const { requestPasswordRecovery } = useAuth();
+  const prefersReducedMotion = useReducedMotion();
   const [identifier, setIdentifier] = useState('');
   const [sent, setSent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -453,12 +502,20 @@ export function ForgotPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 px-4">
-      <div className="max-w-md w-full mx-auto bg-white border border-slate-200 rounded-xl p-8">
-        <Link to="/login" className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 mb-5">
-          <ArrowLeft className="w-3.5 h-3.5" />
-          Back to Sign In
-        </Link>
+    <div className="min-h-screen bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex flex-col justify-center py-12 px-4">
+      <motion.div
+        initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.26, ease: MOTION_EASE.out }}
+        className="max-w-md w-full mx-auto bg-white border border-slate-200 rounded-xl p-8 shadow-sm"
+      >
+        <div className="flex items-center justify-between gap-3 mb-5">
+          <BrandLogo size="sm" />
+          <Link to="/login" className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors">
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Back to Sign In
+          </Link>
+        </div>
         <h1 className="text-xl font-bold font-display text-slate-900">Account Recovery</h1>
         <p className="text-sm text-slate-500 mt-1">
           Enter your registered email or username. For security, we never confirm whether an account exists.
@@ -484,15 +541,15 @@ export function ForgotPasswordPage() {
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 placeholder="name@school.edu"
-                className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
               />
             </div>
-            <Button type="submit" variant="navy" className="w-full" disabled={submitting}>
+            <Button type="submit" variant="navy" className="w-full" loading={submitting}>
               {submitting ? 'Sending…' : 'Send Recovery Link'}
             </Button>
           </form>
         )}
-      </div>
+      </motion.div>
     </div>
   );
 }
@@ -504,6 +561,7 @@ export function ResetPasswordPage() {
   const { replaceTemporaryPassword, activeUser, logout } = useAuth();
   const navigate = useNavigate();
   const { pushToast } = useToast();
+  const prefersReducedMotion = useReducedMotion();
   const [newPw, setNewPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
   const [error, setError] = useState('');
@@ -535,11 +593,19 @@ export function ResetPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white border border-slate-200 rounded-xl p-8">
-        <div className="flex items-center gap-2.5 text-teal-700 mb-3">
-          <Lock className="w-5 h-5" />
-          <span className="text-xs font-semibold">Security Requirement</span>
+    <div className="min-h-screen bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex items-center justify-center p-4">
+      <motion.div
+        initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.26, ease: MOTION_EASE.out }}
+        className="max-w-md w-full bg-white border border-slate-200 rounded-xl p-8 shadow-sm"
+      >
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <BrandLogo size="sm" />
+          <div className="flex items-center gap-1.5 text-teal-700">
+            <Lock className="w-4 h-4" />
+            <span className="text-xs font-semibold">Security Requirement</span>
+          </div>
         </div>
         <h1 className="text-xl font-bold font-display text-slate-900">Set your permanent password</h1>
         <p className="text-sm text-slate-500 mt-1">
@@ -555,7 +621,7 @@ export function ResetPasswordPage() {
               value={newPw}
               onChange={(e) => setNewPw(e.target.value)}
               placeholder="Minimum 8 characters"
-              className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+              className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
             />
           </div>
           <div>
@@ -566,7 +632,7 @@ export function ResetPasswordPage() {
               value={confirmPw}
               onChange={(e) => setConfirmPw(e.target.value)}
               placeholder="Re-enter password"
-              className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+              className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
             />
           </div>
           {error && <p className="text-xs text-red-600">{error}</p>}
@@ -574,12 +640,12 @@ export function ResetPasswordPage() {
             <Button type="button" variant="secondary" onClick={logout}>
               Sign Out
             </Button>
-            <Button type="submit" variant="primary" className="flex-1" disabled={saving}>
+            <Button type="submit" variant="primary" className="flex-1" loading={saving}>
               {saving ? 'Updating…' : 'Update Password'}
             </Button>
           </div>
         </form>
-      </div>
+      </motion.div>
     </div>
   );
 }
@@ -592,8 +658,11 @@ export function AccessDeniedPage({ reason }: { reason?: string }) {
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-      <div className="max-w-lg w-full bg-white border border-slate-200 rounded-xl p-8">
+    <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center p-6">
+      <div className="max-w-lg w-full bg-white border border-slate-200 rounded-xl p-8 shadow-sm">
+        <div className="mb-4">
+          <BrandLogo size="sm" />
+        </div>
         <div className="flex items-center gap-3 text-red-700 mb-4">
           <ShieldAlert className="w-6 h-6" />
           <h1 className="text-lg font-bold font-display text-slate-900">Access Restricted</h1>
@@ -603,7 +672,7 @@ export function AccessDeniedPage({ reason }: { reason?: string }) {
             'You do not have permission to view this portal or cross-school resource. All access attempts are enforced by role and school tenant boundaries.'}
         </p>
         <div className="mt-6 p-4 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600">
-          Need help restoring an inactive or expired school account? Contact{' '}
+          Need help restoring an inactive school account? Contact{' '}
           <span className="font-semibold text-slate-900">support@academiaone.edu</span>.
         </div>
         <div className="mt-6 flex flex-wrap items-center gap-3">

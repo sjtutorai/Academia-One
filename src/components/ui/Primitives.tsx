@@ -1,8 +1,23 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { X, CheckCircle2, AlertCircle, Info, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
+import {
+  X,
+  CheckCircle2,
+  AlertCircle,
+  Info,
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+} from 'lucide-react';
+import {
+  getModalBackdropVariants,
+  getModalDialogVariants,
+  getToastVariants,
+} from '../../lib/motion';
 
 // ============================================================================
-// Toast Feedback System
+// Toast Feedback System (Animated Slide/Fade + Longer Error Persistence)
 // ============================================================================
 interface ToastItem {
   id: string;
@@ -16,13 +31,16 @@ const ToastContext = createContext<{
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const prefersReducedMotion = useReducedMotion();
+  const toastVariants = getToastVariants(prefersReducedMotion);
 
   const pushToast = useCallback((type: ToastItem['type'], message: string) => {
     const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     setToasts((prev) => [...prev.slice(-3), { id, type, message }]);
+    const duration = type === 'error' ? 7500 : type === 'warning' ? 6000 : 4500;
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4500);
+    }, duration);
   }, []);
 
   return (
@@ -32,26 +50,34 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         aria-live="polite"
         className="fixed bottom-5 right-5 z-50 flex flex-col gap-2.5 max-w-md w-[calc(100vw-2.5rem)] pointer-events-none"
       >
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className="pointer-events-auto flex items-start gap-3 bg-white border border-slate-200 shadow-lg rounded-xl px-4 py-3 text-sm text-slate-800"
-          >
-            {t.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />}
-            {t.type === 'error' && <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />}
-            {t.type === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />}
-            {t.type === 'info' && <Info className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />}
-            <span className="flex-1 leading-snug">{t.message}</span>
-            <button
-              type="button"
-              onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
-              className="text-slate-400 hover:text-slate-600 p-0.5"
-              aria-label="Dismiss message"
+        <AnimatePresence initial={false}>
+          {toasts.map((t) => (
+            <motion.div
+              key={t.id}
+              layout
+              variants={toastVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              role={t.type === 'error' ? 'alert' : 'status'}
+              className="pointer-events-auto flex items-start gap-3 bg-white border border-slate-200 shadow-lg rounded-xl px-4 py-3 text-sm text-slate-800"
             >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        ))}
+              {t.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />}
+              {t.type === 'error' && <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />}
+              {t.type === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />}
+              {t.type === 'info' && <Info className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />}
+              <span className="flex-1 leading-snug">{t.message}</span>
+              <button
+                type="button"
+                onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
+                className="text-slate-400 hover:text-slate-600 p-0.5 rounded transition-colors cursor-pointer"
+                aria-label="Dismiss message"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
     </ToastContext.Provider>
   );
@@ -62,27 +88,30 @@ export function useToast() {
 }
 
 // ============================================================================
-// Buttons
+// Buttons (Micro-interaction Hover, Press Scale 0.98, Inline Pending Spinner)
 // ============================================================================
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'navy' | 'secondary' | 'danger' | 'ghost';
   size?: 'sm' | 'md' | 'lg';
+  loading?: boolean;
 }
 
 export function Button({
   variant = 'primary',
   size = 'md',
+  loading = false,
+  disabled,
   className = '',
   children,
   ...props
 }: ButtonProps) {
   const base =
-    'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer';
+    'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-150 ease-out active:scale-[0.98] disabled:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer';
   const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
-    primary: 'bg-teal-600 text-white hover:bg-teal-700',
-    navy: 'bg-[#0B1528] text-white hover:bg-[#13223D]',
-    secondary: 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50',
-    danger: 'bg-red-600 text-white hover:bg-red-700',
+    primary: 'bg-teal-600 text-white hover:bg-teal-700 hover:shadow-sm',
+    navy: 'bg-[#101C35] text-white hover:bg-[#172554] hover:shadow-sm',
+    secondary: 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 hover:border-slate-400',
+    danger: 'bg-red-600 text-white hover:bg-red-700 hover:shadow-sm',
     ghost: 'text-slate-600 hover:text-slate-900 hover:bg-slate-100',
   };
   const sizes: Record<NonNullable<ButtonProps['size']>, string> = {
@@ -91,7 +120,13 @@ export function Button({
     lg: 'text-sm px-6 py-3 min-h-[44px]',
   };
   return (
-    <button className={`${base} ${variants[variant]} ${sizes[size]} ${className}`} {...props}>
+    <button
+      className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
+      {...props}
+    >
+      {loading && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
       {children}
     </button>
   );
@@ -136,11 +171,11 @@ export function StatusText({ status }: { status: string }) {
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
 
-  return <span className={`text-xs font-semibold tracking-tight ${color}`}>{label}</span>;
+  return <span className={`text-xs font-semibold tracking-tight transition-colors duration-200 ${color}`}>{label}</span>;
 }
 
 // ============================================================================
-// Single-Elevation Metric Card
+// Single-Elevation Metric Card (Subtle Elevation & Border Highlight on Hover)
 // ============================================================================
 export function StatCard({
   label,
@@ -163,7 +198,7 @@ export function StatCard({
           : 'text-slate-900';
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-2">
+    <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-2 transition-all duration-200 hover:border-slate-300 hover:shadow-sm">
       <p className="text-xs font-medium text-slate-500">{label}</p>
       <p className={`text-2xl font-bold font-display tabular-nums tracking-tight ${valColor}`}>
         {value}
@@ -174,7 +209,7 @@ export function StatCard({
 }
 
 // ============================================================================
-// Modal & Confirmation Dialog
+// Modal & Confirmation Dialog (Backdrop Fade + 0.98->1 Scale + Focus Return)
 // ============================================================================
 export function Modal({
   open,
@@ -191,44 +226,74 @@ export function Modal({
   children: React.ReactNode;
   maxWidth?: string;
 }) {
+  const prefersReducedMotion = useReducedMotion();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     if (!open) return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // Move focus into dialog container for keyboard accessibility
+    const timer = window.setTimeout(() => {
+      dialogRef.current?.focus();
+    }, 30);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('keydown', onKey);
+      previousFocusRef.current?.focus?.();
+    };
   }, [open, onClose]);
 
-  if (!open) return null;
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-[1px]"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="modal-title"
-    >
-      <div className={`bg-white border border-slate-200 rounded-xl shadow-xl w-full ${maxWidth} max-h-[90vh] flex flex-col`}>
-        <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-slate-200">
-          <div>
-            <h2 id="modal-title" className="text-base font-bold font-display text-slate-900">
-              {title}
-            </h2>
-            {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-700 p-1 rounded-lg"
-            aria-label="Close modal"
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          variants={getModalBackdropVariants(prefersReducedMotion)}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) onClose();
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-[1px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-title"
+        >
+          <motion.div
+            ref={dialogRef}
+            tabIndex={-1}
+            variants={getModalDialogVariants(prefersReducedMotion)}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className={`bg-white border border-slate-200 rounded-xl shadow-xl w-full ${maxWidth} max-h-[90vh] flex flex-col focus:outline-none`}
           >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="p-6 overflow-y-auto">{children}</div>
-      </div>
-    </div>
+            <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-slate-200">
+              <div>
+                <h2 id="modal-title" className="text-base font-bold font-display text-slate-900">
+                  {title}
+                </h2>
+                {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 p-1 rounded-lg transition-colors cursor-pointer"
+                aria-label="Close modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto">{children}</div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -265,7 +330,7 @@ export function ConfirmDialog({
         <Button variant="secondary" onClick={onClose} disabled={busy}>
           Cancel
         </Button>
-        <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm} disabled={busy}>
+        <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm} loading={busy}>
           {busy ? 'Processing…' : confirmLabel}
         </Button>
       </div>
@@ -274,8 +339,22 @@ export function ConfirmDialog({
 }
 
 // ============================================================================
-// Loading Skeleton & Empty State
+// Loading Skeletons & Empty State
 // ============================================================================
+export function SkeletonCardGrid({ count = 4 }: { count?: number }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-pulse">
+      {Array.from({ length: count }).map((_, idx) => (
+        <div key={idx} className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+          <div className="h-3 bg-slate-100 rounded w-1/2" />
+          <div className="h-7 bg-slate-200/70 rounded w-2/5" />
+          <div className="h-3 bg-slate-100 rounded w-3/4" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function SkeletonTable({ rows = 5, cols = 5 }: { rows?: number; cols?: number }) {
   return (
     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden animate-pulse">

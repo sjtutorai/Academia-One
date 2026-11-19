@@ -30,34 +30,14 @@ export const NOTIFICATION_CATEGORY_META: Record<
     description: 'Schedule updates, published exam timetables, and released marks.',
   },
   special_offers: {
-    label: 'Special Offers & Plan Updates',
-    description: 'Subscription upgrades, seasonal discounts, and renewal reminders.',
+    label: 'Platform Updates & Highlights',
+    description: 'New free feature releases, platform improvements, and school tips.',
   },
   system: {
     label: 'Account & Security Alerts',
-    description: 'Account creation, password resets, and subscription status notices.',
+    description: 'Account creation, password resets, and school access notices.',
   },
 };
-
-export function getFcmIntegrationStatus(): {
-  configured: boolean;
-  label: string;
-  requiredEnv: string;
-} {
-  const vapid = import.meta.env.VITE_FCM_VAPID_KEY as string | undefined;
-  if (vapid && vapid.trim().length > 10) {
-    return {
-      configured: true,
-      label: 'Configured (FCM Web Push Ready)',
-      requiredEnv: 'VITE_FCM_VAPID_KEY',
-    };
-  }
-  return {
-    configured: false,
-    label: 'Pending Configuration (Browser Web Push active; supply VITE_FCM_VAPID_KEY for background FCM)',
-    requiredEnv: 'VITE_FCM_VAPID_KEY',
-  };
-}
 
 export function getBrowserPushPermission(): NotificationPermission | 'unsupported' {
   if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';

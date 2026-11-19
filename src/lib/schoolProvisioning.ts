@@ -159,10 +159,9 @@ export async function provisionSchoolTenant(params: ProvisionSchoolParams): Prom
   const now = serverTimestamp();
 
   const startIso = new Date().toISOString().slice(0, 10);
-  const trialDays = params.plan.trialDays > 0 ? params.plan.trialDays : 14;
-  const endDateObj = new Date(Date.now() + (params.plan.priceMonthly > 0 ? trialDays : 365) * 86400000);
+  const endDateObj = new Date(Date.now() + 3650 * 86400000);
   const endIso = endDateObj.toISOString().slice(0, 10);
-  const initialStatus = params.plan.priceMonthly > 0 ? 'trial' : 'active';
+  const initialStatus = 'active' as const;
 
   const cleanPrincipalEmail = params.principalEmail.trim().toLowerCase();
   const principalUsername =
@@ -230,8 +229,8 @@ export async function provisionSchoolTenant(params: ProvisionSchoolParams): Prom
     startDate: startIso,
     endDate: endIso,
     paymentMode: 'manual',
-    paymentStatus: initialStatus === 'trial' ? 'trial' : 'paid_manual',
-    paymentReference: params.source === 'public_application' ? `APPROVED-${params.application?.applicationNumber || schoolCode}` : 'ADMIN-MANUAL',
+    paymentStatus: 'paid_manual',
+    paymentReference: params.source === 'public_application' ? `APPROVED-${params.application?.applicationNumber || schoolCode}` : 'FREE-UNLIMITED',
     amount: params.plan.priceMonthly,
     renewalHistory: [],
     createdBy: params.actorUid,
