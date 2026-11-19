@@ -11,6 +11,7 @@ import {
 } from '../../lib/csv';
 import { recordAuditLog } from '../../lib/audit';
 import { emailToKey, upsertEmailDirectoryEntry } from '../../lib/schoolProvisioning';
+import { sanitizePhoneDigits } from '../../lib/schoolCodes';
 import {
   Button,
   EmptyState,
@@ -505,8 +506,8 @@ export function PrincipalStudentsView({
               <input type="text" value={form.guardianName} onChange={(e) => setForm({ ...form, guardianName: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Guardian Phone</label>
-              <input type="tel" value={form.guardianPhone} onChange={(e) => setForm({ ...form, guardianPhone: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
+              <label className="block text-xs font-medium text-slate-700 mb-1">Guardian Phone (Numbers only)</label>
+              <input type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={15} value={form.guardianPhone} onChange={(e) => setForm({ ...form, guardianPhone: sanitizePhoneDigits(e.target.value) })} placeholder="9876543210" className="w-full px-3 py-2 text-sm tabular-nums border border-slate-300 rounded-lg" />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Status</label>

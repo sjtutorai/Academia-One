@@ -270,6 +270,7 @@ export function SignUpPage() {
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
+  const [schoolCode, setSchoolCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
   const [showPw, setShowPw] = useState(false);
@@ -312,8 +313,14 @@ export function SignUpPage() {
       }
       if (res.profile) {
         if (res.profile.role !== 'main_head' && (!res.profile.schoolId || res.profile.schoolId === 'unassigned')) {
-          pushToast('success', 'Account created. Enter your School Code to apply to your school.');
-          navigate('/join-school');
+          const cleanCode = schoolCode.trim().toUpperCase().replace(/\s+/g, '');
+          pushToast(
+            'success',
+            cleanCode
+              ? `Account created. Verifying access code ${cleanCode}…`
+              : 'Account created. Enter your School Access Code to continue.',
+          );
+          navigate(cleanCode ? `/join-school?code=${encodeURIComponent(cleanCode)}` : '/join-school');
           return;
         }
         pushToast('success', `Account created & linked to your school as ${res.profile.role}.`);
@@ -386,6 +393,19 @@ export function SignUpPage() {
               />
             </div>
 
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                School Access Code <span className="font-normal text-slate-400">(Optional — auto-detects school, role &amp; class)</span>
+              </label>
+              <input
+                type="text"
+                value={schoolCode}
+                onChange={(e) => setSchoolCode(e.target.value.toUpperCase().replace(/\s+/g, ''))}
+                placeholder="Enter your school access code"
+                className="w-full px-3.5 py-2 text-sm font-mono uppercase border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+              />
+            </div>
+
             <div className="grid sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Password</label>
@@ -455,8 +475,9 @@ export function SignUpPage() {
                 const res = await signInGoogle();
                 if (res.ok && res.profile) {
                   if (res.profile.role !== 'main_head' && (!res.profile.schoolId || res.profile.schoolId === 'unassigned')) {
-                    pushToast('info', 'Email not yet linked to a school. Enter your School Code to apply.');
-                    navigate('/join-school');
+                    const cleanCode = schoolCode.trim().toUpperCase().replace(/\s+/g, '');
+                    pushToast('info', 'Enter your School Access Code to identify your school and role.');
+                    navigate(cleanCode ? `/join-school?code=${encodeURIComponent(cleanCode)}` : '/join-school');
                     return;
                   }
                   navigate(ROLE_HOME_ROUTES[res.profile.role]);

@@ -48,6 +48,7 @@ import {
 } from '../../lib/firebase';
 import { DEMO_ACCOUNTS, seedDemoEcosystem } from '../../lib/demoSeed';
 import { recordAuditLog } from '../../lib/audit';
+import { sanitizePhoneDigits } from '../../lib/schoolCodes';
 import { ROLE_HOME_ROUTES, ROLE_LABELS } from '../../lib/permissions';
 import { useAuth } from '../../contexts/AuthContext';
 import { DashboardShell, type NavItem } from '../../components/DashboardShell';
@@ -951,12 +952,16 @@ function MainHeadSchoolsView({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Contact Phone</label>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Contact Phone (Numbers only)</label>
               <input
                 type="tel"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={15}
                 value={form.phone}
-                onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                onChange={(e) => setForm({ ...form, phone: sanitizePhoneDigits(e.target.value) })}
+                placeholder="9876543210"
+                className="w-full px-3 py-2 text-sm tabular-nums border border-slate-300 rounded-lg"
               />
             </div>
           </div>

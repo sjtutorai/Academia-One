@@ -9,11 +9,11 @@ interface BrandLogoProps {
 }
 
 const SIZE_CLASSES: Record<NonNullable<BrandLogoProps['size']>, { box: string; title: string; subtitle: string }> = {
-  xs: { box: 'h-7 w-7 rounded-lg p-0.5', title: 'text-sm', subtitle: 'text-[10px]' },
-  sm: { box: 'h-8 w-8 rounded-lg p-0.5', title: 'text-base', subtitle: 'text-[10px]' },
-  md: { box: 'h-9 w-9 rounded-xl p-0.5', title: 'text-lg', subtitle: 'text-[11px]' },
-  lg: { box: 'h-11 w-11 rounded-xl p-1', title: 'text-xl', subtitle: 'text-xs' },
-  xl: { box: 'h-14 w-14 rounded-2xl p-1', title: 'text-2xl', subtitle: 'text-xs' },
+  xs: { box: 'h-7 w-7', title: 'text-sm', subtitle: 'text-[10px]' },
+  sm: { box: 'h-8 w-8', title: 'text-base', subtitle: 'text-[10px]' },
+  md: { box: 'h-9 w-9', title: 'text-lg', subtitle: 'text-[11px]' },
+  lg: { box: 'h-11 w-11', title: 'text-xl', subtitle: 'text-xs' },
+  xl: { box: 'h-14 w-14', title: 'text-2xl', subtitle: 'text-xs' },
 };
 
 export const BrandLogo: React.FC<BrandLogoProps> = ({
@@ -28,17 +28,11 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
 
   return (
     <span className={`inline-flex items-center gap-2.5 select-none ${className}`}>
-      <span
-        className={`inline-flex shrink-0 items-center justify-center overflow-hidden bg-white ${s.box} ${
-          isDark
-            ? 'ring-1 ring-white/20 shadow-sm'
-            : 'ring-1 ring-slate-200/90 shadow-xs'
-        }`}
-      >
+      <span className={`inline-flex shrink-0 items-center justify-center ${s.box}`}>
         <img
-          src="/logo.png"
+          src="/logo.png?v=2"
           alt="AcademiaOne"
-          className="h-full w-full object-contain"
+          className={`h-full w-full object-contain ${isDark ? 'drop-shadow-[0_1px_4px_rgba(0,0,0,0.35)]' : ''}`}
           draggable={false}
         />
       </span>

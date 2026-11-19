@@ -5,6 +5,7 @@ import { db, generateId, handleFirestoreError, OperationType } from '../../lib/f
 import { detectExamConflicts, detectTimetableConflicts } from '../../lib/permissions';
 import { exportToCsv } from '../../lib/csv';
 import { recordAuditLog } from '../../lib/audit';
+import { sanitizePhoneDigits } from '../../lib/schoolCodes';
 import { Button, EmptyState, Modal, StatusText, useToast } from '../../components/ui/Primitives';
 import { DetectLocationAddressPicker } from '../../components/shared/DetectLocationAddressPicker';
 import type {
@@ -1038,12 +1039,16 @@ export function PrincipalSchoolSettingsView({
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-slate-700 mb-1">Office Phone</label>
+        <label className="block text-xs font-medium text-slate-700 mb-1">Office Phone (Numbers only)</label>
         <input
           type="tel"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={15}
           value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          className="w-full sm:max-w-xs px-3 py-2 text-sm border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600"
+          onChange={(e) => setPhone(sanitizePhoneDigits(e.target.value))}
+          placeholder="9876543210"
+          className="w-full sm:max-w-xs px-3 py-2 text-sm tabular-nums border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600"
         />
       </div>
 

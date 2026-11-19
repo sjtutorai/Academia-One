@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
@@ -9,44 +9,90 @@ import {
   CheckCircle2,
   Copy,
   Edit3,
+  Eye,
+  EyeOff,
+  KeyRound,
+  LogIn,
+  LogOut,
   Mail,
   MapPin,
+  Plus,
   Save,
   ShieldCheck,
+  Sparkles,
+  Trash2,
   Upload,
   UserCheck,
   BookOpen,
-  Sparkles,
 } from 'lucide-react';
 import { doc, writeBatch, serverTimestamp } from 'firebase/firestore';
-import { db, generateId } from '../lib/firebase';
+import { db, generateId, OperationType } from '../lib/firebase';
 import { generateApplicationNumber, hashVerificationEmail } from '../lib/schoolProvisioning';
+import {
+  DEFAULT_CLASS_SECTION_PLAN,
+  SECTION_LETTERS,
+  STANDARD_CLASSES,
+  countTotalClassSections,
+  deriveSchoolPrefix,
+  expandSectionRange,
+  formatClassSectionPlanSummary,
+  formatPrincipalCode,
+  formatRoleCodeRange,
+  formatSectionRangeLabel,
+  isValidPhoneDigits,
+  sanitizePhoneDigits,
+  sanitizeSchoolPrefix,
+} from '../lib/schoolCodes';
 import {
   getStaggerContainerVariants,
   getStaggerItemVariants,
   getWizardStepVariants,
   MOTION_EASE,
 } from '../lib/motion';
+import { useAuth } from '../contexts/AuthContext';
 import { Button, useToast } from '../components/ui/Primitives';
 import { BrandLogo } from '../components/ui/BrandLogo';
 import {
   DetectLocationAddressPicker,
   type DetectedAddressData,
 } from '../components/shared/DetectLocationAddressPicker';
+import type { ClassSectionRange } from '../types/models';
 
-const DRAFT_STORAGE_KEY = 'academiaone_school_reg_draft_v2';
+const DRAFT_STORAGE_KEY = 'academiaone_school_reg_draft_v4';
 const POLICY_VERSION = '2026.11';
 
 const STEP_META = [
-  { id: 1, title: 'Applicant & Verification', short: 'Applicant', icon: UserCheck },
+  { id: 1, title: 'Account Sign-In & Applicant', short: 'Account', icon: UserCheck },
   { id: 2, title: 'School Basic Information', short: 'School Info', icon: Building2 },
   { id: 3, title: 'Address & Contact', short: 'Address', icon: MapPin },
-  { id: 4, title: 'Principal & Login Method', short: 'Principal', icon: Mail },
+  { id: 4, title: 'Principal Details', short: 'Principal', icon: Mail },
   { id: 5, title: 'Academic Profile', short: 'Academics', icon: BookOpen },
   { id: 6, title: 'Review & Submit', short: 'Review', icon: ShieldCheck },
 ] as const;
 
 const TOTAL_STEPS = STEP_META.length;
+
+/**
+ * Truncates any value safely by UTF-8 byte length so Firestore Security Rules
+ * `string.size()` (which counts UTF-8 bytes) never rejects multi-byte characters.
+ */
+function truncateUtf8(value: unknown, maxBytes: number): string {
+  const str = typeof value === 'string' ? value.trim() : value == null ? '' : String(value).trim();
+  if (!str) return '';
+  const encoder = new TextEncoder();
+  if (encoder.encode(str).length <= maxBytes) return str;
+  let lo = 0;
+  let hi = str.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (encoder.encode(str.slice(0, mid)).length <= maxBytes) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return str.slice(0, lo);
+}
 
 interface RegistrationDraft {
   // Step 1
@@ -58,7 +104,6 @@ interface RegistrationDraft {
   preferredContactMethod: string;
   authorityRelationship: string;
   contactConsent: boolean;
-  contactVerified: boolean;
   // Step 2
   schoolName: string;
   displayName: string;
@@ -91,6 +136,9 @@ interface RegistrationDraft {
   // Step 5
   academicYear: string;
   classesOffered: string;
+  classSectionPlan: ClassSectionRange[];
+  schoolPrefix: string;
+  estimatedCoordinators: string;
   estimatedStudents: string;
   estimatedTeachers: string;
   workingDaysSummary: string;
@@ -107,7 +155,6 @@ const INITIAL_DRAFT: RegistrationDraft = {
   preferredContactMethod: 'Email',
   authorityRelationship: '',
   contactConsent: false,
-  contactVerified: false,
   schoolName: '',
   displayName: '',
   institutionType: 'Private',
@@ -118,7 +165,7 @@ const INITIAL_DRAFT: RegistrationDraft = {
   externalRecognitionCode: '',
   logoDataUrl: '',
   logoFileName: '',
-  country: 'United States',
+  country: 'India',
   stateRegion: '',
   district: '',
   city: '',
@@ -135,14 +182,27 @@ const INITIAL_DRAFT: RegistrationDraft = {
   principalPhone: '',
   authMethod: 'google',
   academicYear: '2026-2027',
-  classesOffered: 'Grades 1 to 12',
-  estimatedStudents: '400',
-  estimatedTeachers: '30',
+  classesOffered: formatClassSectionPlanSummary(DEFAULT_CLASS_SECTION_PLAN),
+  classSectionPlan: DEFAULT_CLASS_SECTION_PLAN,
+  schoolPrefix: '',
+  estimatedCoordinators: '6',
+  estimatedStudents: '100',
+  estimatedTeachers: '20',
   workingDaysSummary: 'Monday to Friday',
   acceptedTerms: false,
 };
 
+const CLASS_PLAN_PRESETS: { label: string; grades: string[]; from: string; to: string }[] = [
+  { label: 'Class 1–2 (A–G, A–H)', grades: [], from: 'A', to: 'G' },
+  { label: 'Class 1–5 (A–D)', grades: ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5'], from: 'A', to: 'D' },
+  { label: 'Class 1–8 (A–F)', grades: ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8'], from: 'A', to: 'F' },
+  { label: 'Class 1–10 (A–G)', grades: ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10'], from: 'A', to: 'G' },
+  { label: 'Class 1–12 (A–D)', grades: ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12'], from: 'A', to: 'D' },
+];
+
 export default function SchoolRegistrationPage() {
+  const { firebaseUser, activeUser, loading: authLoading, signInUnified, signUpEmailPassword, signInGoogle, logout } =
+    useAuth();
   const { pushToast } = useToast();
   const prefersReducedMotion = useReducedMotion();
 
@@ -152,13 +212,50 @@ export default function SchoolRegistrationPage() {
     try {
       const saved =
         localStorage.getItem(DRAFT_STORAGE_KEY) ||
+        localStorage.getItem('academiaone_school_reg_draft_v3') ||
+        localStorage.getItem('academiaone_school_reg_draft_v2') ||
         localStorage.getItem('academiaone_school_reg_draft_v1');
-      if (saved) return { ...INITIAL_DRAFT, ...JSON.parse(saved) };
+      if (saved) {
+        const parsed = JSON.parse(saved) as Partial<RegistrationDraft>;
+        const safeMethod = parsed.authMethod === 'email_password' ? 'email_password' : 'google';
+        const validPlan =
+          Array.isArray(parsed.classSectionPlan) && parsed.classSectionPlan.length > 0
+            ? parsed.classSectionPlan
+            : DEFAULT_CLASS_SECTION_PLAN;
+        return {
+          ...INITIAL_DRAFT,
+          ...parsed,
+          applicantPhone: sanitizePhoneDigits(parsed.applicantPhone || ''),
+          schoolPhone: sanitizePhoneDigits(parsed.schoolPhone || ''),
+          alternateContact: sanitizePhoneDigits(parsed.alternateContact || ''),
+          principalPhone: sanitizePhoneDigits(parsed.principalPhone || ''),
+          classSectionPlan: validPlan,
+          classesOffered: formatClassSectionPlanSummary(validPlan),
+          authMethod: safeMethod,
+        };
+      }
     } catch {
       // ignore corrupted localStorage
     }
     return INITIAL_DRAFT;
   });
+
+  // Step 5 Add-Class Row Picker state (choose, never free-type)
+  const [newClassGrade, setNewClassGrade] = useState('Class 3');
+  const [newSectionFrom, setNewSectionFrom] = useState('A');
+  const [newSectionTo, setNewSectionTo] = useState('D');
+
+  // Step 1 Inline Auth State (Email & Password or Google Sign-In)
+  const [authTab, setAuthTab] = useState<'signup' | 'signin'>('signup');
+  const [authFullName, setAuthFullName] = useState('');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
+  const [showAuthPassword, setShowAuthPassword] = useState(false);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [googleSubmitting, setGoogleSubmitting] = useState(false);
+  const [authInlineError, setAuthInlineError] = useState('');
+  const [needsEmailSetup, setNeedsEmailSetup] = useState(false);
 
   const [stepError, setStepError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -172,9 +269,123 @@ export default function SchoolRegistrationPage() {
   } | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const signedInProvider: 'google' | 'email_password' = firebaseUser?.providerData?.some(
+    (p) => p.providerId === 'google.com',
+  )
+    ? 'google'
+    : 'email_password';
+
+  // Auto-sync signed-in account details into the registration draft
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const email = (firebaseUser.email || activeUser?.email || '').trim().toLowerCase();
+    const displayName = (activeUser?.displayName || firebaseUser.displayName || '').trim();
+    const method: 'google' | 'email_password' = firebaseUser.providerData?.some(
+      (p) => p.providerId === 'google.com',
+    )
+      ? 'google'
+      : 'email_password';
+
+    setDraft((prev) => ({
+      ...prev,
+      applicantEmail: email || prev.applicantEmail,
+      applicantName: prev.applicantName || displayName,
+      principalEmail: prev.applicantIsPrincipal ? email || prev.principalEmail : prev.principalEmail,
+      principalName: prev.applicantIsPrincipal ? prev.applicantName || displayName : prev.principalName,
+      authMethod: method,
+    }));
+  }, [firebaseUser, activeUser]);
+
   const updateField = <K extends keyof RegistrationDraft>(key: K, value: RegistrationDraft[K]) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
     setStepError('');
+  };
+
+  const handleStep1EmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthInlineError('');
+    setNeedsEmailSetup(false);
+
+    const cleanEmail = authEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setAuthInlineError('Enter a valid email address.');
+      return;
+    }
+
+    if (authTab === 'signup') {
+      if (authFullName.trim().length < 2) {
+        setAuthInlineError('Enter your full name (at least 2 characters).');
+        return;
+      }
+      if (authPassword.length < 8) {
+        setAuthInlineError('Password must be at least 8 characters long.');
+        return;
+      }
+      if (authPassword !== authConfirmPassword) {
+        setAuthInlineError('Passwords do not match.');
+        return;
+      }
+      setAuthSubmitting(true);
+      try {
+        const derivedUsername = cleanEmail
+          .split('@')[0]
+          .replace(/[^a-z0-9._-]/g, '')
+          .slice(0, 32);
+        const res = await signUpEmailPassword({
+          displayName: authFullName.trim(),
+          username: derivedUsername.length >= 3 ? derivedUsername : `school_${Date.now().toString(36).slice(-5)}`,
+          email: cleanEmail,
+          password: authPassword,
+        });
+        if (!res.ok) {
+          setAuthInlineError(res.error || 'Could not create account.');
+          if (res.needsEmailAuthSetup) setNeedsEmailSetup(true);
+          return;
+        }
+        setDraft((prev) => ({
+          ...prev,
+          applicantName: prev.applicantName || authFullName.trim(),
+          applicantEmail: cleanEmail,
+          authMethod: 'email_password',
+        }));
+        pushToast('success', 'Account created and signed in. Complete your applicant details below.');
+      } finally {
+        setAuthSubmitting(false);
+      }
+    } else {
+      if (!authPassword) {
+        setAuthInlineError('Enter your password.');
+        return;
+      }
+      setAuthSubmitting(true);
+      try {
+        const res = await signInUnified(cleanEmail, authPassword);
+        if (!res.ok) {
+          setAuthInlineError(res.error || 'Invalid email or password.');
+          if (res.needsEmailAuthSetup) setNeedsEmailSetup(true);
+          return;
+        }
+        pushToast('success', `Signed in as ${res.profile?.displayName || cleanEmail}.`);
+      } finally {
+        setAuthSubmitting(false);
+      }
+    }
+  };
+
+  const handleStep1GoogleAuth = async () => {
+    setAuthInlineError('');
+    setNeedsEmailSetup(false);
+    setGoogleSubmitting(true);
+    try {
+      const res = await signInGoogle();
+      if (!res.ok) {
+        setAuthInlineError(res.error || 'Google sign-in could not complete.');
+        return;
+      }
+      pushToast('success', `Signed in with Google as ${res.profile?.displayName || res.profile?.email}.`);
+    } finally {
+      setGoogleSubmitting(false);
+    }
   };
 
   const handleSaveDraft = () => {
@@ -194,13 +405,17 @@ export default function SchoolRegistrationPage() {
       setStepError('Logo must be a PNG, JPG, or WEBP image.');
       return;
     }
-    if (file.size > 120 * 1024) {
-      setStepError('Please upload a compact school logo under 120 KB for fast verification.');
+    if (file.size > 250 * 1024) {
+      setStepError('Please upload a compact school logo under 250 KB for fast verification.');
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
       const result = typeof reader.result === 'string' ? reader.result : '';
+      if (result.length > 480000) {
+        setStepError('Encoded logo is too large. Please upload a smaller image under 250 KB.');
+        return;
+      }
       updateField('logoDataUrl', result);
       updateField('logoFileName', file.name);
     };
@@ -225,16 +440,32 @@ export default function SchoolRegistrationPage() {
     pushToast('success', 'School address auto-filled from detected location. Review or refine any field below.');
   };
 
+  const updateClassPlan = (nextPlan: ClassSectionRange[]) => {
+    setDraft((prev) => ({
+      ...prev,
+      classSectionPlan: nextPlan,
+      classesOffered: formatClassSectionPlanSummary(nextPlan),
+    }));
+    setStepError('');
+  };
+
+  const effectivePrefix = sanitizeSchoolPrefix(draft.schoolPrefix) || deriveSchoolPrefix(draft.schoolName);
+
   const validateStep = (targetStep: number): string | null => {
     const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (targetStep === 1) {
+      if (!firebaseUser) {
+        return 'Sign in or create your account using Email & Password or Google Sign-In before continuing.';
+      }
+      const effectiveApplicantEmail = (firebaseUser.email || draft.applicantEmail).trim().toLowerCase();
       if (draft.applicantName.trim().length < 2) return 'Enter the applicant full name (at least 2 characters).';
-      if (!emailRe.test(draft.applicantEmail.trim())) return 'Enter a valid official applicant email address.';
-      if (draft.applicantPhone.trim().length < 7) return 'Enter a valid applicant mobile number.';
+      if (!emailRe.test(effectiveApplicantEmail)) return 'A valid account email address is required.';
+      if (!isValidPhoneDigits(draft.applicantPhone)) {
+        return 'Applicant mobile number must contain strictly 10 to 15 numeric digits (numbers only).';
+      }
       if (draft.applicantDesignation !== 'Principal' && draft.authorityRelationship.trim().length < 2) {
         return 'Specify your relationship or authority to register on behalf of the school.';
       }
-      if (!draft.contactVerified) return 'Confirm your contact email/mobile verification check before continuing.';
       if (!draft.contactConsent) return 'Accept contact consent and the privacy notice to proceed.';
     }
     if (targetStep === 2) {
@@ -246,18 +477,36 @@ export default function SchoolRegistrationPage() {
       if (draft.country.trim().length < 2) return 'Enter the school country.';
       if (draft.stateRegion.trim().length < 2) return 'Enter the school state or province.';
       if (draft.city.trim().length < 2) return 'Enter the school city or town.';
-      if (draft.address.trim().length < 5) return 'Enter the full registered school street address (or use Detect Location).';
+      if (draft.address.trim().length < 4) return 'Enter the full registered school street address (or use Detect Location).';
       if (!emailRe.test(draft.schoolEmail.trim())) return 'Enter a valid official school email address.';
-      if (draft.schoolPhone.trim().length < 7) return 'Enter an official school phone number.';
+      if (!isValidPhoneDigits(draft.schoolPhone)) {
+        return 'Official school phone must contain strictly 10 to 15 numeric digits (numbers only).';
+      }
+      if (draft.alternateContact.trim() && !isValidPhoneDigits(draft.alternateContact)) {
+        return 'Alternate contact number must contain strictly 10 to 15 numeric digits (numbers only).';
+      }
     }
     if (targetStep === 4) {
+      const signedEmail = (firebaseUser?.email || draft.applicantEmail).trim().toLowerCase();
       const pName = draft.applicantIsPrincipal ? draft.applicantName : draft.principalName;
-      const pEmail = draft.applicantIsPrincipal ? draft.applicantEmail : draft.principalEmail;
+      const pEmail = draft.applicantIsPrincipal ? signedEmail : draft.principalEmail;
       if (pName.trim().length < 2) return 'Enter the Principal full name.';
       if (!emailRe.test(pEmail.trim())) return 'Enter a valid official Principal email ID.';
+      if (!draft.applicantIsPrincipal && draft.principalPhone.trim() && !isValidPhoneDigits(draft.principalPhone)) {
+        return 'Principal mobile number must contain strictly 10 to 15 numeric digits (numbers only).';
+      }
     }
     if (targetStep === 5) {
-      if (draft.academicYear.trim().length < 4) return 'Enter the current academic year (e.g., 2026-2027).';
+      if (draft.academicYear.trim().length < 2) return 'Enter the current academic year (e.g., 2026-2027).';
+      if (!draft.classSectionPlan || draft.classSectionPlan.length === 0) {
+        return 'Select at least one Class and Section range from the dropdowns.';
+      }
+      if (effectivePrefix.length < 2) {
+        return 'School Code Prefix must contain at least 2 letters (A–Z).';
+      }
+      if (countTotalClassSections(draft.classSectionPlan) > 200) {
+        return 'Please keep total class-sections to 200 or fewer during initial registration.';
+      }
     }
     if (targetStep === 6) {
       if (!draft.acceptedTerms) return 'You must accept the Terms of Service and Privacy Policy before submitting.';
@@ -279,10 +528,12 @@ export default function SchoolRegistrationPage() {
       return;
     }
     if (step === 1 && draft.applicantIsPrincipal) {
+      const signedEmail = (firebaseUser?.email || draft.applicantEmail).trim().toLowerCase();
       setDraft((prev) => ({
         ...prev,
+        applicantEmail: signedEmail,
         principalName: prev.principalName || prev.applicantName,
-        principalEmail: prev.principalEmail || prev.applicantEmail,
+        principalEmail: signedEmail || prev.principalEmail,
         principalPhone: prev.principalPhone || prev.applicantPhone,
       }));
     }
@@ -304,69 +555,93 @@ export default function SchoolRegistrationPage() {
       }
     }
 
+    if (!firebaseUser) {
+      setDirection(-1);
+      setStep(1);
+      setStepError('Please sign in with Email & Password or Google in Step 1 before submitting.');
+      return;
+    }
+
     setSubmitting(true);
     setStepError('');
 
     const applicationId = generateId('app');
     const applicationNumber = generateApplicationNumber('SCH');
+    const effectiveApplicantEmail = (firebaseUser.email || draft.applicantEmail).trim().toLowerCase();
     const effectivePrincipalName = (draft.applicantIsPrincipal ? draft.applicantName : draft.principalName).trim();
-    const effectivePrincipalEmail = (draft.applicantIsPrincipal ? draft.applicantEmail : draft.principalEmail)
+    const effectivePrincipalEmail = (draft.applicantIsPrincipal ? effectiveApplicantEmail : draft.principalEmail)
       .trim()
       .toLowerCase();
     const effectivePrincipalPhone = (draft.applicantIsPrincipal ? draft.applicantPhone : draft.principalPhone).trim();
+    const safeAuthMethod: 'google' | 'email_password' =
+      draft.authMethod === 'email_password' ? 'email_password' : 'google';
     const submittedIso = new Date().toISOString();
+    const estCoordinators = Math.max(0, Math.min(5000, Math.round(Number(draft.estimatedCoordinators) || 0)));
     const estStudents = Math.max(0, Math.min(200000, Math.round(Number(draft.estimatedStudents) || 0)));
     const estTeachers = Math.max(0, Math.min(50000, Math.round(Number(draft.estimatedTeachers) || 0)));
+    const cleanClassPlan: ClassSectionRange[] = (draft.classSectionPlan || DEFAULT_CLASS_SECTION_PLAN)
+      .slice(0, 30)
+      .map((row) => ({
+        grade: truncateUtf8(row.grade, 24),
+        sectionFrom: row.sectionFrom.slice(0, 1).toUpperCase(),
+        sectionTo: row.sectionTo.slice(0, 1).toUpperCase(),
+      }));
+    const classesSummary = formatClassSectionPlanSummary(cleanClassPlan);
+    const chosenPrefix = sanitizeSchoolPrefix(draft.schoolPrefix) || deriveSchoolPrefix(draft.schoolName);
 
     try {
-      const verificationEmailHash = await hashVerificationEmail(draft.applicantEmail.trim().toLowerCase());
+      const verificationEmailHash = await hashVerificationEmail(effectiveApplicantEmail);
       const batch = writeBatch(db);
       const now = serverTimestamp();
 
-      batch.set(doc(db, 'schoolApplications', applicationId), {
+      const applicationPayload = {
         id: applicationId,
         applicationNumber,
-        applicantName: draft.applicantName.trim().slice(0, 120),
-        applicantDesignation: draft.applicantDesignation.slice(0, 64),
-        applicantEmail: draft.applicantEmail.trim().toLowerCase().slice(0, 160),
-        applicantPhone: draft.applicantPhone.trim().slice(0, 32),
-        organizationName: draft.organizationName.trim().slice(0, 140),
-        preferredContactMethod: draft.preferredContactMethod.slice(0, 32),
-        authorityRelationship: draft.authorityRelationship.trim().slice(0, 140),
+        applicantUid: firebaseUser.uid,
+        applicantName: truncateUtf8(draft.applicantName, 120),
+        applicantDesignation: truncateUtf8(draft.applicantDesignation || 'Principal', 64),
+        applicantEmail: truncateUtf8(effectiveApplicantEmail, 160),
+        applicantPhone: sanitizePhoneDigits(draft.applicantPhone),
+        organizationName: truncateUtf8(draft.organizationName, 200),
+        preferredContactMethod: truncateUtf8(draft.preferredContactMethod || 'Email', 32),
+        authorityRelationship: truncateUtf8(draft.authorityRelationship, 200),
         applicantIsPrincipal: Boolean(draft.applicantIsPrincipal),
-        contactVerified: Boolean(draft.contactVerified),
-        schoolName: draft.schoolName.trim().slice(0, 140),
-        displayName: (draft.displayName.trim() || draft.schoolName.trim()).slice(0, 140),
-        institutionType: draft.institutionType.slice(0, 64),
-        affiliationBoard: draft.affiliationBoard.slice(0, 120),
-        mediumOfInstruction: draft.mediumOfInstruction.trim().slice(0, 120),
-        establishedYear: draft.establishedYear.trim().slice(0, 16),
-        externalRecognitionCode: draft.externalRecognitionCode.trim().slice(0, 64),
-        logoDataUrl: draft.logoDataUrl.slice(0, 200000),
-        academicYear: draft.academicYear.trim().slice(0, 24),
-        website: draft.website.trim().slice(0, 200),
-        schoolEmail: draft.schoolEmail.trim().toLowerCase().slice(0, 160),
-        schoolPhone: draft.schoolPhone.trim().slice(0, 32),
-        alternateContact: draft.alternateContact.trim().slice(0, 120),
-        country: draft.country.trim().slice(0, 80),
-        stateRegion: draft.stateRegion.trim().slice(0, 80),
-        district: draft.district.trim().slice(0, 80),
-        city: draft.city.trim().slice(0, 80),
-        postalCode: draft.postalCode.trim().slice(0, 24),
-        address: draft.address.trim().slice(0, 300),
-        campusAddress: draft.campusAddress.trim().slice(0, 300),
-        classesOffered: draft.classesOffered.trim().slice(0, 200),
+        contactVerified: true,
+        schoolName: truncateUtf8(draft.schoolName, 200),
+        displayName: truncateUtf8(draft.displayName || draft.schoolName, 200),
+        institutionType: truncateUtf8(draft.institutionType || 'Private', 64),
+        affiliationBoard: truncateUtf8(draft.affiliationBoard || 'CBSE', 120),
+        mediumOfInstruction: truncateUtf8(draft.mediumOfInstruction || 'English', 120),
+        establishedYear: truncateUtf8(draft.establishedYear, 32),
+        externalRecognitionCode: truncateUtf8(draft.externalRecognitionCode, 64),
+        logoDataUrl: truncateUtf8(draft.logoDataUrl, 480000),
+        academicYear: truncateUtf8(draft.academicYear, 40),
+        website: truncateUtf8(draft.website, 300),
+        schoolEmail: truncateUtf8(draft.schoolEmail.toLowerCase(), 160),
+        schoolPhone: sanitizePhoneDigits(draft.schoolPhone),
+        alternateContact: sanitizePhoneDigits(draft.alternateContact),
+        country: truncateUtf8(draft.country, 80),
+        stateRegion: truncateUtf8(draft.stateRegion, 80),
+        district: truncateUtf8(draft.district, 80),
+        city: truncateUtf8(draft.city, 80),
+        postalCode: truncateUtf8(draft.postalCode, 32),
+        address: truncateUtf8(draft.address, 500),
+        campusAddress: truncateUtf8(draft.campusAddress, 500),
+        classesOffered: truncateUtf8(classesSummary, 780),
+        classSectionPlan: cleanClassPlan,
+        schoolPrefix: chosenPrefix,
+        estimatedCoordinators: estCoordinators,
         estimatedStudents: estStudents,
         estimatedTeachers: estTeachers,
-        workingDaysSummary: draft.workingDaysSummary.trim().slice(0, 120),
-        principalName: effectivePrincipalName.slice(0, 120),
-        principalEmail: effectivePrincipalEmail.slice(0, 160),
-        principalPhone: effectivePrincipalPhone.slice(0, 32),
-        principalDesignation: (draft.principalDesignation || 'Principal').trim().slice(0, 120),
-        authMethod: draft.authMethod,
+        workingDaysSummary: truncateUtf8(draft.workingDaysSummary, 120),
+        principalName: truncateUtf8(effectivePrincipalName, 120),
+        principalEmail: truncateUtf8(effectivePrincipalEmail, 160),
+        principalPhone: sanitizePhoneDigits(effectivePrincipalPhone),
+        principalDesignation: truncateUtf8(draft.principalDesignation || 'Principal', 120),
+        authMethod: safeAuthMethod,
         requestedPlanId: 'plan_free',
         consentPolicyVersion: POLICY_VERSION,
-        status: 'submitted',
+        status: 'submitted' as const,
         internalNotes: '',
         applicantMessage: 'Your school application has been received and queued for Main Head review.',
         decisionNote: '',
@@ -376,47 +651,61 @@ export default function SchoolRegistrationPage() {
         activityLog: [
           {
             at: submittedIso,
-            actor: draft.applicantName.trim(),
+            actor: truncateUtf8(draft.applicantName, 120),
             action: 'APPLICATION_SUBMITTED',
-            note: `Submitted free campus registration (${draft.authMethod === 'google' ? 'Google' : 'Email & Password'} preferred).`,
+            note: `Submitted free campus registration (${safeAuthMethod === 'google' ? 'Google Sign-In' : 'Email & Password'}).`,
           },
         ],
         createdAt: now,
         updatedAt: now,
-      });
+      };
 
-      batch.set(doc(db, 'applicationStatuses', applicationNumber), {
+      const statusPayload = {
         applicationNumber,
-        type: 'school',
-        verificationEmailHash,
+        type: 'school' as const,
+        verificationEmailHash: truncateUtf8(verificationEmailHash, 128),
         schoolId: '',
-        schoolName: draft.schoolName.trim().slice(0, 140),
-        requestedRole: 'principal',
-        status: 'submitted',
+        schoolName: truncateUtf8(draft.schoolName, 200),
+        requestedRole: 'principal' as const,
+        status: 'submitted' as const,
         schoolCode: '',
         applicantMessage: 'Application received. Our Main Head administrator will review your school details shortly.',
         decisionNote: '',
         applicantResponseNote: '',
-        submittedAt: submittedIso,
+        submittedAt: truncateUtf8(submittedIso, 40),
         createdAt: now,
         updatedAt: now,
-      });
+      };
+
+      batch.set(doc(db, 'schoolApplications', applicationId), applicationPayload);
+      batch.set(doc(db, 'applicationStatuses', applicationNumber), statusPayload);
 
       await batch.commit();
       localStorage.removeItem(DRAFT_STORAGE_KEY);
+      localStorage.removeItem('academiaone_school_reg_draft_v2');
       localStorage.removeItem('academiaone_school_reg_draft_v1');
       setSubmittedRef({
         applicationNumber,
         schoolName: draft.schoolName.trim(),
         principalEmail: effectivePrincipalEmail,
-        applicantEmail: draft.applicantEmail.trim().toLowerCase(),
+        applicantEmail: effectiveApplicantEmail,
       });
       pushToast('success', `School application ${applicationNumber} submitted for Main Head review.`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '';
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        'School application submission failed:',
+        JSON.stringify({
+          error: msg,
+          operationType: OperationType.CREATE,
+          path: `schoolApplications/${applicationId}`,
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+        }),
+      );
       if (msg.toLowerCase().includes('permission')) {
         setStepError(
-          'Your submission could not be validated by the server. Double-check that all emails, phone numbers, and school details are complete without special unsupported characters, then try again.',
+          `Server rejected the application (${msg}). Verify you are signed in and all required fields are filled accurately, then try again.`,
         );
       } else {
         setStepError(
@@ -428,9 +717,11 @@ export default function SchoolRegistrationPage() {
     }
   };
 
+  const effectiveApplicantEmail = (firebaseUser?.email || draft.applicantEmail).trim().toLowerCase();
   const effectivePrincipalName = draft.applicantIsPrincipal ? draft.applicantName : draft.principalName;
-  const effectivePrincipalEmail = draft.applicantIsPrincipal ? draft.applicantEmail : draft.principalEmail;
+  const effectivePrincipalEmail = draft.applicantIsPrincipal ? effectiveApplicantEmail : draft.principalEmail;
   const effectivePrincipalPhone = draft.applicantIsPrincipal ? draft.applicantPhone : draft.principalPhone;
+  const authBusy = authSubmitting || googleSubmitting;
 
   if (submittedRef) {
     return (
@@ -531,7 +822,7 @@ export default function SchoolRegistrationPage() {
             </Link>
             <h1 className="text-2xl font-bold font-display text-slate-900 mt-1">Register Your School</h1>
             <p className="text-sm text-slate-500 mt-0.5">
-              100% free for every school. Complete 6 quick steps for Main Head verification and receive your unique School Code.
+              100% free for every school. Sign in first, complete 6 quick steps, and receive your unique School Code upon Main Head approval.
             </p>
           </div>
           <Button variant="secondary" size="sm" onClick={handleSaveDraft} disabled={submitting}>
@@ -601,133 +892,317 @@ export default function SchoolRegistrationPage() {
               exit="exit"
               className="space-y-5"
             >
-              {/* STEP 1 */}
+              {/* STEP 1: ACCOUNT SIGN-IN (EMAIL & PASSWORD OR GOOGLE) + APPLICANT DETAILS */}
               {step === 1 && (
                 <>
                   <div>
                     <h2 className="text-lg font-bold font-display text-slate-900">
-                      Step 1 — Applicant Account & Verification
+                      Step 1 — Sign In & Applicant Details
                     </h2>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Tell us who is submitting this registration and confirm a reliable contact channel.
+                      Sign in with Email & Password or Google first to link your verified account to this school registration.
                     </p>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Applicant Full Name *</label>
-                      <input
-                        value={draft.applicantName}
-                        onChange={(e) => updateField('applicantName', e.target.value)}
-                        placeholder="Dr. Eleanor Vance"
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Designation *</label>
-                      <select
-                        value={draft.applicantDesignation}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          updateField('applicantDesignation', val);
-                          updateField('applicantIsPrincipal', val === 'Principal');
-                        }}
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 bg-white transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      >
-                        <option value="Principal">Principal</option>
-                        <option value="School Owner">School Owner</option>
-                        <option value="Director">Director</option>
-                        <option value="Authorized Representative">Authorized Representative</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Official Email Address *</label>
-                      <input
-                        type="email"
-                        value={draft.applicantEmail}
-                        onChange={(e) => updateField('applicantEmail', e.target.value)}
-                        placeholder="principal@school.edu"
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Mobile Number *</label>
-                      <input
-                        type="tel"
-                        value={draft.applicantPhone}
-                        onChange={(e) => updateField('applicantPhone', e.target.value)}
-                        placeholder="+1 (555) 234-5678"
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Management / Trust / Organization (Optional)
-                      </label>
-                      <input
-                        value={draft.organizationName}
-                        onChange={(e) => updateField('organizationName', e.target.value)}
-                        placeholder="Northridge Education Trust"
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Preferred Contact Channel</label>
-                      <select
-                        value={draft.preferredContactMethod}
-                        onChange={(e) => updateField('preferredContactMethod', e.target.value)}
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 bg-white transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      >
-                        <option value="Email">Official Email</option>
-                        <option value="Phone">Mobile Phone</option>
-                        <option value="Both">Both Email & Phone</option>
-                      </select>
-                    </div>
-                  </div>
 
-                  {draft.applicantDesignation !== 'Principal' && (
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Authority / Relationship to School *
-                      </label>
-                      <input
-                        value={draft.authorityRelationship}
-                        onChange={(e) => updateField('authorityRelationship', e.target.value)}
-                        placeholder="e.g., Managing Trustee authorized by School Board"
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      />
+                  {authLoading ? (
+                    <div className="p-6 rounded-xl border border-slate-200 bg-slate-50 text-center text-xs text-slate-500">
+                      Checking your sign-in session…
                     </div>
+                  ) : !firebaseUser ? (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-5 sm:p-6 space-y-5">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <LogIn className="w-4 h-4 text-teal-700" />
+                          <p className="text-sm font-bold font-display text-slate-900">
+                            Verify Your Login to Register a School
+                          </p>
+                        </div>
+                        <div className="inline-flex rounded-lg bg-slate-200/80 p-0.5 text-xs font-medium">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAuthTab('signup');
+                              setAuthInlineError('');
+                            }}
+                            className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${
+                              authTab === 'signup' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            Create Account
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAuthTab('signin');
+                              setAuthInlineError('');
+                            }}
+                            className={`px-3 py-1 rounded-md transition-colors cursor-pointer ${
+                              authTab === 'signin' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            Existing Account
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Google Sign-In Option */}
+                      <div>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="w-full !bg-white"
+                          onClick={handleStep1GoogleAuth}
+                          loading={googleSubmitting}
+                          disabled={authBusy}
+                        >
+                          {googleSubmitting ? 'Connecting to Google…' : 'Continue with Google'}
+                        </Button>
+                      </div>
+
+                      <div className="relative">
+                        <div className="absolute inset-0 flex items-center">
+                          <div className="w-full border-t border-slate-200" />
+                        </div>
+                        <div className="relative flex justify-center text-xs">
+                          <span className="px-2.5 bg-slate-50 text-slate-400">
+                            or {authTab === 'signup' ? 'create an account' : 'sign in'} with Email & Password
+                          </span>
+                        </div>
+                      </div>
+
+                      <form onSubmit={handleStep1EmailAuth} className="space-y-3.5" noValidate>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                          {authTab === 'signup' && (
+                            <div className="sm:col-span-2">
+                              <label className="block text-xs font-semibold text-slate-700 mb-1">Full Name *</label>
+                              <input
+                                type="text"
+                                required
+                                disabled={authBusy}
+                                value={authFullName}
+                                onChange={(e) => setAuthFullName(e.target.value)}
+                                placeholder="Dr. Eleanor Vance"
+                                className="w-full text-sm bg-white border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                              />
+                            </div>
+                          )}
+                          <div className={authTab === 'signup' ? 'sm:col-span-2' : 'sm:col-span-2'}>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">Email Address *</label>
+                            <input
+                              type="email"
+                              required
+                              disabled={authBusy}
+                              value={authEmail}
+                              onChange={(e) => setAuthEmail(e.target.value)}
+                              placeholder="principal@school.edu"
+                              className="w-full text-sm bg-white border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                            />
+                          </div>
+                          <div className={authTab === 'signin' ? 'sm:col-span-2' : ''}>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">Password *</label>
+                            <div className="relative">
+                              <input
+                                type={showAuthPassword ? 'text' : 'password'}
+                                required
+                                disabled={authBusy}
+                                value={authPassword}
+                                onChange={(e) => setAuthPassword(e.target.value)}
+                                placeholder={authTab === 'signup' ? 'Minimum 8 characters' : 'Enter your password'}
+                                className="w-full text-sm bg-white border border-slate-300 rounded-lg pl-3.5 pr-10 py-2.5 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowAuthPassword((v) => !v)}
+                                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                                aria-label={showAuthPassword ? 'Hide password' : 'Show password'}
+                              >
+                                {showAuthPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                              </button>
+                            </div>
+                          </div>
+                          {authTab === 'signup' && (
+                            <div>
+                              <label className="block text-xs font-semibold text-slate-700 mb-1">Confirm Password *</label>
+                              <input
+                                type={showAuthPassword ? 'text' : 'password'}
+                                required
+                                disabled={authBusy}
+                                value={authConfirmPassword}
+                                onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                                placeholder="Re-enter password"
+                                className="w-full text-sm bg-white border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {authInlineError && (
+                          <div role="alert" className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed">
+                            {authInlineError}
+                            {needsEmailSetup && (
+                              <p className="mt-1.5 text-slate-700">
+                                You can use <strong>Continue with Google</strong> above right away, or enable{' '}
+                                <span className="font-mono">Authentication → Sign-in method → Email/Password</span> in Firebase Console.
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        <Button type="submit" variant="navy" className="w-full" loading={authSubmitting} disabled={authBusy}>
+                          {authSubmitting
+                            ? authTab === 'signup'
+                              ? 'Creating Account…'
+                              : 'Signing In…'
+                            : authTab === 'signup'
+                              ? 'Create Account & Continue'
+                              : 'Sign In & Continue'}
+                        </Button>
+                      </form>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Verified Signed-In Account Card */}
+                      <div className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-200 flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                            <CheckCircle2 className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-emerald-900">
+                              Account Verified · {signedInProvider === 'google' ? 'Google Sign-In' : 'Email & Password'}
+                            </p>
+                            <p className="text-xs text-emerald-800 truncate mt-0.5">
+                              <strong>{activeUser?.displayName || firebaseUser.displayName || draft.applicantName || 'Applicant'}</strong>{' '}
+                              ({effectiveApplicantEmail})
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={async () => {
+                            await logout();
+                            pushToast('info', 'Signed out. Sign in with another account to continue.');
+                          }}
+                        >
+                          <LogOut className="w-3.5 h-3.5" />
+                          Switch Account
+                        </Button>
+                      </div>
+
+                      {/* Applicant Contact Details */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">Applicant Full Name *</label>
+                          <input
+                            value={draft.applicantName}
+                            onChange={(e) => updateField('applicantName', e.target.value)}
+                            placeholder="Dr. Eleanor Vance"
+                            className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">Designation *</label>
+                          <select
+                            value={draft.applicantDesignation}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              updateField('applicantDesignation', val);
+                              updateField('applicantIsPrincipal', val === 'Principal');
+                            }}
+                            className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 bg-white transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                          >
+                            <option value="Principal">Principal</option>
+                            <option value="School Owner">School Owner</option>
+                            <option value="Director">Director</option>
+                            <option value="Authorized Representative">Authorized Representative</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">Verified Account Email</label>
+                          <input
+                            type="email"
+                            value={effectiveApplicantEmail}
+                            readOnly
+                            className="w-full text-sm border border-slate-200 bg-slate-50 text-slate-600 rounded-lg px-3.5 py-2.5"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Mobile Number * <span className="font-normal text-slate-400">(Numbers only)</span>
+                          </label>
+                          <input
+                            type="tel"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            maxLength={15}
+                            value={draft.applicantPhone}
+                            onChange={(e) => updateField('applicantPhone', sanitizePhoneDigits(e.target.value))}
+                            placeholder="9876543210"
+                            className="w-full text-sm tabular-nums border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                          />
+                          <p className="text-[11px] text-slate-400 mt-1">Enter 10–15 digits only (no words or symbols).</p>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Management / Trust / Organization (Optional)
+                          </label>
+                          <input
+                            value={draft.organizationName}
+                            onChange={(e) => updateField('organizationName', e.target.value)}
+                            placeholder="Northridge Education Trust"
+                            className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">Preferred Contact Channel</label>
+                          <select
+                            value={draft.preferredContactMethod}
+                            onChange={(e) => updateField('preferredContactMethod', e.target.value)}
+                            className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 bg-white transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                          >
+                            <option value="Email">Official Email</option>
+                            <option value="Phone">Mobile Phone</option>
+                            <option value="Both">Both Email & Phone</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {draft.applicantDesignation !== 'Principal' && (
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Authority / Relationship to School *
+                          </label>
+                          <input
+                            value={draft.authorityRelationship}
+                            onChange={(e) => updateField('authorityRelationship', e.target.value)}
+                            placeholder="e.g., Managing Trustee authorized by School Board"
+                            className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                          />
+                        </div>
+                      )}
+
+                      <div className="pt-2 border-t border-slate-100">
+                        <label className="flex items-start gap-2.5 text-xs text-slate-700 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={draft.contactConsent}
+                            onChange={(e) => updateField('contactConsent', e.target.checked)}
+                            className="mt-0.5 rounded border-slate-300 text-teal-600"
+                          />
+                          <span>
+                            I consent to AcademiaOne contacting me at <strong>{effectiveApplicantEmail}</strong> regarding
+                            this school registration and accept the{' '}
+                            <Link to="/privacy" target="_blank" className="text-teal-700 underline">
+                              Privacy Policy
+                            </Link>
+                            .
+                          </span>
+                        </label>
+                      </div>
+                    </>
                   )}
-
-                  <div className="pt-2 space-y-2.5 border-t border-slate-100">
-                    <label className="flex items-start gap-2.5 text-xs text-slate-700 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={draft.contactVerified}
-                        onChange={(e) => updateField('contactVerified', e.target.checked)}
-                        className="mt-0.5 rounded border-slate-300 text-teal-600"
-                      />
-                      <span>
-                        I verify that <strong>{draft.applicantEmail || 'my email address'}</strong> and{' '}
-                        <strong>{draft.applicantPhone || 'mobile number'}</strong> are active official channels for
-                        receiving review notices and application tracking verification.
-                      </span>
-                    </label>
-                    <label className="flex items-start gap-2.5 text-xs text-slate-700 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={draft.contactConsent}
-                        onChange={(e) => updateField('contactConsent', e.target.checked)}
-                        className="mt-0.5 rounded border-slate-300 text-teal-600"
-                      />
-                      <span>
-                        I consent to AcademiaOne contacting me regarding this school registration and accept the{' '}
-                        <Link to="/privacy" target="_blank" className="text-teal-700 underline">
-                          Privacy Policy
-                        </Link>
-                        .
-                      </span>
-                    </label>
-                  </div>
                 </>
               )}
 
@@ -867,7 +1342,7 @@ export default function SchoolRegistrationPage() {
                         <p className="text-xs font-semibold text-slate-900">
                           {draft.logoFileName ? `Uploaded: ${draft.logoFileName}` : 'School Crest / Logo (Optional)'}
                         </p>
-                        <p className="text-[11px] text-slate-500">Drag & drop or choose PNG, JPG, or WEBP up to 120 KB</p>
+                        <p className="text-[11px] text-slate-500">Drag & drop or choose PNG, JPG, or WEBP up to 250 KB</p>
                       </div>
                     </div>
                     <label className="inline-flex items-center gap-2 px-3 py-2 text-xs font-medium bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer">
@@ -962,21 +1437,33 @@ export default function SchoolRegistrationPage() {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Official School Phone *</label>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Official School Phone * <span className="font-normal text-slate-400">(Numbers only)</span>
+                      </label>
                       <input
                         type="tel"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={15}
                         value={draft.schoolPhone}
-                        onChange={(e) => updateField('schoolPhone', e.target.value)}
-                        placeholder="+1 (555) 890-1200"
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                        onChange={(e) => updateField('schoolPhone', sanitizePhoneDigits(e.target.value))}
+                        placeholder="8012345678"
+                        className="w-full text-sm tabular-nums border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Alternate Contact (Optional)</label>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Alternate Phone Number <span className="font-normal text-slate-400">(Optional, numbers only)</span>
+                      </label>
                       <input
+                        type="tel"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={15}
                         value={draft.alternateContact}
-                        onChange={(e) => updateField('alternateContact', e.target.value)}
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                        onChange={(e) => updateField('alternateContact', sanitizePhoneDigits(e.target.value))}
+                        placeholder="9876543211"
+                        className="w-full text-sm tabular-nums border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                       />
                     </div>
                     <div>
@@ -998,11 +1485,10 @@ export default function SchoolRegistrationPage() {
                 <>
                   <div>
                     <h2 className="text-lg font-bold font-display text-slate-900">
-                      Step 4 — Principal Details & Login Method
+                      Step 4 — Principal Details & Portal Access
                     </h2>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      No active Principal account is created on submission. Once Main Head approves your school, this
-                      Principal email can sign in via either Email & Password or Google.
+                      Once Main Head approves your school, this Principal email will automatically unlock the Principal Portal via either Email & Password or Google Sign-In.
                     </p>
                   </div>
 
@@ -1013,7 +1499,7 @@ export default function SchoolRegistrationPage() {
                       onChange={(e) => updateField('applicantIsPrincipal', e.target.checked)}
                       className="rounded border-slate-300 text-teal-600"
                     />
-                    The applicant ({draft.applicantName || 'Step 1'}) is also the School Principal
+                    I ({draft.applicantName || effectiveApplicantEmail}) am also the School Principal
                   </label>
 
                   {!draft.applicantIsPrincipal && (
@@ -1045,12 +1531,18 @@ export default function SchoolRegistrationPage() {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-slate-700 mb-1">Principal Mobile Number</label>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Principal Mobile Number <span className="font-normal text-slate-400">(Numbers only)</span>
+                        </label>
                         <input
                           type="tel"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          maxLength={15}
                           value={draft.principalPhone}
-                          onChange={(e) => updateField('principalPhone', e.target.value)}
-                          className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                          onChange={(e) => updateField('principalPhone', sanitizePhoneDigits(e.target.value))}
+                          placeholder="9876543210"
+                          className="w-full text-sm tabular-nums border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                         />
                       </div>
                     </div>
@@ -1058,7 +1550,7 @@ export default function SchoolRegistrationPage() {
 
                   <div className="pt-2">
                     <p className="text-xs font-semibold text-slate-700 mb-2.5">
-                      Preferred Principal Sign-In Method After Approval *
+                      Preferred Principal Sign-In Method After Approval
                     </p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {(
@@ -1071,7 +1563,7 @@ export default function SchoolRegistrationPage() {
                           {
                             id: 'email_password',
                             title: 'Email & Password',
-                            desc: 'Sign up or log in with your registered Principal email and private password once approved.',
+                            desc: 'Log in with your registered Principal email and private password once approved.',
                           },
                         ] as const
                       ).map((opt) => (
@@ -1094,69 +1586,357 @@ export default function SchoolRegistrationPage() {
                 </>
               )}
 
-              {/* STEP 5 */}
-              {step === 5 && (
-                <>
-                  <div>
-                    <h2 className="text-lg font-bold font-display text-slate-900">Step 5 — Academic Profile</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Provide high-level estimates now. Detailed classes, separate sections, exam rooms, and staff/student
-                      email lists are set up by your Principal right after Main Head approval.
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* STEP 5: CLASSES & SECTIONS (CHOOSE-NOT-WRITE) + ROLE CODE ALLOCATION */}
+              {step === 5 && (() => {
+                const usedGrades = new Set(draft.classSectionPlan.map((r) => r.grade));
+                const availableGrades = STANDARD_CLASSES.filter((g) => !usedGrades.has(g));
+                const totalClassSections = countTotalClassSections(draft.classSectionPlan);
+                const coordCount = Math.max(0, Number(draft.estimatedCoordinators) || 0);
+                const teacherCount = Math.max(0, Number(draft.estimatedTeachers) || 0);
+                const studentCount = Math.max(0, Number(draft.estimatedStudents) || 0);
+                const previewPrefix = effectivePrefix || 'SCH';
+
+                return (
+                  <>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Current Academic Year *</label>
-                      <input
-                        value={draft.academicYear}
-                        onChange={(e) => updateField('academicYear', e.target.value)}
-                        placeholder="2026-2027"
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      />
+                      <h2 className="text-lg font-bold font-display text-slate-900">
+                        Step 5 — Classes, Sections & Access Code Allocation
+                      </h2>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Choose your school&apos;s classes and section ranges from the dropdowns below, and specify your
+                        member counts so role-specific access codes are generated automatically upon approval.
+                      </p>
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Working Days</label>
-                      <input
-                        value={draft.workingDaysSummary}
-                        onChange={(e) => updateField('workingDaysSummary', e.target.value)}
-                        placeholder="Monday to Friday"
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      />
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Current Academic Year *</label>
+                        <input
+                          value={draft.academicYear}
+                          onChange={(e) => updateField('academicYear', e.target.value)}
+                          placeholder="2026-2027"
+                          className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Working Days</label>
+                        <select
+                          value={draft.workingDaysSummary}
+                          onChange={(e) => updateField('workingDaysSummary', e.target.value)}
+                          className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 bg-white transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                        >
+                          <option value="Monday to Friday">Monday to Friday</option>
+                          <option value="Monday to Saturday">Monday to Saturday</option>
+                          <option value="Monday to Saturday (Half-Day Sat)">Monday to Saturday (Half-Day Sat)</option>
+                          <option value="Sunday to Thursday">Sunday to Thursday</option>
+                        </select>
+                      </div>
                     </div>
-                    <div className="sm:col-span-2">
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Approximate Grades / Classes Offered
-                      </label>
-                      <input
-                        value={draft.classesOffered}
-                        onChange={(e) => updateField('classesOffered', e.target.value)}
-                        placeholder="Grades 1–12 with Sections A, B, C"
-                        className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      />
+
+                    {/* Choose Classes & Section Ranges (No Free-Text Typing) */}
+                    <div className="border border-slate-200 rounded-xl p-4 sm:p-5 bg-slate-50/60 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-bold text-slate-900">
+                            Assign Classes &amp; Sections * <span className="font-normal text-slate-500">(Choose from dropdowns)</span>
+                          </p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Example: Class 1 Section: A–G, Class 2 Section: A–H — all sections are auto-created on approval.
+                          </p>
+                        </div>
+                        <span className="text-xs font-semibold text-teal-800 tabular-nums">
+                          {draft.classSectionPlan.length} classes · {totalClassSections} total sections
+                        </span>
+                      </div>
+
+                      {/* Quick Presets */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[11px] font-medium text-slate-500 mr-1">Quick fill:</span>
+                        {CLASS_PLAN_PRESETS.map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => {
+                              if (preset.grades.length === 0) {
+                                updateClassPlan(DEFAULT_CLASS_SECTION_PLAN);
+                              } else {
+                                updateClassPlan(
+                                  preset.grades.map((grade) => ({
+                                    grade,
+                                    sectionFrom: preset.from,
+                                    sectionTo: preset.to,
+                                  })),
+                                );
+                              }
+                            }}
+                            className="px-2.5 py-1 text-[11px] font-medium bg-white border border-slate-200 hover:border-teal-500 hover:text-teal-700 rounded-md transition-colors cursor-pointer"
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Selected Class Rows */}
+                      <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                        {draft.classSectionPlan.map((row, idx) => {
+                          const secCount = expandSectionRange(row.sectionFrom, row.sectionTo).length;
+                          const rowOptions = STANDARD_CLASSES.filter(
+                            (g) => g === row.grade || !usedGrades.has(g),
+                          );
+                          return (
+                            <div
+                              key={`${row.grade}-${idx}`}
+                              className="bg-white border border-slate-200 rounded-lg px-3 py-2.5 flex flex-wrap items-center justify-between gap-2.5"
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <select
+                                  aria-label={`Class row ${idx + 1}`}
+                                  value={row.grade}
+                                  onChange={(e) => {
+                                    const next = [...draft.classSectionPlan];
+                                    next[idx] = { ...next[idx], grade: e.target.value };
+                                    updateClassPlan(next);
+                                  }}
+                                  className="text-xs font-semibold text-slate-900 border border-slate-300 rounded-md px-2.5 py-1.5 bg-white focus:outline-none focus:border-teal-600"
+                                >
+                                  {rowOptions.map((g) => (
+                                    <option key={g} value={g}>
+                                      {g}
+                                    </option>
+                                  ))}
+                                </select>
+
+                                <span className="text-xs text-slate-500">Section:</span>
+
+                                <select
+                                  aria-label={`${row.grade} section from`}
+                                  value={row.sectionFrom}
+                                  onChange={(e) => {
+                                    const fromVal = e.target.value;
+                                    const next = [...draft.classSectionPlan];
+                                    const toVal = fromVal > next[idx].sectionTo ? fromVal : next[idx].sectionTo;
+                                    next[idx] = { ...next[idx], sectionFrom: fromVal, sectionTo: toVal };
+                                    updateClassPlan(next);
+                                  }}
+                                  className="text-xs font-mono font-semibold text-slate-900 border border-slate-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:border-teal-600"
+                                >
+                                  {SECTION_LETTERS.map((l) => (
+                                    <option key={l} value={l}>
+                                      {l}
+                                    </option>
+                                  ))}
+                                </select>
+
+                                <span className="text-xs text-slate-400">to</span>
+
+                                <select
+                                  aria-label={`${row.grade} section to`}
+                                  value={row.sectionTo}
+                                  onChange={(e) => {
+                                    const toVal = e.target.value;
+                                    const next = [...draft.classSectionPlan];
+                                    const fromVal = toVal < next[idx].sectionFrom ? toVal : next[idx].sectionFrom;
+                                    next[idx] = { ...next[idx], sectionFrom: fromVal, sectionTo: toVal };
+                                    updateClassPlan(next);
+                                  }}
+                                  className="text-xs font-mono font-semibold text-slate-900 border border-slate-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:border-teal-600"
+                                >
+                                  {SECTION_LETTERS.map((l) => (
+                                    <option key={l} value={l}>
+                                      {l}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div className="flex items-center gap-3 ml-auto">
+                                <span className="text-xs text-teal-800 font-medium tabular-nums">
+                                  {row.grade} {formatSectionRangeLabel(row.sectionFrom, row.sectionTo)} ({secCount})
+                                </span>
+                                <button
+                                  type="button"
+                                  disabled={draft.classSectionPlan.length <= 1}
+                                  onClick={() => {
+                                    const next = draft.classSectionPlan.filter((_, i) => i !== idx);
+                                    updateClassPlan(next);
+                                  }}
+                                  className="p-1.5 text-slate-400 hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                                  aria-label={`Remove ${row.grade}`}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Add Another Class Selector */}
+                      {availableGrades.length > 0 && (
+                        <div className="pt-3 border-t border-slate-200 flex flex-wrap items-center gap-2">
+                          <select
+                            aria-label="Choose class to add"
+                            value={availableGrades.includes(newClassGrade) ? newClassGrade : availableGrades[0]}
+                            onChange={(e) => setNewClassGrade(e.target.value)}
+                            className="text-xs font-medium border border-slate-300 rounded-md px-2.5 py-2 bg-white focus:outline-none focus:border-teal-600"
+                          >
+                            {availableGrades.map((g) => (
+                              <option key={g} value={g}>
+                                {g}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="text-xs text-slate-500">Section:</span>
+                          <select
+                            aria-label="New class section from"
+                            value={newSectionFrom}
+                            onChange={(e) => {
+                              setNewSectionFrom(e.target.value);
+                              if (e.target.value > newSectionTo) setNewSectionTo(e.target.value);
+                            }}
+                            className="text-xs font-mono border border-slate-300 rounded-md px-2 py-2 bg-white focus:outline-none focus:border-teal-600"
+                          >
+                            {SECTION_LETTERS.map((l) => (
+                              <option key={l} value={l}>
+                                {l}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="text-xs text-slate-400">to</span>
+                          <select
+                            aria-label="New class section to"
+                            value={newSectionTo}
+                            onChange={(e) => {
+                              setNewSectionTo(e.target.value);
+                              if (e.target.value < newSectionFrom) setNewSectionFrom(e.target.value);
+                            }}
+                            className="text-xs font-mono border border-slate-300 rounded-md px-2 py-2 bg-white focus:outline-none focus:border-teal-600"
+                          >
+                            {SECTION_LETTERS.map((l) => (
+                              <option key={l} value={l}>
+                                {l}
+                              </option>
+                            ))}
+                          </select>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => {
+                              const gradeToAdd = availableGrades.includes(newClassGrade)
+                                ? newClassGrade
+                                : availableGrades[0];
+                              if (!gradeToAdd) return;
+                              const nextPlan = [
+                                ...draft.classSectionPlan,
+                                {
+                                  grade: gradeToAdd,
+                                  sectionFrom: newSectionFrom,
+                                  sectionTo: newSectionTo >= newSectionFrom ? newSectionTo : newSectionFrom,
+                                },
+                              ];
+                              updateClassPlan(nextPlan);
+                              const remaining = availableGrades.filter((g) => g !== gradeToAdd);
+                              if (remaining[0]) setNewClassGrade(remaining[0]);
+                            }}
+                          >
+                            <Plus className="w-3.5 h-3.5" /> Add Class
+                          </Button>
+                        </div>
+                      )}
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Approximate Students</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={draft.estimatedStudents}
-                        onChange={(e) => updateField('estimatedStudents', e.target.value)}
-                        className="w-full text-sm tabular-nums border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      />
+
+                    {/* Member Counts & School Code Prefix */}
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-3.5">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          School Code Prefix *
+                        </label>
+                        <input
+                          value={draft.schoolPrefix}
+                          onChange={(e) => updateField('schoolPrefix', sanitizeSchoolPrefix(e.target.value))}
+                          placeholder={deriveSchoolPrefix(draft.schoolName)}
+                          maxLength={6}
+                          className="w-full text-sm font-mono uppercase border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                        />
+                        <p className="text-[11px] text-slate-400 mt-1">Letters only (e.g. JSS)</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Coordinators *</label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          value={draft.estimatedCoordinators}
+                          onChange={(e) => updateField('estimatedCoordinators', sanitizePhoneDigits(e.target.value, 4))}
+                          placeholder="6"
+                          className="w-full text-sm tabular-nums border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Teachers *</label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          value={draft.estimatedTeachers}
+                          onChange={(e) => updateField('estimatedTeachers', sanitizePhoneDigits(e.target.value, 5))}
+                          placeholder="20"
+                          className="w-full text-sm tabular-nums border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Students *</label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          value={draft.estimatedStudents}
+                          onChange={(e) => updateField('estimatedStudents', sanitizePhoneDigits(e.target.value, 6))}
+                          placeholder="100"
+                          className="w-full text-sm tabular-nums border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Approximate Teachers</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={draft.estimatedTeachers}
-                        onChange={(e) => updateField('estimatedTeachers', e.target.value)}
-                        className="w-full text-sm tabular-nums border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-                      />
+
+                    {/* Live Role Access Codes Preview */}
+                    <div className="rounded-xl border border-teal-200 bg-teal-50/50 p-4 space-y-2.5">
+                      <div className="flex items-center gap-2 text-xs font-bold text-teal-900">
+                        <KeyRound className="w-4 h-4 text-teal-700 shrink-0" />
+                        Auto-Generated Role Access Codes Preview (Prefix: {previewPrefix})
+                      </div>
+                      <p className="text-[11px] text-teal-800 leading-relaxed">
+                        Every role gets separate sequential codes upon approval. When students or staff enter their code
+                        during Sign Up, AcademiaOne automatically identifies their school, role, and assigned class.
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 pt-1 text-xs">
+                        <div className="bg-white border border-teal-200/80 rounded-lg p-2.5">
+                          <p className="text-[11px] text-slate-500">Principal Login</p>
+                          <p className="font-mono font-bold text-slate-900 mt-0.5">{formatPrincipalCode(previewPrefix)}</p>
+                        </div>
+                        <div className="bg-white border border-teal-200/80 rounded-lg p-2.5">
+                          <p className="text-[11px] text-slate-500">Coordinators ({coordCount})</p>
+                          <p className="font-mono font-bold text-slate-900 mt-0.5 tabular-nums">
+                            {formatRoleCodeRange(previewPrefix, 'coordinator', coordCount)}
+                          </p>
+                        </div>
+                        <div className="bg-white border border-teal-200/80 rounded-lg p-2.5">
+                          <p className="text-[11px] text-slate-500">Teachers ({teacherCount})</p>
+                          <p className="font-mono font-bold text-slate-900 mt-0.5 tabular-nums">
+                            {formatRoleCodeRange(previewPrefix, 'teacher', teacherCount)}
+                          </p>
+                        </div>
+                        <div className="bg-white border border-teal-200/80 rounded-lg p-2.5">
+                          <p className="text-[11px] text-slate-500">Students ({studentCount})</p>
+                          <p className="font-mono font-bold text-slate-900 mt-0.5 tabular-nums">
+                            {formatRoleCodeRange(previewPrefix, 'student', studentCount)}
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </>
-              )}
+                  </>
+                );
+              })()}
 
               {/* STEP 6: REVIEW & SUBMIT */}
               {step === 6 && (
@@ -1191,10 +1971,10 @@ export default function SchoolRegistrationPage() {
                     {[
                       {
                         stepNum: 1,
-                        title: 'Applicant & Verification',
+                        title: 'Signed-In Account & Applicant',
                         lines: [
                           `${draft.applicantName} (${draft.applicantDesignation})`,
-                          `${draft.applicantEmail} · ${draft.applicantPhone}`,
+                          `${effectiveApplicantEmail} · ${draft.applicantPhone}`,
                           draft.organizationName ? `Organization: ${draft.organizationName}` : '',
                         ].filter(Boolean),
                       },
@@ -1218,7 +1998,7 @@ export default function SchoolRegistrationPage() {
                       },
                       {
                         stepNum: 4,
-                        title: 'Principal & Authentication',
+                        title: 'Principal & Portal Access',
                         lines: [
                           `${effectivePrincipalName} · ${effectivePrincipalEmail} · ${effectivePrincipalPhone || '—'}`,
                           `Preferred Login: ${draft.authMethod === 'google' ? 'Google Sign-In' : 'Email & Password'} (both supported after approval)`,
@@ -1226,10 +2006,11 @@ export default function SchoolRegistrationPage() {
                       },
                       {
                         stepNum: 5,
-                        title: 'Academic Estimates & Campus Access',
+                        title: 'Classes, Sections & Role Access Codes',
                         lines: [
-                          `Academic Year ${draft.academicYear} · ~${draft.estimatedStudents} students · ~${draft.estimatedTeachers} teachers`,
-                          `Access Tier: Free Unlimited Campus (All features included)`,
+                          `Academic Year ${draft.academicYear} · Prefix: ${effectivePrefix || 'SCH'} · Principal Code: ${formatPrincipalCode(effectivePrefix || 'SCH')}`,
+                          `Classes (${countTotalClassSections(draft.classSectionPlan)} sections): ${formatClassSectionPlanSummary(draft.classSectionPlan)}`,
+                          `Code Allocation: ${draft.estimatedCoordinators || 0} Coordinators · ${draft.estimatedTeachers || 0} Teachers · ${draft.estimatedStudents || 0} Students`,
                         ],
                       },
                     ].map((group) => (
@@ -1303,7 +2084,7 @@ export default function SchoolRegistrationPage() {
             </Button>
 
             {step < TOTAL_STEPS ? (
-              <Button variant="navy" onClick={goNext}>
+              <Button variant="navy" onClick={goNext} disabled={step === 1 && !firebaseUser}>
                 Continue <ArrowRight className="w-4 h-4" />
               </Button>
             ) : (

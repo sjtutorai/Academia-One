@@ -29,70 +29,8 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { Button, useToast } from '../components/ui/Primitives';
 import { BrandLogo } from '../components/ui/BrandLogo';
+import { isValidPhoneDigits, sanitizePhoneDigits } from '../lib/schoolCodes';
 import type { PlatformSettings } from '../types/models';
-
-const PREVIEW_TABS = [
-  {
-    id: 'main_head',
-    label: 'Main Head',
-    headline: 'Multi-School Oversight & Campus Governance',
-    metrics: [
-      { label: 'Active Schools', value: 'Free Unlimited' },
-      { label: 'Enforced Isolation', value: 'schoolId Rules' },
-      { label: 'Audit Logging', value: 'Append-Only' },
-    ],
-    rows: [
-      { col1: 'Northridge Preparatory Academy', col2: 'Free Unlimited', col3: 'Active', col4: 'NRP' },
-      { col1: 'Crestview International School', col2: 'Free Unlimited', col3: 'Active', col4: 'CVI' },
-    ],
-    columns: ['School Name', 'Access Tier', 'Status', 'Code'],
-  },
-  {
-    id: 'principal',
-    label: 'Principal',
-    headline: 'Single-School Administration & Conflict-Checked Scheduling',
-    metrics: [
-      { label: 'Conflict Guard', value: 'Teacher · Room · Class' },
-      { label: 'Bulk Import', value: 'Validated CSV' },
-      { label: 'Coordinator Scope', value: 'Configurable' },
-    ],
-    rows: [
-      { col1: 'Grade 10 - Section A', col2: 'Prof. Elena Rostova', col3: 'East Wing 201', col4: '32 seats' },
-      { col1: 'Grade 10 - Section B', col2: 'Mr. David Okafor', col3: 'East Wing 202', col4: '32 seats' },
-    ],
-    columns: ['Class / Section', 'Class Teacher', 'Assigned Room', 'Capacity'],
-  },
-  {
-    id: 'teacher',
-    label: 'Teacher',
-    headline: 'Daily Agenda, Attendance Registers & Bounded Marks Entry',
-    metrics: [
-      { label: 'Attendance Mode', value: 'Draft -> Submit' },
-      { label: 'Marks Validation', value: '0 to Max Marks' },
-      { label: 'Homework Review', value: 'Inline Feedback' },
-    ],
-    rows: [
-      { col1: '08:30 – 09:20', col2: 'Mathematics', col3: 'Grade 10 - A', col4: 'East Wing 201' },
-      { col1: '09:25 – 10:15', col2: 'Mathematics', col3: 'Grade 10 - B', col4: 'East Wing 202' },
-    ],
-    columns: ['Time', 'Subject', 'Section', 'Room'],
-  },
-  {
-    id: 'student',
-    label: 'Student',
-    headline: 'Personal Timetable, Homework Upload & Published Results',
-    metrics: [
-      { label: 'Results Access', value: 'Published Only' },
-      { label: 'Attendance View', value: 'Read-Only Calendar' },
-      { label: 'Privacy Scope', value: 'Own Records Only' },
-    ],
-    rows: [
-      { col1: 'Quadratic Optimization Set', col2: 'Mathematics', col3: 'Completed', col4: 'Due Nov 22' },
-      { col1: 'Refraction Lab Report', col2: 'Physics', col3: 'Open', col4: 'Due Nov 25' },
-    ],
-    columns: ['Assignment', 'Subject', 'Status', 'Deadline'],
-  },
-];
 
 const FAQS = [
   {
@@ -121,7 +59,6 @@ export default function LandingPage() {
 
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [previewTab, setPreviewTab] = useState('main_head');
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [settings, setSettings] = useState<Partial<PlatformSettings>>({
     platformName: 'AcademiaOne',
@@ -168,6 +105,10 @@ export default function LandingPage() {
       setEnquiryError('Please enter a valid work email address.');
       return;
     }
+    if (enquiry.phone.trim() && !isValidPhoneDigits(enquiry.phone.trim())) {
+      setEnquiryError('Phone number must contain only 10 to 15 numeric digits.');
+      return;
+    }
     setSubmittingEnquiry(true);
     try {
       const id = generateId('enq');
@@ -176,7 +117,7 @@ export default function LandingPage() {
         schoolName: enquiry.schoolName.trim().slice(0, 140),
         contactName: enquiry.contactName.trim().slice(0, 120),
         email: enquiry.email.trim().toLowerCase().slice(0, 160),
-        phone: enquiry.phone.trim().slice(0, 32),
+        phone: sanitizePhoneDigits(enquiry.phone),
         estimatedStudents: Number(enquiry.estimatedStudents) || 0,
         message: enquiry.message.trim().slice(0, 1000),
         status: 'new',
@@ -191,8 +132,6 @@ export default function LandingPage() {
       setSubmittingEnquiry(false);
     }
   };
-
-  const activePreview = PREVIEW_TABS.find((t) => t.id === previewTab) || PREVIEW_TABS[0];
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900">
@@ -330,162 +269,73 @@ export default function LandingPage() {
         />
 
         <div className="max-w-7xl mx-auto px-6 py-16 lg:py-24 relative">
-          <div className="grid lg:grid-cols-12 gap-12 items-stretch">
-            <motion.div
-              variants={getStaggerContainerVariants(prefersReducedMotion, 0.08)}
-              initial="hidden"
-              animate="visible"
-              className="lg:col-span-6 flex flex-col justify-center"
+          <motion.div
+            variants={getStaggerContainerVariants(prefersReducedMotion, 0.08)}
+            initial="hidden"
+            animate="visible"
+            className="max-w-4xl"
+          >
+            <motion.p
+              variants={getStaggerItemVariants(prefersReducedMotion, 10)}
+              className="text-xs font-medium text-teal-400 tracking-wide mb-3.5"
             >
-              <motion.p
-                variants={getStaggerItemVariants(prefersReducedMotion, 10)}
-                className="text-xs font-medium text-teal-400 tracking-wide mb-3.5"
+              100% Free for All Schools · Main Head Verified · Strict Tenant Isolation
+            </motion.p>
+            <motion.h1
+              variants={getStaggerItemVariants(prefersReducedMotion, 14)}
+              className="font-display font-bold tracking-tight text-white text-balance leading-[1.08]"
+              style={{ fontSize: 'clamp(2.35rem, 4.2vw, 3.65rem)' }}
+            >
+              One unified platform connecting school leadership, teachers, and students.
+            </motion.h1>
+            <motion.p
+              variants={getStaggerItemVariants(prefersReducedMotion, 12)}
+              className="mt-5 text-base sm:text-lg text-slate-300 leading-relaxed max-w-2xl"
+            >
+              Register your school completely free, receive dedicated role-specific School Access Codes upon Main Head
+              approval, and run conflict-checked timetables, attendance, exams, and homework across five portals.
+            </motion.p>
+            <motion.div
+              variants={getStaggerItemVariants(prefersReducedMotion, 10)}
+              className="mt-8 flex flex-wrap items-center gap-3.5"
+            >
+              <Button variant="primary" size="lg" onClick={() => navigate('/register-school')}>
+                Register Your School Free
+                <ArrowRight className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="secondary"
+                size="lg"
+                className="!bg-transparent !text-white !border-slate-600 hover:!bg-slate-800/80"
+                onClick={() => navigate(activeUser ? ROLE_HOME_ROUTES[activeUser.role] : '/login')}
               >
-                100% Free for All Schools · Main Head Verified · Strict Tenant Isolation
-              </motion.p>
-              <motion.h1
-                variants={getStaggerItemVariants(prefersReducedMotion, 14)}
-                className="font-display font-bold tracking-tight text-white text-balance leading-[1.1]"
-                style={{ fontSize: 'clamp(2.2rem, 3.8vw, 3.4rem)' }}
+                {activeUser ? 'Go to My Portal' : 'Sign In'}
+              </Button>
+              <Link
+                to="/application-status"
+                className="inline-flex items-center justify-center px-3 py-3 text-sm font-medium text-teal-300 hover:text-teal-200 transition-colors whitespace-nowrap"
               >
-                One unified platform connecting school leadership, teachers, and students.
-              </motion.h1>
-              <motion.p
-                variants={getStaggerItemVariants(prefersReducedMotion, 12)}
-                className="mt-5 text-base text-slate-300 leading-relaxed max-w-xl"
-              >
-                Register your school completely free, receive your unique School Code upon Main Head approval, and run
-                conflict-checked timetables, attendance, exams, and homework across five role-based portals.
-              </motion.p>
-              <motion.div
-                variants={getStaggerItemVariants(prefersReducedMotion, 10)}
-                className="mt-7 flex flex-wrap items-center gap-3.5"
-              >
-                <Button variant="primary" size="lg" onClick={() => navigate('/register-school')}>
-                  Register Your School Free
-                  <ArrowRight className="w-4 h-4" />
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="lg"
-                  className="!bg-transparent !text-white !border-slate-600 hover:!bg-slate-800/80"
-                  onClick={() => navigate(activeUser ? ROLE_HOME_ROUTES[activeUser.role] : '/login')}
-                >
-                  {activeUser ? 'Go to My Portal' : 'Sign In'}
-                </Button>
-                <Link
-                  to="/application-status"
-                  className="inline-flex items-center justify-center px-3 py-3 text-sm font-medium text-teal-300 hover:text-teal-200 transition-colors whitespace-nowrap"
-                >
-                  Track Application →
-                </Link>
-              </motion.div>
-              <motion.div
-                variants={getStaggerItemVariants(prefersReducedMotion, 10)}
-                className="mt-8 pt-7 border-t border-slate-700/70 grid grid-cols-3 gap-6"
-              >
-                <div>
-                  <p className="text-xl font-bold font-display tabular-nums text-white">5 Portals</p>
-                  <p className="text-xs text-slate-400 mt-1">Email & Google auto-routing</p>
-                </div>
-                <div>
-                  <p className="text-xl font-bold font-display tabular-nums text-white">100% Free</p>
-                  <p className="text-xs text-slate-400 mt-1">All modules included</p>
-                </div>
-                <div>
-                  <p className="text-xl font-bold font-display tabular-nums text-white">Unique Code</p>
-                  <p className="text-xs text-slate-400 mt-1">Auto-issued on approval</p>
-                </div>
-              </motion.div>
+                Track Application →
+              </Link>
             </motion.div>
-
-            {/* Interactive Live Architecture Preview Card */}
             <motion.div
-              initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.96, y: 12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              transition={{ duration: 0.45, delay: 0.12, ease: MOTION_EASE.out }}
-              className="lg:col-span-6 flex"
+              variants={getStaggerItemVariants(prefersReducedMotion, 10)}
+              className="mt-10 pt-8 border-t border-slate-700/70 grid grid-cols-1 sm:grid-cols-3 gap-6 max-w-2xl"
             >
-              <div className="w-full bg-[#0F1B33]/95 border border-slate-700/80 rounded-2xl p-6 flex flex-col justify-between shadow-2xl">
-                <div>
-                  <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800">
-                    <div>
-                      <p className="text-xs text-slate-400">Interactive Workspace Preview</p>
-                      <p className="text-sm font-semibold text-white mt-0.5">{activePreview.headline}</p>
-                    </div>
-                  </div>
-
-                  {/* Interactive Role Switcher inside Preview */}
-                  <div className="flex flex-wrap items-center gap-1.5 mt-4 p-1 bg-[#0B1528] rounded-lg border border-slate-800">
-                    {PREVIEW_TABS.map((tab) => (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setPreviewTab(tab.id)}
-                        className={`relative flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                          previewTab === tab.id ? 'text-white' : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        {previewTab === tab.id && (
-                          <motion.span
-                            layoutId="hero-preview-tab"
-                            transition={{ duration: prefersReducedMotion ? 0 : 0.2, ease: MOTION_EASE.out }}
-                            className="absolute inset-0 bg-teal-600 rounded-md"
-                            aria-hidden="true"
-                          />
-                        )}
-                        <span className="relative z-10">{tab.label}</span>
-                      </button>
-                    ))}
-                  </div>
-
-                  <AnimatePresence mode="wait">
-                    <motion.div
-                      key={activePreview.id}
-                      initial={prefersReducedMotion ? false : { opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={prefersReducedMotion ? undefined : { opacity: 0, y: -4 }}
-                      transition={{ duration: 0.18, ease: MOTION_EASE.out }}
-                    >
-                      <div className="grid grid-cols-3 gap-3 mt-5">
-                        {activePreview.metrics.map((m) => (
-                          <div key={m.label} className="bg-[#0B1528]/90 border border-slate-800 rounded-lg p-3">
-                            <p className="text-[11px] text-slate-400">{m.label}</p>
-                            <p className="text-xs font-semibold text-teal-300 mt-1 tabular-nums">{m.value}</p>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="mt-5 border border-slate-800 rounded-lg overflow-hidden">
-                        <div className="grid grid-cols-4 bg-[#0B1528] px-3.5 py-2 text-[11px] font-medium text-slate-400">
-                          {activePreview.columns.map((c) => (
-                            <span key={c}>{c}</span>
-                          ))}
-                        </div>
-                        <div className="divide-y divide-slate-800/80">
-                          {activePreview.rows.map((r, i) => (
-                            <div key={i} className="grid grid-cols-4 px-3.5 py-2.5 text-xs text-slate-200 items-center">
-                              <span className="font-medium truncate pr-2">{r.col1}</span>
-                              <span className="text-slate-400 truncate pr-2">{r.col2}</span>
-                              <span className="text-teal-400 font-medium">{r.col3}</span>
-                              <span className="text-slate-400 tabular-nums text-right">{r.col4}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </motion.div>
-                  </AnimatePresence>
-                </div>
-
-                <div className="mt-5 pt-4 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
-                  <span>Live Firestore multi-tenant backend</span>
-                  <Link to="/login" className="text-teal-400 hover:text-teal-300 font-medium transition-colors">
-                    Sign in to live portal →
-                  </Link>
-                </div>
+              <div>
+                <p className="text-xl font-bold font-display tabular-nums text-white">5 Portals</p>
+                <p className="text-xs text-slate-400 mt-1">Email & Google auto-routing</p>
+              </div>
+              <div>
+                <p className="text-xl font-bold font-display tabular-nums text-white">100% Free</p>
+                <p className="text-xs text-slate-400 mt-1">All modules included</p>
+              </div>
+              <div>
+                <p className="text-xl font-bold font-display tabular-nums text-white">Role Access Codes</p>
+                <p className="text-xs text-slate-400 mt-1">Auto-identifies school, role & class</p>
               </div>
             </motion.div>
-          </div>
+          </motion.div>
         </div>
       </section>
 
@@ -794,13 +644,16 @@ export default function LandingPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">Phone</label>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">Phone (Numbers only)</label>
                     <input
                       type="tel"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={15}
                       value={enquiry.phone}
-                      onChange={(e) => setEnquiry({ ...enquiry, phone: e.target.value })}
-                      placeholder="+1 (555) 012-3456"
-                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                      onChange={(e) => setEnquiry({ ...enquiry, phone: sanitizePhoneDigits(e.target.value) })}
+                      placeholder="e.g. 9876543210"
+                      className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg tabular-nums transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                     />
                   </div>
                   <div>

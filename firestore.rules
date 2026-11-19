@@ -120,7 +120,7 @@ service cloud.firestore {
 
     function isValidSchool(data) {
       return data.keys().hasAll(['id', 'name', 'code', 'academicYear', 'status', 'subscriptionPlanId', 'subscriptionStatus', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'name', 'code', 'address', 'email', 'phone', 'academicYear', 'status', 'principalUid', 'principalUsername', 'principalName', 'principalEmail', 'subscriptionPlanId', 'subscriptionStatus', 'subscriptionStart', 'subscriptionEnd', 'teacherCount', 'studentCount', 'settings', 'source', 'schoolType', 'board', 'logoDataUrl', 'setupCompleted', 'isDemo', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'code', 'address', 'email', 'phone', 'academicYear', 'status', 'principalUid', 'principalUsername', 'principalName', 'principalEmail', 'subscriptionPlanId', 'subscriptionStatus', 'subscriptionStart', 'subscriptionEnd', 'coordinatorCount', 'teacherCount', 'studentCount', 'allocatedCoordinators', 'allocatedTeachers', 'allocatedStudents', 'settings', 'source', 'schoolType', 'board', 'logoDataUrl', 'setupCompleted', 'isDemo', 'createdBy', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isShortString(data.name, 2, 140)
         && isShortString(data.code, 2, 24)
@@ -498,44 +498,47 @@ service cloud.firestore {
 
     function isValidSchoolApplication(data) {
       return data.keys().hasAll(['id', 'applicationNumber', 'applicantName', 'applicantEmail', 'schoolName', 'academicYear', 'schoolEmail', 'address', 'principalName', 'principalEmail', 'authMethod', 'requestedPlanId', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'applicationNumber', 'applicantName', 'applicantDesignation', 'applicantEmail', 'applicantPhone', 'organizationName', 'preferredContactMethod', 'authorityRelationship', 'applicantIsPrincipal', 'contactVerified', 'schoolName', 'displayName', 'institutionType', 'affiliationBoard', 'mediumOfInstruction', 'establishedYear', 'externalRecognitionCode', 'logoDataUrl', 'academicYear', 'website', 'schoolEmail', 'schoolPhone', 'alternateContact', 'country', 'stateRegion', 'district', 'city', 'postalCode', 'address', 'campusAddress', 'classesOffered', 'estimatedStudents', 'estimatedTeachers', 'workingDaysSummary', 'principalName', 'principalEmail', 'principalPhone', 'principalDesignation', 'authMethod', 'requestedPlanId', 'consentPolicyVersion', 'status', 'internalNotes', 'applicantMessage', 'decisionNote', 'approvedSchoolId', 'approvedSchoolCode', 'reviewedBy', 'activityLog', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'applicationNumber', 'applicantUid', 'applicantName', 'applicantDesignation', 'applicantEmail', 'applicantPhone', 'organizationName', 'preferredContactMethod', 'authorityRelationship', 'applicantIsPrincipal', 'contactVerified', 'schoolName', 'displayName', 'institutionType', 'affiliationBoard', 'mediumOfInstruction', 'establishedYear', 'externalRecognitionCode', 'logoDataUrl', 'academicYear', 'website', 'schoolEmail', 'schoolPhone', 'alternateContact', 'country', 'stateRegion', 'district', 'city', 'postalCode', 'address', 'campusAddress', 'classesOffered', 'classSectionPlan', 'schoolPrefix', 'estimatedCoordinators', 'estimatedStudents', 'estimatedTeachers', 'workingDaysSummary', 'principalName', 'principalEmail', 'principalPhone', 'principalDesignation', 'authMethod', 'requestedPlanId', 'consentPolicyVersion', 'status', 'internalNotes', 'applicantMessage', 'decisionNote', 'approvedSchoolId', 'approvedSchoolCode', 'reviewedBy', 'activityLog', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isValidId(data.applicationNumber)
+        && isOptString(data, 'applicantUid', 128)
         && isShortString(data.applicantName, 2, 120)
         && isShortString(data.applicantEmail, 3, 160)
-        && isShortString(data.schoolName, 2, 140)
-        && isShortString(data.academicYear, 4, 24)
+        && isShortString(data.schoolName, 2, 200)
+        && isShortString(data.academicYear, 2, 40)
         && isShortString(data.schoolEmail, 3, 160)
-        && isShortString(data.address, 4, 300)
+        && isShortString(data.address, 4, 500)
         && isShortString(data.principalName, 2, 120)
         && isShortString(data.principalEmail, 3, 160)
         && data.authMethod in ['email_password', 'google']
         && isShortString(data.requestedPlanId, 1, 128)
         && data.status in ['submitted', 'under_review', 'more_info_required', 'approved', 'rejected', 'withdrawn']
         && isOptString(data, 'applicantDesignation', 64)
-        && isOptString(data, 'applicantPhone', 32)
-        && isOptString(data, 'organizationName', 140)
+        && isOptString(data, 'applicantPhone', 64)
+        && isOptString(data, 'organizationName', 200)
         && isOptString(data, 'preferredContactMethod', 32)
-        && isOptString(data, 'authorityRelationship', 140)
-        && isOptString(data, 'displayName', 140)
+        && isOptString(data, 'authorityRelationship', 200)
+        && isOptString(data, 'displayName', 200)
         && isOptString(data, 'institutionType', 64)
         && isOptString(data, 'affiliationBoard', 120)
         && isOptString(data, 'mediumOfInstruction', 120)
-        && isOptString(data, 'establishedYear', 16)
+        && isOptString(data, 'establishedYear', 32)
         && isOptString(data, 'externalRecognitionCode', 64)
-        && isOptString(data, 'logoDataUrl', 200000)
-        && isOptString(data, 'website', 200)
-        && isOptString(data, 'schoolPhone', 32)
-        && isOptString(data, 'alternateContact', 120)
+        && isOptString(data, 'logoDataUrl', 500000)
+        && isOptString(data, 'website', 300)
+        && isOptString(data, 'schoolPhone', 64)
+        && isOptString(data, 'alternateContact', 160)
         && isOptString(data, 'country', 80)
         && isOptString(data, 'stateRegion', 80)
         && isOptString(data, 'district', 80)
         && isOptString(data, 'city', 80)
-        && isOptString(data, 'postalCode', 24)
-        && isOptString(data, 'campusAddress', 300)
-        && isOptString(data, 'classesOffered', 200)
+        && isOptString(data, 'postalCode', 32)
+        && isOptString(data, 'campusAddress', 500)
+        && isOptString(data, 'classesOffered', 800)
+        && isBoundedList(data, 'classSectionPlan', 25)
+        && isOptString(data, 'schoolPrefix', 12)
         && isOptString(data, 'workingDaysSummary', 120)
-        && isOptString(data, 'principalPhone', 32)
+        && isOptString(data, 'principalPhone', 64)
         && isOptString(data, 'principalDesignation', 120)
         && isOptString(data, 'consentPolicyVersion', 40)
         && isOptString(data, 'internalNotes', 2000)
@@ -552,7 +555,7 @@ service cloud.firestore {
         && data.keys().hasOnly(['applicationNumber', 'type', 'verificationEmailHash', 'schoolId', 'schoolName', 'requestedRole', 'status', 'schoolCode', 'applicantMessage', 'decisionNote', 'applicantResponseNote', 'submittedAt', 'createdAt', 'updatedAt'])
         && isValidId(data.applicationNumber)
         && data.type in ['school', 'member']
-        && isShortString(data.schoolName, 2, 140)
+        && isShortString(data.schoolName, 2, 200)
         && data.requestedRole in ['principal', 'coordinator', 'teacher', 'student']
         && data.status in ['submitted', 'under_review', 'more_info_required', 'pending', 'approved', 'rejected', 'withdrawn']
         && isOptString(data, 'verificationEmailHash', 128)
@@ -566,11 +569,13 @@ service cloud.firestore {
 
     function isValidSchoolCodeEntry(data) {
       return data.keys().hasAll(['code', 'schoolId', 'schoolName', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['code', 'schoolId', 'schoolName', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['code', 'schoolId', 'schoolName', 'status', 'principalCode', 'coordinatorCount', 'teacherCount', 'studentCount', 'classSections', 'createdAt', 'updatedAt'])
         && isValidId(data.code)
         && isValidId(data.schoolId)
         && isShortString(data.schoolName, 2, 140)
-        && data.status in ['active', 'trial', 'suspended', 'archived'];
+        && data.status in ['active', 'trial', 'suspended', 'archived']
+        && isOptString(data, 'principalCode', 32)
+        && isBoundedList(data, 'classSections', 200);
     }
 
     function isValidEmailDirectoryEntry(data) {
@@ -592,11 +597,12 @@ service cloud.firestore {
 
     function isValidSchoolJoinRequest(data) {
       return data.keys().hasAll(['id', 'applicationNumber', 'schoolId', 'schoolCode', 'schoolName', 'applicantUid', 'applicantEmail', 'applicantName', 'requestedRole', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'applicationNumber', 'schoolId', 'schoolCode', 'schoolName', 'applicantUid', 'applicantEmail', 'applicantName', 'phone', 'requestedRole', 'requestedClassInfo', 'note', 'status', 'decisionNote', 'reviewedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'applicationNumber', 'schoolId', 'schoolCode', 'accessCode', 'schoolName', 'applicantUid', 'applicantEmail', 'applicantName', 'phone', 'requestedRole', 'requestedClassId', 'requestedSection', 'requestedClassInfo', 'note', 'status', 'decisionNote', 'reviewedBy', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isValidId(data.applicationNumber)
         && isValidId(data.schoolId)
         && isValidId(data.schoolCode)
+        && isOptString(data, 'accessCode', 32)
         && isShortString(data.schoolName, 2, 140)
         && isValidId(data.applicantUid)
         && isShortString(data.applicantEmail, 3, 160)
@@ -604,6 +610,8 @@ service cloud.firestore {
         && data.requestedRole in ['coordinator', 'teacher', 'student']
         && data.status in ['pending', 'approved', 'rejected']
         && isOptString(data, 'phone', 32)
+        && isOptString(data, 'requestedClassId', 128)
+        && isOptString(data, 'requestedSection', 32)
         && isOptString(data, 'requestedClassInfo', 120)
         && isOptString(data, 'note', 500)
         && isOptString(data, 'decisionNote', 500)
@@ -660,7 +668,7 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           isMainHead() ||
-          (isPrincipalOf(schoolId) && incoming().diff(existing()).affectedKeys().hasOnly(['address', 'email', 'phone', 'academicYear', 'settings', 'teacherCount', 'studentCount', 'logoDataUrl', 'setupCompleted', 'updatedAt']))
+          (isPrincipalOf(schoolId) && incoming().diff(existing()).affectedKeys().hasOnly(['address', 'email', 'phone', 'academicYear', 'settings', 'coordinatorCount', 'teacherCount', 'studentCount', 'allocatedCoordinators', 'allocatedTeachers', 'allocatedStudents', 'logoDataUrl', 'setupCompleted', 'updatedAt']))
         );
       allow delete: if isValidId(schoolId) && isMainHead();
     }
@@ -950,10 +958,19 @@ service cloud.firestore {
     }
 
     match /schoolApplications/{applicationId} {
-      allow get: if isValidId(applicationId) && isMainHead();
-      allow list: if isBootstrappedMainHead() || (isSignedIn() && userDocExists() && userDoc().role == 'main_head');
-      allow create: if isValidId(applicationId) && isValidSchoolApplication(incoming())
+      allow get: if isValidId(applicationId) && isSignedIn() && (
+        isMainHead() ||
+        ('applicantUid' in existing() && existing().applicantUid == request.auth.uid)
+      );
+      allow list: if isBootstrappedMainHead() || (
+        isSignedIn() && (
+          ('applicantUid' in existing() && existing().applicantUid == request.auth.uid) ||
+          (userDocExists() && userDoc().role == 'main_head')
+        )
+      );
+      allow create: if isValidId(applicationId) && isSignedIn() && isValidSchoolApplication(incoming())
         && incoming().id == applicationId
+        && incoming().applicantUid == request.auth.uid
         && incoming().status == 'submitted'
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
@@ -968,7 +985,7 @@ service cloud.firestore {
     match /applicationStatuses/{applicationNumber} {
       allow get: if isValidId(applicationNumber);
       allow list: if false;
-      allow create: if isValidId(applicationNumber) && isValidApplicationStatus(incoming())
+      allow create: if isValidId(applicationNumber) && isSignedIn() && isValidApplicationStatus(incoming())
         && incoming().applicationNumber == applicationNumber
         && incoming().status in ['submitted', 'pending']
         && incoming().createdAt == request.time
@@ -993,11 +1010,15 @@ service cloud.firestore {
         && incoming().code == code
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isValidId(code) && isMainHead() && isValidSchoolCodeEntry(incoming())
+      allow update: if isValidId(code) && isSignedIn() && isValidSchoolCodeEntry(incoming())
         && incoming().code == existing().code
         && incoming().schoolId == existing().schoolId
         && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time;
+        && incoming().updatedAt == request.time
+        && (
+          isMainHead() ||
+          (isPrincipalOf(existing().schoolId) && incoming().diff(existing()).affectedKeys().hasOnly(['coordinatorCount', 'teacherCount', 'studentCount', 'classSections', 'updatedAt']))
+        );
       allow delete: if isValidId(code) && isMainHead();
     }
 

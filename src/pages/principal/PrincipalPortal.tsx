@@ -50,9 +50,11 @@ import {
 import { NotificationsAndPreferencesView } from '../../components/shared/NotificationsAndPreferencesView';
 import { ProfileSecurityView } from '../../components/shared/ProfileSecurityView';
 import { upsertEmailDirectoryEntry } from '../../lib/schoolProvisioning';
+import { formatPrincipalCode, sanitizePhoneDigits } from '../../lib/schoolCodes';
 import {
   PrincipalSetupWizardView,
   PrincipalJoinRequestsView,
+  PrincipalAccessCodesView,
 } from './PrincipalOnboardingViews';
 import {
   PrincipalStudentsView,
@@ -72,6 +74,7 @@ import type { CoordinatorPermissions, PlatformUser, School, TeacherProfile } fro
 const PRINCIPAL_NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', path: '/principal/dashboard', icon: LayoutDashboard },
   { id: 'setup', label: 'Campus Setup Wizard', path: '/principal/setup', icon: Sparkles },
+  { id: 'access-codes', label: 'Access Codes', path: '/principal/access-codes', icon: KeyRound },
   { id: 'join-requests', label: 'Join Requests', path: '/principal/join-requests', icon: UserPlus },
   { id: 'coordinators', label: 'Coordinators', path: '/principal/coordinators', icon: UserCog },
   { id: 'teachers', label: 'Teachers', path: '/principal/teachers', icon: Users },
@@ -115,6 +118,17 @@ export default function PrincipalPortal() {
               school={activeSchool}
               existingClasses={data.classes}
               existingRooms={data.rooms}
+              actor={activeUser}
+              canWrite={access.canWrite}
+            />
+          }
+        />
+        <Route
+          path="access-codes"
+          element={
+            <PrincipalAccessCodesView
+              school={activeSchool}
+              classes={data.classes}
               actor={activeUser}
               canWrite={access.canWrite}
             />
@@ -338,26 +352,29 @@ function PrincipalOverview({
               {needsSetup ? 'Complete Post-Approval Campus Setup' : 'Active Campus School Code'}
             </p>
             <div className="flex flex-wrap items-center gap-2.5 mt-1">
-              <span className="font-mono text-base font-bold text-[#0B1528]">{school.code}</span>
+              <span className="font-mono text-base font-bold text-[#0B1528]">{formatPrincipalCode(school.code)}</span>
               <button
                 type="button"
                 onClick={() => {
-                  navigator.clipboard?.writeText(school.code);
+                  navigator.clipboard?.writeText(formatPrincipalCode(school.code));
                   setCopiedCode(true);
                   setTimeout(() => setCopiedCode(false), 1800);
                 }}
                 className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-800 cursor-pointer"
               >
                 {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                {copiedCode ? 'Copied' : 'Copy Code'}
+                {copiedCode ? 'Copied' : 'Copy Principal Code'}
               </button>
               <span className="text-slate-300">·</span>
               <span className="text-xs text-slate-500">
-                Share with staff & students to request access via /join-school
+                Prefix <strong className="font-mono text-slate-700">{school.code}</strong> · Role codes for Coordinators, Teachers &amp; Students
               </span>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" size="sm" onClick={() => navigate('/principal/access-codes')}>
+              <KeyRound className="w-3.5 h-3.5" /> Access Codes
+            </Button>
             <Button variant="secondary" size="sm" onClick={() => navigate('/principal/join-requests')}>
               <UserPlus className="w-3.5 h-3.5" /> Join Requests
             </Button>
@@ -680,8 +697,8 @@ function PrincipalCoordinatorsView({
               <input type="text" required value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Phone</label>
-              <input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
+              <label className="block text-xs font-medium text-slate-700 mb-1">Phone (Numbers only)</label>
+              <input type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={15} value={form.phone} onChange={(e) => setForm({ ...form, phone: sanitizePhoneDigits(e.target.value) })} placeholder="9876543210" className="w-full px-3 py-2 text-sm tabular-nums border border-slate-300 rounded-lg" />
             </div>
           </div>
           {!editing && (
@@ -1032,8 +1049,8 @@ function PrincipalTeachersView({
               <input type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Phone</label>
-              <input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
+              <label className="block text-xs font-medium text-slate-700 mb-1">Phone (Numbers only)</label>
+              <input type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={15} value={form.phone} onChange={(e) => setForm({ ...form, phone: sanitizePhoneDigits(e.target.value) })} placeholder="9876543210" className="w-full px-3 py-2 text-sm tabular-nums border border-slate-300 rounded-lg" />
             </div>
           </div>
           <div className="grid sm:grid-cols-3 gap-3">

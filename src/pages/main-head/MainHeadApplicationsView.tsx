@@ -13,6 +13,13 @@ import {
 import { doc, getDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { db, formatFirestoreDateTime } from '../../lib/firebase';
 import { provisionSchoolTenant } from '../../lib/schoolProvisioning';
+import {
+  countTotalClassSections,
+  deriveSchoolPrefix,
+  formatClassSectionPlanSummary,
+  formatPrincipalCode,
+  formatRoleCodeRange,
+} from '../../lib/schoolCodes';
 import { recordAuditLog } from '../../lib/audit';
 import {
   Button,
@@ -215,6 +222,7 @@ export function MainHeadApplicationsView({
 
       const result = await provisionSchoolTenant({
         schoolName: selectedApp.schoolName,
+        schoolPrefix: selectedApp.schoolPrefix,
         academicYear: selectedApp.academicYear || '2026-2027',
         address: fullAddress,
         schoolEmail: selectedApp.schoolEmail,
@@ -224,6 +232,10 @@ export function MainHeadApplicationsView({
         logoDataUrl: selectedApp.logoDataUrl,
         principalName: selectedApp.principalName,
         principalEmail: selectedApp.principalEmail,
+        classSectionPlan: selectedApp.classSectionPlan,
+        estimatedCoordinators: selectedApp.estimatedCoordinators,
+        estimatedTeachers: selectedApp.estimatedTeachers,
+        estimatedStudents: selectedApp.estimatedStudents,
         plan: chosenPlan,
         source: 'public_application',
         actorUid: actor.uid,
@@ -234,7 +246,7 @@ export function MainHeadApplicationsView({
 
       pushToast(
         'success',
-        `Approved ${selectedApp.schoolName}. Auto-issued School Code ${result.schoolCode} & bound Principal email.`,
+        `Approved ${selectedApp.schoolName}. Issued Prefix ${result.schoolCode} (${result.principalCode}) & created ${result.provisionedClassCount} class-sections.`,
       );
       setSelectedApp(null);
     } catch (err) {
@@ -333,7 +345,7 @@ export function MainHeadApplicationsView({
                   <td className="py-3 px-4 text-xs">
                     <p className="font-medium text-teal-700">Free Unlimited Campus</p>
                     <p className="text-slate-500 tabular-nums">
-                      {app.estimatedStudents} students · {app.estimatedTeachers} teachers
+                      {app.estimatedCoordinators ?? 0} coord · {app.estimatedTeachers} teachers · {app.estimatedStudents} students
                     </p>
                   </td>
                   <td className="py-3 px-4">
@@ -457,11 +469,28 @@ export function MainHeadApplicationsView({
               </div>
 
               <div className="p-4 rounded-xl border border-slate-200 space-y-1.5">
-                <p className="font-semibold text-slate-900">Academic Scope</p>
-                <p className="text-slate-600">Classes Offered: {selectedApp.classesOffered || 'Not specified'}</p>
-                <p className="text-slate-600 tabular-nums">
-                  Estimated: {selectedApp.estimatedStudents || 0} students · {selectedApp.estimatedTeachers || 0} teachers
+                <p className="font-semibold text-slate-900">Academic Scope &amp; Role Access Codes</p>
+                <p className="text-slate-600">
+                  Classes:{' '}
+                  {selectedApp.classSectionPlan && selectedApp.classSectionPlan.length > 0
+                    ? `${formatClassSectionPlanSummary(selectedApp.classSectionPlan)} (${countTotalClassSections(selectedApp.classSectionPlan)} sections)`
+                    : selectedApp.classesOffered || 'Not specified'}
                 </p>
+                <p className="text-slate-600 tabular-nums">
+                  Allocated: {selectedApp.estimatedCoordinators ?? 6} coordinators · {selectedApp.estimatedTeachers || 0}{' '}
+                  teachers · {selectedApp.estimatedStudents || 0} students
+                </p>
+                {(() => {
+                  const pfx = selectedApp.approvedSchoolCode || selectedApp.schoolPrefix || deriveSchoolPrefix(selectedApp.schoolName);
+                  return (
+                    <div className="pt-1.5 mt-1.5 border-t border-slate-100 font-mono text-[11px] text-teal-800 space-y-0.5">
+                      <p>Principal: {formatPrincipalCode(pfx)}</p>
+                      <p>Coordinators: {formatRoleCodeRange(pfx, 'coordinator', selectedApp.estimatedCoordinators ?? 6)}</p>
+                      <p>Teachers: {formatRoleCodeRange(pfx, 'teacher', selectedApp.estimatedTeachers || 20)}</p>
+                      <p>Students: {formatRoleCodeRange(pfx, 'student', selectedApp.estimatedStudents || 100)}</p>
+                    </div>
+                  );
+                })()}
                 <p className="text-slate-600">Medium: {selectedApp.mediumOfInstruction || 'English'}</p>
                 <p className="text-slate-600">
                   Recognition / Affiliation Code: {selectedApp.externalRecognitionCode || 'None provided'}

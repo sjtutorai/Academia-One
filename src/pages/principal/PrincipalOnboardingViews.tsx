@@ -5,9 +5,13 @@ import {
   CheckCircle2,
   Copy,
   DoorOpen,
+  Download,
   GraduationCap,
+  KeyRound,
   Layers,
   Plus,
+  RefreshCw,
+  Search,
   Sparkles,
   Trash2,
   UserCheck,
@@ -19,6 +23,7 @@ import {
   doc,
   onSnapshot,
   query,
+  setDoc,
   updateDoc,
   where,
   writeBatch,
@@ -26,11 +31,25 @@ import {
 } from 'firebase/firestore';
 import { db, generateId, formatFirestoreDateTime } from '../../lib/firebase';
 import { emailToKey, upsertEmailDirectoryEntry } from '../../lib/schoolProvisioning';
+import { exportToCsv } from '../../lib/csv';
+import {
+  SECTION_LETTERS,
+  STANDARD_CLASSES,
+  expandSectionRange,
+  formatMemberRoleCode,
+  formatPrincipalCode,
+  formatRoleCodeRange,
+  formatSectionRangeLabel,
+  resolveCoordinatorClassesForIndex,
+  resolveStudentClassForIndex,
+  sanitizePhoneDigits,
+} from '../../lib/schoolCodes';
 import { recordAuditLog } from '../../lib/audit';
 import {
   Button,
   EmptyState,
   Modal,
+  PaginationBar,
   StatCard,
   StatusText,
   useToast,
@@ -42,13 +61,16 @@ import type {
   Room,
   School,
   SchoolClass,
+  SchoolCodeClassSlot,
+  SchoolCodeEntry,
   SchoolJoinRequest,
 } from '../../types/models';
 
 interface ClassDraft {
   id: string;
   gradeLevel: string;
-  sectionsCsv: string;
+  sectionFrom: string;
+  sectionTo: string;
   capacity: number;
 }
 
@@ -84,10 +106,10 @@ export function PrincipalSetupWizardView({
   const [campusAddress, setCampusAddress] = useState(school?.address || '');
   const [savingAddress, setSavingAddress] = useState(false);
 
-  // Step 2: Classes & Separate Sections Builder
+  // Step 2: Classes & Section Ranges Builder (Choose-not-write)
   const [classDrafts, setClassDrafts] = useState<ClassDraft[]>([
-    { id: 'cd_1', gradeLevel: '9', sectionsCsv: 'A, B', capacity: 35 },
-    { id: 'cd_2', gradeLevel: '10', sectionsCsv: 'A, B, C', capacity: 35 },
+    { id: 'cd_1', gradeLevel: 'Class 1', sectionFrom: 'A', sectionTo: 'G', capacity: 35 },
+    { id: 'cd_2', gradeLevel: 'Class 2', sectionFrom: 'A', sectionTo: 'H', capacity: 35 },
   ]);
 
   // Step 3: Campus & Examination Rooms Builder
@@ -149,13 +171,10 @@ export function PrincipalSetupWizardView({
     }
   };
 
-  const generatedSectionsCount = classDrafts.reduce((acc, row) => {
-    const secs = row.sectionsCsv
-      .split(',')
-      .map((s) => s.trim().toUpperCase())
-      .filter(Boolean);
-    return acc + secs.length;
-  }, 0);
+  const generatedSectionsCount = classDrafts.reduce(
+    (acc, row) => acc + expandSectionRange(row.sectionFrom, row.sectionTo).length,
+    0,
+  );
 
   const handleSaveClassesAndSections = async () => {
     if (!canWrite) return;
@@ -163,53 +182,107 @@ export function PrincipalSetupWizardView({
     for (const draft of classDrafts) {
       const grade = draft.gradeLevel.trim();
       if (!grade) continue;
-      const sections = draft.sectionsCsv
-        .split(',')
-        .map((s) => s.trim().toUpperCase())
-        .filter(Boolean);
+      const sections = expandSectionRange(draft.sectionFrom, draft.sectionTo);
       for (const sec of sections) {
         rowsToCreate.push({ grade, section: sec, capacity: Math.max(5, Number(draft.capacity) || 35) });
       }
     }
     if (rowsToCreate.length === 0) {
-      pushToast('error', 'Add at least one class with one or more sections.');
+      pushToast('error', 'Choose at least one class with a section range.');
       return;
     }
 
     setSaving(true);
     try {
-      const batch = writeBatch(db);
       const now = serverTimestamp();
       let created = 0;
+      const newlyAddedSlots: SchoolCodeClassSlot[] = [];
+
+      const toInsert: {
+        id: string;
+        code: string;
+        name: string;
+        gradeLevel: string;
+        section: string;
+        capacity: number;
+      }[] = [];
 
       for (const item of rowsToCreate) {
-        const code = `G${item.grade.replace(/[^A-Z0-9]/gi, '')}${item.section}`.toUpperCase().slice(0, 16);
-        const alreadyExists = existingClasses.some((c) => c.code.toUpperCase() === code);
+        const shortGrade = item.grade
+          .replace(/^Class\s+/i, '')
+          .replace(/^Grade\s+/i, '')
+          .replace(/[^A-Z0-9]/gi, '')
+          .toUpperCase();
+        const code = `C${shortGrade}${item.section}`.slice(0, 16);
+        const alreadyExists = existingClasses.some(
+          (c) =>
+            c.code.toUpperCase() === code ||
+            (c.gradeLevel.toLowerCase() === item.grade.toLowerCase() &&
+              c.section.toUpperCase() === item.section.toUpperCase()),
+        );
         if (alreadyExists) continue;
         const id = generateId('cls');
-        batch.set(doc(db, 'classes', id), {
+        const name = `${item.grade} - Section ${item.section}`;
+        toInsert.push({
           id,
-          schoolId: school.id,
-          name: `Grade ${item.grade} - Section ${item.section}`,
+          code,
+          name,
           gradeLevel: item.grade,
           section: item.section,
-          code,
-          academicYear: school.academicYear || '2026-2027',
           capacity: item.capacity,
-          classTeacherId: '',
-          classTeacherName: '',
-          roomId: '',
-          roomName: '',
-          status: 'active',
-          createdBy: actor.uid,
-          createdAt: now,
-          updatedAt: now,
         });
-        created += 1;
+        newlyAddedSlots.push({
+          classId: id,
+          className: name,
+          gradeLevel: item.grade,
+          section: item.section,
+        });
       }
 
-      if (created > 0) {
-        await batch.commit();
+      if (toInsert.length > 0) {
+        const CHUNK_SIZE = 350;
+        for (let i = 0; i < toInsert.length; i += CHUNK_SIZE) {
+          const chunk = toInsert.slice(i, i + CHUNK_SIZE);
+          const batch = writeBatch(db);
+          for (const cls of chunk) {
+            batch.set(doc(db, 'classes', cls.id), {
+              id: cls.id,
+              schoolId: school.id,
+              name: cls.name,
+              gradeLevel: cls.gradeLevel,
+              section: cls.section,
+              code: cls.code,
+              academicYear: school.academicYear || '2026-2027',
+              capacity: cls.capacity,
+              classTeacherId: '',
+              classTeacherName: '',
+              roomId: '',
+              roomName: '',
+              status: 'active',
+              createdBy: actor.uid,
+              createdAt: now,
+              updatedAt: now,
+            });
+            created += 1;
+          }
+          await batch.commit();
+        }
+
+        // Sync merged classSections to schoolCodes/{school.code} so student access codes map cleanly
+        const mergedSlots: SchoolCodeClassSlot[] = [
+          ...existingClasses.map((c) => ({
+            classId: c.id,
+            className: c.name,
+            gradeLevel: c.gradeLevel,
+            section: c.section,
+          })),
+          ...newlyAddedSlots,
+        ].slice(0, 200);
+        await updateDoc(doc(db, 'schoolCodes', school.code), {
+          classSections: mergedSlots,
+          updatedAt: serverTimestamp(),
+        }).catch(() => undefined);
+
         await recordAuditLog({
           schoolId: school.id,
           actorUid: actor.uid,
@@ -220,9 +293,9 @@ export function PrincipalSetupWizardView({
           targetId: school.id,
           targetLabel: `${created} class sections configured`,
         }).catch(() => undefined);
-        pushToast('success', `Created ${created} separate class section${created > 1 ? 's' : ''}.`);
+        pushToast('success', `Created ${created} separate class section${created > 1 ? 's' : ''} and synced access codes.`);
       } else {
-        pushToast('info', 'All specified class sections already exist.');
+        pushToast('info', 'All selected class sections already exist.');
       }
       setStep(3);
     } catch (err) {
@@ -609,85 +682,139 @@ export function PrincipalSetupWizardView({
         </div>
       )}
 
-      {/* Step 2: Classes & Separate Sections */}
+      {/* Step 2: Choose Classes & Section Ranges (Dropdowns only) */}
       {step === 2 && (
         <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-bold font-display text-slate-900">
-                Step 2 — Add Classes & Separate Sections per Class
+                Step 2 — Choose Classes &amp; Section Ranges
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Enter comma-separated sections for each grade (e.g., <span className="font-mono">A, B, C</span>) to generate
-                separate sections automatically ({generatedSectionsCount} sections staged).
+                Pick each class and choose its section range (e.g., Class 1 Section: A–G, Class 2 Section: A–H).{' '}
+                <strong className="text-teal-700 tabular-nums">{generatedSectionsCount} sections staged</strong>.
               </p>
             </div>
             <Button
               variant="secondary"
               size="sm"
-              onClick={() =>
+              onClick={() => {
+                const used = new Set(classDrafts.map((r) => r.gradeLevel));
+                const nextGrade = STANDARD_CLASSES.find((g) => !used.has(g)) || 'Class 3';
                 setClassDrafts((prev) => [
                   ...prev,
-                  { id: `cd_${Date.now()}`, gradeLevel: String(prev.length + 1), sectionsCsv: 'A, B', capacity: 35 },
-                ])
-              }
+                  { id: `cd_${Date.now()}`, gradeLevel: nextGrade, sectionFrom: 'A', sectionTo: 'D', capacity: 35 },
+                ]);
+              }}
             >
               <Plus className="w-3.5 h-3.5" /> Add Class Row
             </Button>
           </div>
 
           <div className="space-y-2.5">
-            {classDrafts.map((row) => (
-              <div key={row.id} className="grid grid-cols-12 gap-3 items-end p-3 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="col-span-3">
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1">Class / Grade</label>
-                  <input
-                    value={row.gradeLevel}
-                    onChange={(e) =>
-                      setClassDrafts((prev) => prev.map((r) => (r.id === row.id ? { ...r, gradeLevel: e.target.value } : r)))
-                    }
-                    placeholder="e.g., 10"
-                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
-                  />
+            {classDrafts.map((row) => {
+              const rangeCount = expandSectionRange(row.sectionFrom, row.sectionTo).length;
+              return (
+                <div
+                  key={row.id}
+                  className="grid grid-cols-12 gap-3 items-end p-3 rounded-lg bg-slate-50 border border-slate-200"
+                >
+                  <div className="col-span-12 sm:col-span-3">
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">Class</label>
+                    <select
+                      value={row.gradeLevel}
+                      onChange={(e) =>
+                        setClassDrafts((prev) =>
+                          prev.map((r) => (r.id === row.id ? { ...r, gradeLevel: e.target.value } : r)),
+                        )
+                      }
+                      className="w-full px-3 py-2 text-xs font-semibold bg-white border border-slate-300 rounded-lg"
+                    >
+                      {STANDARD_CLASSES.map((g) => (
+                        <option key={g} value={g}>
+                          {g}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="col-span-6 sm:col-span-2">
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">Section From</label>
+                    <select
+                      value={row.sectionFrom}
+                      onChange={(e) => {
+                        const fromVal = e.target.value;
+                        setClassDrafts((prev) =>
+                          prev.map((r) =>
+                            r.id === row.id
+                              ? { ...r, sectionFrom: fromVal, sectionTo: fromVal > r.sectionTo ? fromVal : r.sectionTo }
+                              : r,
+                          ),
+                        );
+                      }}
+                      className="w-full px-3 py-2 text-xs font-mono bg-white border border-slate-300 rounded-lg"
+                    >
+                      {SECTION_LETTERS.map((l) => (
+                        <option key={l} value={l}>
+                          {l}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="col-span-6 sm:col-span-2">
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">Section To</label>
+                    <select
+                      value={row.sectionTo}
+                      onChange={(e) => {
+                        const toVal = e.target.value;
+                        setClassDrafts((prev) =>
+                          prev.map((r) =>
+                            r.id === row.id
+                              ? { ...r, sectionFrom: toVal < r.sectionFrom ? toVal : r.sectionFrom, sectionTo: toVal }
+                              : r,
+                          ),
+                        );
+                      }}
+                      className="w-full px-3 py-2 text-xs font-mono bg-white border border-slate-300 rounded-lg"
+                    >
+                      {SECTION_LETTERS.map((l) => (
+                        <option key={l} value={l}>
+                          {l}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="col-span-6 sm:col-span-2">
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">Seats / Sec</label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={120}
+                      value={row.capacity}
+                      onChange={(e) =>
+                        setClassDrafts((prev) =>
+                          prev.map((r) => (r.id === row.id ? { ...r, capacity: Number(e.target.value) || 35 } : r)),
+                        )
+                      }
+                      className="w-full px-3 py-2 text-xs tabular-nums bg-white border border-slate-300 rounded-lg"
+                    />
+                  </div>
+                  <div className="col-span-4 sm:col-span-2 pb-2 text-xs font-medium text-teal-800 tabular-nums">
+                    {formatSectionRangeLabel(row.sectionFrom, row.sectionTo)} ({rangeCount})
+                  </div>
+                  <div className="col-span-2 sm:col-span-1 flex justify-end">
+                    <button
+                      type="button"
+                      disabled={classDrafts.length <= 1}
+                      onClick={() => setClassDrafts((prev) => prev.filter((r) => r.id !== row.id))}
+                      className="p-2 text-slate-400 hover:text-red-600 disabled:opacity-30 cursor-pointer"
+                      aria-label="Remove class row"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-                <div className="col-span-5">
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1">Separate Sections (comma-separated)</label>
-                  <input
-                    value={row.sectionsCsv}
-                    onChange={(e) =>
-                      setClassDrafts((prev) => prev.map((r) => (r.id === row.id ? { ...r, sectionsCsv: e.target.value } : r)))
-                    }
-                    placeholder="A, B, C"
-                    className="w-full px-3 py-2 text-xs font-mono bg-white border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div className="col-span-3">
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1">Seats / Section</label>
-                  <input
-                    type="number"
-                    min={5}
-                    max={120}
-                    value={row.capacity}
-                    onChange={(e) =>
-                      setClassDrafts((prev) =>
-                        prev.map((r) => (r.id === row.id ? { ...r, capacity: Number(e.target.value) || 35 } : r)),
-                      )
-                    }
-                    className="w-full px-3 py-2 text-xs tabular-nums bg-white border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div className="col-span-1 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setClassDrafts((prev) => prev.filter((r) => r.id !== row.id))}
-                    className="p-2 text-slate-400 hover:text-red-600 cursor-pointer"
-                    aria-label="Remove class row"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="flex items-center justify-between pt-3 border-t border-slate-200">
@@ -995,10 +1122,16 @@ export function PrincipalJoinRequestsView({
 
   const openApproveModal = (req: SchoolJoinRequest) => {
     setApprovingReq(req);
-    setAssignClassId(classes[0]?.id || '');
-    setAdmissionNo(`${school?.code || 'SCH'}-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 899)}`);
-    setRollNo(String(Math.floor(1 + Math.random() * 40)).padStart(2, '0'));
-    setStaffId(`STF-${Math.floor(100 + Math.random() * 899)}`);
+    const matchedClass =
+      (req.requestedClassId && classes.find((c) => c.id === req.requestedClassId)) || classes[0];
+    setAssignClassId(matchedClass?.id || '');
+    setAdmissionNo(
+      req.accessCode ||
+        `${school?.code || 'SCH'}-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 899)}`,
+    );
+    const rollMatch = /Roll\s*#(\d+)/i.exec(req.requestedClassInfo || '');
+    setRollNo(rollMatch ? rollMatch[1] : String(Math.floor(1 + Math.random() * 40)).padStart(2, '0'));
+    setStaffId(req.accessCode || `STF-${Math.floor(100 + Math.random() * 899)}`);
     setSubjectsCsv(req.requestedClassInfo || '');
     setSelectedClassIds(classes.slice(0, 2).map((c) => c.id));
     setDecisionNote('');
@@ -1208,6 +1341,12 @@ export function PrincipalJoinRequestsView({
                   <StatusText status={req.status} />
                   <span className="text-slate-300">·</span>
                   <span className="font-semibold text-teal-800 capitalize">{req.requestedRole}</span>
+                  {req.accessCode && (
+                    <>
+                      <span className="text-slate-300">·</span>
+                      <span className="font-mono font-bold text-[#0B1528]">{req.accessCode}</span>
+                    </>
+                  )}
                   <span className="text-slate-300">·</span>
                   <span className="font-mono text-slate-500">{req.applicationNumber}</span>
                   <span className="text-slate-300">·</span>
@@ -1218,9 +1357,12 @@ export function PrincipalJoinRequestsView({
                   {req.applicantEmail} {req.phone ? `· ${req.phone}` : ''}
                 </p>
                 {req.requestedClassInfo && (
-                  <p className="text-xs text-slate-600">Requested Class / Subject: {req.requestedClassInfo}</p>
+                  <p className="text-xs text-slate-600">
+                    {req.requestedClassId ? 'Auto-Identified Class: ' : 'Requested Class / Subject: '}
+                    <span className="font-medium text-slate-800">{req.requestedClassInfo}</span>
+                  </p>
                 )}
-                {req.note && <p className="text-xs text-slate-500 italic">"{req.note}"</p>}
+                {req.note && <p className="text-xs text-slate-500 italic">&ldquo;{req.note}&rdquo;</p>}
                 {req.decisionNote && <p className="text-xs text-slate-700 pt-1">Decision: {req.decisionNote}</p>}
               </div>
 
@@ -1449,3 +1591,412 @@ export function PrincipalJoinRequestsView({
     </div>
   );
 }
+
+// ============================================================================
+// Principal Role-Based Access Codes Directory (/principal/access-codes)
+// ============================================================================
+interface GeneratedCodeRow {
+  code: string;
+  role: 'principal' | 'coordinator' | 'teacher' | 'student';
+  slotNumber: number;
+  classLabel: string;
+  classId: string;
+  rollNumber: string;
+}
+
+export function PrincipalAccessCodesView({
+  school,
+  classes,
+  actor,
+  canWrite,
+}: {
+  school: School | null;
+  classes: SchoolClass[];
+  actor: PlatformUser;
+  canWrite: boolean;
+}) {
+  const { pushToast } = useToast();
+  const [codeDoc, setCodeDoc] = useState<SchoolCodeEntry | null>(null);
+  const [roleTab, setRoleTab] = useState<'all' | 'principal' | 'coordinator' | 'teacher' | 'student'>('all');
+  const [classFilter, setClassFilter] = useState('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [page, setPage] = useState(1);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+
+  // Editable allocation counts
+  const [coordInput, setCoordInput] = useState(String(school?.allocatedCoordinators ?? 6));
+  const [teacherInput, setTeacherInput] = useState(String(school?.allocatedTeachers ?? 20));
+  const [studentInput, setStudentInput] = useState(String(school?.allocatedStudents ?? 100));
+  const [savingAlloc, setSavingAlloc] = useState(false);
+
+  useEffect(() => {
+    if (!school?.code) return;
+    const unsub = onSnapshot(
+      doc(db, 'schoolCodes', school.code),
+      (snap) => {
+        if (snap.exists()) {
+          const entry = snap.data() as SchoolCodeEntry;
+          setCodeDoc(entry);
+          setCoordInput(String(entry.coordinatorCount ?? school.allocatedCoordinators ?? 6));
+          setTeacherInput(String(entry.teacherCount ?? school.allocatedTeachers ?? 20));
+          setStudentInput(String(entry.studentCount ?? school.allocatedStudents ?? 100));
+        }
+      },
+      () => undefined,
+    );
+    return () => unsub();
+  }, [school?.code, school?.allocatedCoordinators, school?.allocatedTeachers, school?.allocatedStudents]);
+
+  const prefix = school?.code || 'SCH';
+  const coordCount = codeDoc?.coordinatorCount ?? school?.allocatedCoordinators ?? 6;
+  const teacherCount = codeDoc?.teacherCount ?? school?.allocatedTeachers ?? 20;
+  const studentCount = codeDoc?.studentCount ?? school?.allocatedStudents ?? 100;
+
+  const classSlots: SchoolCodeClassSlot[] = useMemo(() => {
+    if (classes.length > 0) {
+      return classes.slice(0, 200).map((c) => ({
+        classId: c.id,
+        className: c.name,
+        gradeLevel: c.gradeLevel,
+        section: c.section,
+      }));
+    }
+    return codeDoc?.classSections || [];
+  }, [classes, codeDoc?.classSections]);
+
+  const allCodes: GeneratedCodeRow[] = useMemo(() => {
+    const rows: GeneratedCodeRow[] = [
+      {
+        code: formatPrincipalCode(prefix),
+        role: 'principal',
+        slotNumber: 1,
+        classLabel: 'All Classes & Campus Admin',
+        classId: '',
+        rollNumber: '—',
+      },
+    ];
+
+    const safeCoords = Math.min(coordCount, 500);
+    for (let i = 1; i <= safeCoords; i++) {
+      const assigned = resolveCoordinatorClassesForIndex(classSlots, i, coordCount);
+      const gradeSet = Array.from(new Set(assigned.map((s) => s.gradeLevel)));
+      rows.push({
+        code: formatMemberRoleCode(prefix, 'coordinator', i, coordCount),
+        role: 'coordinator',
+        slotNumber: i,
+        classLabel: gradeSet.length > 0 ? `${gradeSet.join(', ')} (${assigned.length} sec)` : 'School-wide',
+        classId: '',
+        rollNumber: '—',
+      });
+    }
+
+    const safeTeachers = Math.min(teacherCount, 1000);
+    for (let i = 1; i <= safeTeachers; i++) {
+      rows.push({
+        code: formatMemberRoleCode(prefix, 'teacher', i, teacherCount),
+        role: 'teacher',
+        slotNumber: i,
+        classLabel: 'Assigned on Approval',
+        classId: '',
+        rollNumber: '—',
+      });
+    }
+
+    const safeStudents = Math.min(studentCount, 5000);
+    for (let i = 1; i <= safeStudents; i++) {
+      const { slot, rollNumber } = resolveStudentClassForIndex(classSlots, i, studentCount);
+      rows.push({
+        code: formatMemberRoleCode(prefix, 'student', i, studentCount),
+        role: 'student',
+        slotNumber: i,
+        classLabel: slot ? slot.className : 'Unassigned',
+        classId: slot?.classId || '',
+        rollNumber: `#${rollNumber}`,
+      });
+    }
+
+    return rows;
+  }, [prefix, coordCount, teacherCount, studentCount, classSlots]);
+
+  const filtered = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    return allCodes.filter((row) => {
+      if (roleTab !== 'all' && row.role !== roleTab) return false;
+      if (classFilter !== 'all' && row.role === 'student' && row.classId !== classFilter) return false;
+      if (classFilter !== 'all' && row.role !== 'student') return false;
+      if (q && !`${row.code} ${row.role} ${row.classLabel} ${row.rollNumber}`.toLowerCase().includes(q)) {
+        return false;
+      }
+      return true;
+    });
+  }, [allCodes, roleTab, classFilter, searchTerm]);
+
+  const pageSize = 50;
+  const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+  const handleSaveAllocations = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!school || !canWrite) return;
+    const nextCoords = Math.max(0, Math.min(5000, Number(coordInput) || 0));
+    const nextTeachers = Math.max(0, Math.min(20000, Number(teacherInput) || 0));
+    const nextStudents = Math.max(0, Math.min(100000, Number(studentInput) || 0));
+
+    setSavingAlloc(true);
+    try {
+      const now = serverTimestamp();
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'schools', school.id), {
+        allocatedCoordinators: nextCoords,
+        allocatedTeachers: nextTeachers,
+        allocatedStudents: nextStudents,
+        updatedAt: now,
+      });
+
+      if (codeDoc) {
+        batch.update(doc(db, 'schoolCodes', school.code), {
+          coordinatorCount: nextCoords,
+          teacherCount: nextTeachers,
+          studentCount: nextStudents,
+          classSections: classSlots.slice(0, 200),
+          updatedAt: now,
+        });
+      } else {
+        await setDoc(doc(db, 'schoolCodes', school.code), {
+          code: school.code,
+          schoolId: school.id,
+          schoolName: school.name,
+          status: school.status,
+          principalCode: formatPrincipalCode(school.code),
+          coordinatorCount: nextCoords,
+          teacherCount: nextTeachers,
+          studentCount: nextStudents,
+          classSections: classSlots.slice(0, 200),
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      await batch.commit();
+      await recordAuditLog({
+        schoolId: school.id,
+        actorUid: actor.uid,
+        actorName: actor.displayName,
+        actorRole: actor.role,
+        action: 'UPDATE_ACCESS_CODE_ALLOCATIONS',
+        targetType: 'schoolCodes',
+        targetId: school.code,
+        targetLabel: `Coord:${nextCoords}, Teacher:${nextTeachers}, Student:${nextStudents}`,
+      }).catch(() => undefined);
+      pushToast('success', 'Role access code counts & class mappings synced.');
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to update code allocations.');
+    } finally {
+      setSavingAlloc(false);
+    }
+  };
+
+  const handleExportCsv = () => {
+    exportToCsv(
+      `${prefix}_access_codes.csv`,
+      ['Access Code', 'Role', 'Slot #', 'School', 'Auto-Identified Class / Scope', 'Roll No'],
+      filtered.map((r) => [r.code, r.role, String(r.slotNumber), school?.name || '', r.classLabel, r.rollNumber]),
+    );
+    pushToast('success', `Exported ${filtered.length} access codes to CSV.`);
+  };
+
+  if (!school) return null;
+
+  return (
+    <div className="space-y-6">
+      {/* Top Role Code Summary Strip */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label="Principal Login Code" value={formatPrincipalCode(prefix)} tone="teal" subtext={`Prefix: ${prefix}`} />
+        <StatCard
+          label={`Coordinator Codes (${coordCount})`}
+          value={formatRoleCodeRange(prefix, 'coordinator', coordCount)}
+          subtext="Auto-identifies school & scope"
+        />
+        <StatCard
+          label={`Teacher Codes (${teacherCount})`}
+          value={formatRoleCodeRange(prefix, 'teacher', teacherCount)}
+          subtext="Faculty join identification"
+        />
+        <StatCard
+          label={`Student Codes (${studentCount})`}
+          value={formatRoleCodeRange(prefix, 'student', studentCount)}
+          subtext={`Mapped across ${classSlots.length} class-sections`}
+        />
+      </div>
+
+      {/* Allocation Update Form */}
+      <form
+        onSubmit={handleSaveAllocations}
+        className="bg-white border border-slate-200 rounded-xl p-5 flex flex-wrap items-end justify-between gap-4"
+      >
+        <div className="space-y-1 max-w-md">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-900">
+            <KeyRound className="w-4 h-4 text-teal-700" />
+            Manage Role Code Counts &amp; Class Sync
+          </div>
+          <p className="text-xs text-slate-500">
+            Update the number of Coordinators, Teachers, or Students anytime to expand or trim valid sequential codes
+            and refresh class-section assignments.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">Coordinators</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={coordInput}
+              onChange={(e) => setCoordInput(sanitizePhoneDigits(e.target.value, 4))}
+              className="w-24 px-3 py-2 text-xs tabular-nums border border-slate-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">Teachers</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={teacherInput}
+              onChange={(e) => setTeacherInput(sanitizePhoneDigits(e.target.value, 5))}
+              className="w-24 px-3 py-2 text-xs tabular-nums border border-slate-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">Students</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={studentInput}
+              onChange={(e) => setStudentInput(sanitizePhoneDigits(e.target.value, 6))}
+              className="w-28 px-3 py-2 text-xs tabular-nums border border-slate-300 rounded-lg"
+            />
+          </div>
+          <Button type="submit" variant="primary" size="sm" disabled={!canWrite || savingAlloc}>
+            <RefreshCw className={`w-3.5 h-3.5 ${savingAlloc ? 'animate-spin' : ''}`} />
+            {savingAlloc ? 'Syncing…' : 'Save & Sync Codes'}
+          </Button>
+        </div>
+      </form>
+
+      {/* Filter Toolbar & CSV Export */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {(['all', 'principal', 'coordinator', 'teacher', 'student'] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => {
+                setRoleTab(tab);
+                setPage(1);
+                if (tab !== 'student') setClassFilter('all');
+              }}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg capitalize cursor-pointer ${
+                roleTab === tab ? 'bg-[#0B1528] text-white' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {classSlots.length > 0 && (
+            <select
+              aria-label="Filter student codes by class"
+              value={classFilter}
+              onChange={(e) => {
+                setClassFilter(e.target.value);
+                if (e.target.value !== 'all') setRoleTab('student');
+                setPage(1);
+              }}
+              className="text-xs border border-slate-300 rounded-lg px-2.5 py-2 bg-white"
+            >
+              <option value="all">All Classes</option>
+              {classSlots.map((slot) => (
+                <option key={slot.classId} value={slot.classId}>
+                  {slot.className}
+                </option>
+              ))}
+            </select>
+          )}
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <input
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Search code or class…"
+              className="pl-8 pr-3 py-1.5 text-xs border border-slate-300 rounded-lg w-48 focus:outline-none focus:border-teal-600"
+            />
+          </div>
+          <Button variant="secondary" size="sm" onClick={handleExportCsv}>
+            <Download className="w-3.5 h-3.5" /> Export CSV
+          </Button>
+        </div>
+      </div>
+
+      {/* Directory Table */}
+      <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
+        <table className="w-full text-left border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
+              <th className="py-3 px-4 font-semibold">Access Code</th>
+              <th className="py-3 px-4 font-semibold">Role</th>
+              <th className="py-3 px-4 font-semibold">Auto-Identified Class / Scope</th>
+              <th className="py-3 px-4 font-semibold">Roll No.</th>
+              <th className="py-3 px-4 font-semibold text-right">Copy</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {paginated.map((row) => (
+              <tr key={`${row.role}-${row.code}`} className="hover:bg-slate-50/70">
+                <td className="py-2.5 px-4 font-mono text-xs font-bold text-[#0B1528] tabular-nums">{row.code}</td>
+                <td className="py-2.5 px-4 text-xs font-medium capitalize text-teal-800">{row.role}</td>
+                <td className="py-2.5 px-4 text-xs text-slate-700">{row.classLabel}</td>
+                <td className="py-2.5 px-4 text-xs font-mono text-slate-500 tabular-nums">{row.rollNumber}</td>
+                <td className="py-2.5 px-4 text-right">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(row.code);
+                      setCopiedCode(row.code);
+                      setTimeout(() => setCopiedCode(null), 1600);
+                    }}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900 cursor-pointer"
+                  >
+                    {copiedCode === row.code ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-600" /> Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" /> Copy
+                      </>
+                    )}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filtered.length > pageSize && (
+          <div className="p-3 border-t border-slate-100">
+            <PaginationBar
+              page={page}
+              totalPages={Math.max(1, Math.ceil(filtered.length / pageSize))}
+              totalItems={filtered.length}
+              onPageChange={setPage}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+

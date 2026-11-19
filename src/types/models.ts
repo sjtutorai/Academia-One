@@ -50,8 +50,12 @@ export interface School {
   subscriptionStatus: 'active' | 'trial' | 'grace_readonly' | 'expired';
   subscriptionStart?: string;
   subscriptionEnd?: string;
+  coordinatorCount?: number;
   teacherCount?: number;
   studentCount?: number;
+  allocatedCoordinators?: number;
+  allocatedTeachers?: number;
+  allocatedStudents?: number;
   settings?: {
     allowOnlineHomeworkSubmission?: boolean;
     attendanceEditWindowHours?: number;
@@ -464,6 +468,7 @@ export interface ApplicationActivityEntry {
 export interface SchoolApplication {
   id: string;
   applicationNumber: string;
+  applicantUid?: string;
   applicantName: string;
   applicantDesignation?: string;
   applicantEmail: string;
@@ -494,6 +499,9 @@ export interface SchoolApplication {
   address: string;
   campusAddress?: string;
   classesOffered?: string;
+  classSectionPlan?: ClassSectionRange[];
+  schoolPrefix?: string;
+  estimatedCoordinators?: number;
   estimatedStudents?: number;
   estimatedTeachers?: number;
   workingDaysSummary?: string;
@@ -533,11 +541,29 @@ export interface ApplicationStatusRecord {
   updatedAt?: unknown;
 }
 
+export interface ClassSectionRange {
+  grade: string;
+  sectionFrom: string;
+  sectionTo: string;
+}
+
+export interface SchoolCodeClassSlot {
+  classId: string;
+  className: string;
+  gradeLevel: string;
+  section: string;
+}
+
 export interface SchoolCodeEntry {
   code: string;
   schoolId: string;
   schoolName: string;
   status: SchoolStatus;
+  principalCode?: string;
+  coordinatorCount?: number;
+  teacherCount?: number;
+  studentCount?: number;
+  classSections?: SchoolCodeClassSlot[];
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -565,12 +591,15 @@ export interface SchoolJoinRequest {
   applicationNumber: string;
   schoolId: string;
   schoolCode: string;
+  accessCode?: string;
   schoolName: string;
   applicantUid: string;
   applicantEmail: string;
   applicantName: string;
   phone?: string;
   requestedRole: 'coordinator' | 'teacher' | 'student';
+  requestedClassId?: string;
+  requestedSection?: string;
   requestedClassInfo?: string;
   note?: string;
   status: 'pending' | 'approved' | 'rejected';

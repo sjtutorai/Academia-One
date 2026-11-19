@@ -4,6 +4,7 @@ import { sendEmailVerification } from 'firebase/auth';
 import { Lock, ShieldCheck, CheckCircle2, Mail } from 'lucide-react';
 import { auth, db, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { ROLE_LABELS, ROLE_PERMISSION_MATRIX } from '../../lib/permissions';
+import { isValidPhoneDigits, sanitizePhoneDigits } from '../../lib/schoolCodes';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button, StatusText, useToast } from '../ui/Primitives';
 
@@ -12,7 +13,7 @@ export function ProfileSecurityView() {
   const { pushToast } = useToast();
 
   const [displayName, setDisplayName] = useState(activeUser?.displayName || '');
-  const [phone, setPhone] = useState(activeUser?.phone || '');
+  const [phone, setPhone] = useState(sanitizePhoneDigits(activeUser?.phone || ''));
   const [savingProfile, setSavingProfile] = useState(false);
 
   const [newPassword, setNewPassword] = useState('');
@@ -32,11 +33,16 @@ export function ProfileSecurityView() {
       pushToast('error', 'Display name must be at least 2 characters.');
       return;
     }
+    const cleanPhone = sanitizePhoneDigits(phone);
+    if (cleanPhone && !isValidPhoneDigits(cleanPhone)) {
+      pushToast('error', 'Phone number must contain 10 to 15 numeric digits only.');
+      return;
+    }
     setSavingProfile(true);
     try {
       await updateDoc(doc(db, 'users', activeUser.uid), {
         displayName: displayName.trim().slice(0, 120),
-        phone: phone.trim().slice(0, 32),
+        phone: cleanPhone,
         updatedAt: serverTimestamp(),
       });
       await refreshProfile();
@@ -104,13 +110,18 @@ export function ProfileSecurityView() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Phone Number</label>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                Phone Number <span className="font-normal text-slate-400">(Numbers only)</span>
+              </label>
               <input
                 type="tel"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={15}
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                onChange={(e) => setPhone(sanitizePhoneDigits(e.target.value))}
                 disabled={isPreviewMode}
-                placeholder="+1 (555) 010-2000"
+                placeholder="9876543210"
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600 disabled:bg-slate-50"
               />
             </div>
