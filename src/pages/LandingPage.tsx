@@ -135,12 +135,9 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900">
-      {/* Top 4-Color Brand Spectrum Bar */}
-      <div className="h-1 w-full brand-spectrum-bar sticky top-0 z-50" aria-hidden="true" />
-
       {/* Sticky Top Navigation */}
       <header
-        className={`sticky top-1 z-40 transition-all duration-200 border-b ${
+        className={`sticky top-0 z-40 transition-all duration-200 border-b ${
           scrolled
             ? 'bg-white/95 backdrop-blur-md border-slate-200 py-3 shadow-xs'
             : 'bg-[#0F295C] border-blue-900/80 py-4'
@@ -626,7 +623,6 @@ export default function LandingPage() {
 
           {/* School Registration Enquiry Form */}
           <div id="contact" className="lg:col-span-7 bg-[#F8FAFC] border border-slate-200 rounded-xl overflow-hidden">
-            <div className="h-1 w-full brand-spectrum-bar" aria-hidden="true" />
             <div className="p-7">
             <h3 className="text-xl font-bold font-display text-[#0F295C]">
               School Onboarding Enquiry
@@ -747,7 +743,6 @@ export default function LandingPage() {
 
       {/* Quiet Footer */}
       <footer className="bg-[#0F295C] text-blue-200/80 border-t border-blue-900">
-        <div className="h-1 w-full brand-spectrum-bar" aria-hidden="true" />
         <div className="max-w-7xl mx-auto px-6 py-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div>
             <BrandLogo

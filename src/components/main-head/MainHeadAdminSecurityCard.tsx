@@ -113,7 +113,6 @@ export function MainHeadAdminSecurityCard() {
       onSubmit={handleSubmit}
       className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs"
     >
-      <div className="brand-spectrum-bar w-full" />
       <div className="p-6 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3 pb-3 border-b border-slate-200">
           <div>

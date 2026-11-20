@@ -110,7 +110,6 @@ export function SignInPage() {
           transition={{ duration: 0.28, ease: MOTION_EASE.out }}
           className="bg-white border border-slate-200/90 rounded-xl overflow-hidden shadow-sm"
         >
-          <div className="h-1.5 w-full brand-spectrum-bar" aria-hidden="true" />
           <div className="p-8">
           <div className="mb-6">
             <BrandLogo size="md" />
@@ -352,7 +351,6 @@ export function SignUpPage() {
           transition={{ duration: 0.28, ease: MOTION_EASE.out }}
           className="bg-white border border-slate-200/90 rounded-xl overflow-hidden shadow-sm"
         >
-          <div className="h-1.5 w-full brand-spectrum-bar" aria-hidden="true" />
           <div className="p-8">
           <div className="mb-6">
             <BrandLogo size="md" />
@@ -538,7 +536,6 @@ export function ForgotPasswordPage() {
         transition={{ duration: 0.26, ease: MOTION_EASE.out }}
         className="max-w-md w-full mx-auto bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm"
       >
-        <div className="h-1.5 w-full brand-spectrum-bar" aria-hidden="true" />
         <div className="p-8">
         <div className="flex items-center justify-between gap-3 mb-5">
           <BrandLogo size="sm" />

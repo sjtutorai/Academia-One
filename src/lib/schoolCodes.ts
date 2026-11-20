@@ -2,6 +2,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import type {
   ClassSectionRange,
+  MemberAccessCode,
   SchoolCodeClassSlot,
   SchoolCodeEntry,
 } from '../types/models';
@@ -117,52 +118,36 @@ export function expandClassSectionPlan(
 }
 
 /**
- * Derives an uppercase alphabetic school prefix (2–5 chars) from the school name.
+ * Derives the exact starting 3 uppercase alphabetic letters of the school name.
  * Examples:
  *  - "JSS Public School" -> "JSS"
- *  - "DPS International" -> "DPS"
- *  - "Northridge Preparatory Academy" -> "NPA"
- *  - "Oakwood Academy" -> "OA" or "OAK"
+ *  - "Oakwood Academy" -> "OAK"
+ *  - "St. Xavier High" -> "STX"
  */
 export function deriveSchoolPrefix(schoolName: string): string {
-  const cleaned = (schoolName || '')
-    .replace(/[^a-zA-Z\s]/g, ' ')
-    .trim();
-  if (!cleaned) return 'SCH';
-
-  const stopWords = new Set(['of', 'the', 'and', 'for', 'in', 'at', 'by', 'to', 'a', 'an']);
-  const words = cleaned.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return 'SCH';
-
-  // If the first word is already an uppercase acronym of 2–5 letters (e.g. "JSS Public School")
-  const firstWord = words[0];
-  if (firstWord.length >= 2 && firstWord.length <= 5 && firstWord === firstWord.toUpperCase()) {
-    return firstWord;
-  }
-
-  // Otherwise use initials of meaningful words if there are 2+ words
-  const meaningful = words.filter((w) => !stopWords.has(w.toLowerCase()));
-  const sourceWords = meaningful.length >= 2 ? meaningful : words;
-
-  if (sourceWords.length >= 3) {
-    return sourceWords
-      .slice(0, 4)
-      .map((w) => w[0].toUpperCase())
-      .join('');
-  }
-  if (sourceWords.length === 2) {
-    const initials = (sourceWords[0][0] + sourceWords[1][0]).toUpperCase();
-    if (sourceWords[0].length >= 2) {
-      return (sourceWords[0].slice(0, 2) + sourceWords[1][0]).toUpperCase();
-    }
-    return initials;
-  }
-
-  return sourceWords[0].slice(0, 4).toUpperCase().padEnd(2, 'X');
+  const lettersOnly = (schoolName || '').replace(/[^a-zA-Z]/g, '').toUpperCase();
+  if (!lettersOnly) return 'SCH';
+  if (lettersOnly.length >= 3) return lettersOnly.slice(0, 3);
+  return lettersOnly.padEnd(3, 'X');
 }
 
 export function sanitizeSchoolPrefix(raw: string): string {
   return raw.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6);
+}
+
+const ACTIVATION_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+/**
+ * Generates a Main Head Activation Code given to a manually-registered school's Principal
+ * to unlock their initial setup wizard (e.g. MH-JSS-8K4P2X).
+ */
+export function generateActivationCode(schoolCode: string): string {
+  const pfx = sanitizeSchoolPrefix(schoolCode || 'SCH').slice(0, 4) || 'SCH';
+  let token = '';
+  for (let i = 0; i < 6; i++) {
+    token += ACTIVATION_ALPHABET[Math.floor(Math.random() * ACTIVATION_ALPHABET.length)];
+  }
+  return `MH-${pfx}-${token}`;
 }
 
 /**
@@ -248,7 +233,7 @@ export function resolveCoordinatorClassesForIndex(
 export interface ResolvedAccessCode {
   ok: true;
   schoolEntry: SchoolCodeEntry;
-  mode: 'role_code' | 'legacy_school_code';
+  mode: 'role_code' | 'legacy_school_code' | 'named_member_code';
   enteredCode: string;
   canonicalCode: string;
   role?: 'principal' | 'coordinator' | 'teacher' | 'student';
@@ -257,6 +242,7 @@ export interface ResolvedAccessCode {
   assignedClass?: SchoolCodeClassSlot | null;
   assignedRollNumber?: string;
   assignedCoordinatorClasses?: SchoolCodeClassSlot[];
+  memberCodeRecord?: MemberAccessCode;
 }
 
 export interface UnresolvedAccessCode {
@@ -264,12 +250,231 @@ export interface UnresolvedAccessCode {
   error: string;
 }
 
+export interface VerifiedStudentFourCodes {
+  ok: true;
+  schoolEntry: SchoolCodeEntry;
+  schoolCode: string;
+  classSlot: SchoolCodeClassSlot;
+  classCode: string;
+  teacherRecord: MemberAccessCode | null;
+  teacherCode: string;
+  teacherName: string;
+  teacherId: string;
+  teacherUid: string;
+  studentRecord: MemberAccessCode | null;
+  studentCode: string;
+  studentName: string;
+  rollNumber: string;
+}
+
 /**
- * Resolves any entered School / Role Access Code against Firestore `schoolCodes/{prefix}`:
+ * Verifies the 4 required student join codes:
+ * 1) School Code (e.g. JSS)
+ * 2) Class Code (e.g. C1A)
+ * 3) Teacher Code (e.g. JSST01)
+ * 4) Student Code (e.g. JSSS001)
+ */
+export async function verifyStudentFourCodes(params: {
+  schoolCode: string;
+  classCode: string;
+  teacherCode: string;
+  studentCode: string;
+}): Promise<VerifiedStudentFourCodes | UnresolvedAccessCode> {
+  const sCode = params.schoolCode.trim().toUpperCase().replace(/\s+/g, '');
+  const cCode = params.classCode.trim().toUpperCase().replace(/\s+/g, '');
+  const tCode = params.teacherCode.trim().toUpperCase().replace(/\s+/g, '');
+  const stCode = params.studentCode.trim().toUpperCase().replace(/\s+/g, '');
+
+  if (sCode.length < 2) {
+    return { ok: false, error: 'Enter a valid School Code (e.g., JSS).' };
+  }
+  if (cCode.length < 2) {
+    return { ok: false, error: 'Enter your Class Code given by your school/teacher (e.g., C1A).' };
+  }
+  if (tCode.length < 4) {
+    return { ok: false, error: 'Enter your Class Teacher Code (e.g., JSST01).' };
+  }
+  if (stCode.length < 4) {
+    return { ok: false, error: 'Enter your personal Student Code obtained from your teacher (e.g., JSSS001).' };
+  }
+
+  // 1. Verify School Code
+  let schoolEntry: SchoolCodeEntry;
+  try {
+    const schoolSnap = await getDoc(doc(db, 'schoolCodes', sCode));
+    if (!schoolSnap.exists()) {
+      return { ok: false, error: `School Code "${sCode}" was not found. Confirm the 3-letter school code.` };
+    }
+    schoolEntry = schoolSnap.data() as SchoolCodeEntry;
+    if (schoolEntry.status === 'suspended' || schoolEntry.status === 'archived') {
+      return {
+        ok: false,
+        error: `"${schoolEntry.schoolName}" is currently not accepting new registrations (${schoolEntry.status}).`,
+      };
+    }
+  } catch {
+    return { ok: false, error: 'Unable to verify School Code right now. Please try again.' };
+  }
+
+  // 2. Verify Class Code against schoolEntry.classSections
+  const classSections = schoolEntry.classSections || [];
+  const normalizeClassCode = (slot: SchoolCodeClassSlot) => {
+    if (slot.classCode) return slot.classCode.trim().toUpperCase();
+    const shortGrade = slot.gradeLevel
+      .replace(/^Class\s+/i, '')
+      .replace(/^Grade\s+/i, '')
+      .replace(/[^A-Za-z0-9]/g, '')
+      .toUpperCase();
+    return `C${shortGrade}${slot.section.toUpperCase()}`;
+  };
+
+  let matchedClass = classSections.find((slot) => {
+    const derived = normalizeClassCode(slot);
+    return (
+      derived === cCode ||
+      slot.classId.toUpperCase() === cCode ||
+      `${slot.gradeLevel}${slot.section}`.replace(/[^A-Za-z0-9]/g, '').toUpperCase() === cCode
+    );
+  });
+
+  // 3. Verify Teacher Code in memberAccessCodes/{tCode}
+  let teacherRecord: MemberAccessCode | null = null;
+  try {
+    const teacherSnap = await getDoc(doc(db, 'memberAccessCodes', tCode));
+    if (teacherSnap.exists()) {
+      const rec = teacherSnap.data() as MemberAccessCode;
+      if (rec.status === 'revoked') {
+        return { ok: false, error: `Teacher Code "${tCode}" has been revoked by the school.` };
+      }
+      if (rec.schoolId !== schoolEntry.schoolId) {
+        return {
+          ok: false,
+          error: `Teacher Code "${tCode}" does not belong to ${schoolEntry.schoolName} (${sCode}).`,
+        };
+      }
+      if (rec.role !== 'teacher') {
+        return { ok: false, error: `"${tCode}" is registered as a ${rec.role} code, not a Teacher Code.` };
+      }
+      teacherRecord = rec;
+    }
+  } catch {
+    // fallback check below
+  }
+
+  if (!teacherRecord) {
+    // Allow structured school teacher code fallback only if school prefix matches e.g. JSST01
+    const tMatch = new RegExp(`^${schoolEntry.code}T(\\d{1,5})$`).exec(tCode);
+    if (!tMatch) {
+      return {
+        ok: false,
+        error: `Teacher Code "${tCode}" was not found for ${schoolEntry.schoolName}. Ask your class teacher for their exact code (e.g., ${schoolEntry.code}T01).`,
+      };
+    }
+  }
+
+  // 4. Verify Student Code in memberAccessCodes/{stCode}
+  let studentRecord: MemberAccessCode | null = null;
+  try {
+    const studentSnap = await getDoc(doc(db, 'memberAccessCodes', stCode));
+    if (studentSnap.exists()) {
+      const rec = studentSnap.data() as MemberAccessCode;
+      if (rec.status === 'revoked') {
+        return { ok: false, error: `Student Code "${stCode}" has been revoked.` };
+      }
+      if (rec.schoolId !== schoolEntry.schoolId) {
+        return {
+          ok: false,
+          error: `Student Code "${stCode}" does not belong to ${schoolEntry.schoolName} (${sCode}).`,
+        };
+      }
+      if (rec.role !== 'student') {
+        return { ok: false, error: `"${stCode}" is registered as a ${rec.role} code, not a Student Code.` };
+      }
+      if (rec.classCode && rec.classCode.toUpperCase() !== cCode) {
+        return {
+          ok: false,
+          error: `Student Code "${stCode}" is assigned to Class Code ${rec.classCode}, not ${cCode}.`,
+        };
+      }
+      if (rec.teacherCode && rec.teacherCode.toUpperCase() !== tCode) {
+        return {
+          ok: false,
+          error: `Student Code "${stCode}" is assigned to Teacher Code ${rec.teacherCode}, not ${tCode}.`,
+        };
+      }
+      studentRecord = rec;
+    }
+  } catch {
+    // fallback check below
+  }
+
+  if (!studentRecord) {
+    const sMatch = new RegExp(`^${schoolEntry.code}S(\\d{1,6})$`).exec(stCode);
+    const maxStudents = schoolEntry.studentCount ?? 1000;
+    if (!sMatch || parseInt(sMatch[1], 10) < 1 || parseInt(sMatch[1], 10) > maxStudents) {
+      return {
+        ok: false,
+        error: `Student Code "${stCode}" was not found for ${schoolEntry.schoolName}. Obtain your personal Student Code from your class teacher (e.g., ${schoolEntry.code}S001).`,
+      };
+    }
+  }
+
+  // If class wasn't matched from schoolEntry.classSections, try studentRecord or teacherRecord class metadata
+  if (!matchedClass && studentRecord?.classId) {
+    matchedClass = {
+      classId: studentRecord.classId,
+      classCode: studentRecord.classCode || cCode,
+      className: studentRecord.className || cCode,
+      gradeLevel: studentRecord.className?.split(' - ')[0] || cCode,
+      section: studentRecord.className?.split('Section ')[1] || 'A',
+    };
+  }
+  if (!matchedClass && classSections.length > 0) {
+    const available = classSections.slice(0, 8).map(normalizeClassCode).join(', ');
+    return {
+      ok: false,
+      error: `Class Code "${cCode}" was not found in ${schoolEntry.schoolName}. Available class codes include: ${available}.`,
+    };
+  }
+  if (!matchedClass) {
+    matchedClass = {
+      classId: '',
+      classCode: cCode,
+      className: cCode,
+      gradeLevel: cCode,
+      section: 'A',
+    };
+  }
+
+  return {
+    ok: true,
+    schoolEntry,
+    schoolCode: schoolEntry.code,
+    classSlot: {
+      ...matchedClass,
+      classCode: normalizeClassCode(matchedClass),
+    },
+    classCode: normalizeClassCode(matchedClass),
+    teacherRecord,
+    teacherCode: tCode,
+    teacherName: teacherRecord?.memberName || studentRecord?.teacherName || `Teacher (${tCode})`,
+    teacherId: teacherRecord?.linkedProfileId || studentRecord?.teacherId || '',
+    teacherUid: teacherRecord?.linkedUid || '',
+    studentRecord,
+    studentCode: stCode,
+    studentName: studentRecord?.memberName || '',
+    rollNumber: studentRecord?.rollNumber || '',
+  };
+}
+
+/**
+ * Resolves any entered School / Role Access Code against Firestore `memberAccessCodes/{raw}`
+ * and `schoolCodes/{prefix}`:
+ * - Named member codes: JSSC01 (Shubhangi), JSST01, JSSS001
  * - JSS0001       -> Principal of JSS
- * - JSSC01..06    -> Coordinator #1..#6 of JSS (also accepts JSSC0001)
- * - JSST01..20    -> Teacher #1..#20 of JSS (also accepts JSST0001)
- * - JSSS001..100  -> Student #1..#100 of JSS + auto-identified Class & Section (also accepts JSSS01 / JSSS0001)
+ * - JSSC01..06    -> Coordinator #1..#6 of JSS
+ * - JSST01..20    -> Teacher #1..#20 of JSS
+ * - JSSS001..100  -> Student #1..#100 of JSS
  * - ACA-7482/NRP  -> Legacy direct school code fallback
  */
 export async function resolveSchoolAccessCode(
@@ -292,6 +497,48 @@ export async function resolveSchoolAccessCode(
     }
     return null;
   };
+
+  // 0. Check named memberAccessCodes/{raw} first (e.g. JSSC01 for Shubhangi, JSST01 for teacher)
+  try {
+    const memberSnap = await getDoc(doc(db, 'memberAccessCodes', raw));
+    if (memberSnap.exists()) {
+      const memberRec = memberSnap.data() as MemberAccessCode;
+      if (memberRec.status === 'revoked') {
+        return {
+          ok: false,
+          error: `Access code "${raw}" has been revoked by ${memberRec.schoolName}.`,
+        };
+      }
+      const schoolSnap = await getDoc(doc(db, 'schoolCodes', memberRec.schoolCode));
+      if (schoolSnap.exists()) {
+        const schoolEntry = schoolSnap.data() as SchoolCodeEntry;
+        const blocked = checkSuspended(schoolEntry);
+        if (blocked) return blocked;
+        const assignedSlot: SchoolCodeClassSlot | null = memberRec.classId
+          ? {
+              classId: memberRec.classId,
+              classCode: memberRec.classCode || '',
+              className: memberRec.className || '',
+              gradeLevel: memberRec.className?.split(' - ')[0] || '',
+              section: memberRec.className?.split('Section ')[1] || '',
+            }
+          : null;
+        return {
+          ok: true,
+          schoolEntry,
+          mode: 'named_member_code',
+          enteredCode: raw,
+          canonicalCode: memberRec.code,
+          role: memberRec.role,
+          assignedClass: assignedSlot,
+          assignedRollNumber: memberRec.rollNumber || undefined,
+          memberCodeRecord: memberRec,
+        };
+      }
+    }
+  } catch {
+    // Fall through to structured schoolCodes lookup
+  }
 
   // 1. Check structured Role Code: <LETTERS><DIGITS> (e.g., JSS0001, JSSC01, JSST01, JSSS001)
   const structuredMatch = /^([A-Z]{2,9})(\d{1,6})$/.exec(raw);

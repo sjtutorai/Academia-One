@@ -120,4 +120,23 @@ export const DIRTY_DOZEN_TESTS: DirtyDozenCase[] = [
     payload: { id: 'enq_forged', schoolName: 'Fake', contactName: 'Bot', email: 'bot@example.com', status: 'new', createdAt: '2020-01-01T00:00:00Z' },
     expected: 'PERMISSION_DENIED',
   },
+  {
+    id: 13,
+    name: 'Student Join Stage Skipping (Bypassing Teacher & Coordinator)',
+    actor: { uid: 'u_principal_nr', email: 'principal@northridge.edu', email_verified: true, role: 'principal', schoolId: 'school_northridge' },
+    operation: 'update',
+    path: '/schoolJoinRequests/jreq_student_stage1',
+    payload: { status: 'approved', approvalStage: 'approved' },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 14,
+    name: 'Unauthorized Member Access Code Issuance by Teacher',
+    actor: { uid: 'u_teacher_1', email: 't1@northridge.edu', email_verified: true, role: 'teacher', schoolId: 'school_northridge' },
+    operation: 'create',
+    path: '/memberAccessCodes/NRPC99',
+    payload: { code: 'NRPC99', schoolId: 'school_northridge', schoolCode: 'NRP', schoolName: 'Northridge Prep', role: 'coordinator', memberName: 'Fake Coord', status: 'active', createdBy: 'u_teacher_1' },
+    expected: 'PERMISSION_DENIED',
+  },
 ];
+

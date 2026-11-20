@@ -31,7 +31,9 @@ service cloud.firestore {
     }
 
     function isBootstrappedMainHead() {
-      return isSignedIn() && request.auth.token.email == 'sjtutorai@gmail.com';
+      return isSignedIn()
+        && request.auth.token.email == 'sjtutorai@gmail.com'
+        && request.auth.token.email_verified == true;
     }
 
     function authEmailKey() {
@@ -93,6 +95,10 @@ service cloud.firestore {
       return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
     }
 
+    function isOptBool(data, key) {
+      return !(key in data) || (data[key] is bool);
+    }
+
     function isBoundedList(data, key, maxItems) {
       return !(key in data) || (data[key] is list && data[key].size() <= maxItems);
     }
@@ -102,7 +108,7 @@ service cloud.firestore {
     // =========================================================================
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'username', 'email', 'displayName', 'role', 'schoolId', 'status', 'mustChangePassword', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'username', 'email', 'displayName', 'role', 'schoolId', 'status', 'mustChangePassword', 'phone', 'classId', 'section', 'assignedClassIds', 'assignedSubjectIds', 'coordinatorPermissions', 'isDemo', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'username', 'email', 'displayName', 'role', 'schoolId', 'status', 'mustChangePassword', 'phone', 'classId', 'section', 'assignedClassIds', 'assignedSubjectIds', 'coordinatorPermissions', 'accessCode', 'isDemo', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
         && isShortString(data.username, 3, 64)
         && isShortString(data.email, 3, 160)
@@ -114,13 +120,14 @@ service cloud.firestore {
         && isOptString(data, 'phone', 32)
         && isOptString(data, 'classId', 128)
         && isOptString(data, 'section', 32)
+        && isOptString(data, 'accessCode', 24)
         && isBoundedList(data, 'assignedClassIds', 50)
         && isBoundedList(data, 'assignedSubjectIds', 50);
     }
 
     function isValidSchool(data) {
       return data.keys().hasAll(['id', 'name', 'code', 'academicYear', 'status', 'subscriptionPlanId', 'subscriptionStatus', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'name', 'code', 'address', 'email', 'phone', 'academicYear', 'status', 'principalUid', 'principalUsername', 'principalName', 'principalEmail', 'subscriptionPlanId', 'subscriptionStatus', 'subscriptionStart', 'subscriptionEnd', 'coordinatorCount', 'teacherCount', 'studentCount', 'allocatedCoordinators', 'allocatedTeachers', 'allocatedStudents', 'settings', 'source', 'schoolType', 'board', 'logoDataUrl', 'setupCompleted', 'isDemo', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'code', 'address', 'email', 'phone', 'academicYear', 'status', 'principalUid', 'principalUsername', 'principalName', 'principalEmail', 'subscriptionPlanId', 'subscriptionStatus', 'subscriptionStart', 'subscriptionEnd', 'coordinatorCount', 'teacherCount', 'studentCount', 'allocatedCoordinators', 'allocatedTeachers', 'allocatedStudents', 'settings', 'source', 'schoolType', 'board', 'logoDataUrl', 'schoolPrefix', 'activationCode', 'activationVerified', 'setupCompleted', 'isDemo', 'createdBy', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isShortString(data.name, 2, 140)
         && isShortString(data.code, 2, 24)
@@ -141,7 +148,11 @@ service cloud.firestore {
         && isOptString(data, 'source', 32)
         && isOptString(data, 'schoolType', 64)
         && isOptString(data, 'board', 120)
-        && isOptString(data, 'logoDataUrl', 200000);
+        && isOptString(data, 'logoDataUrl', 200000)
+        && isOptString(data, 'schoolPrefix', 12)
+        && isOptString(data, 'activationCode', 32)
+        && isOptBool(data, 'activationVerified')
+        && isOptBool(data, 'setupCompleted');
     }
 
     function isValidPlan(data) {
@@ -257,7 +268,7 @@ service cloud.firestore {
 
     function isValidTeacher(data) {
       return data.keys().hasAll(['id', 'schoolId', 'staffId', 'name', 'email', 'status', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'schoolId', 'userId', 'staffId', 'name', 'email', 'phone', 'subjects', 'qualifications', 'joiningDate', 'assignedClassIds', 'classTeacherOfClassId', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'schoolId', 'userId', 'staffId', 'name', 'email', 'phone', 'subjects', 'qualifications', 'joiningDate', 'assignedClassIds', 'classTeacherOfClassId', 'accessCode', 'status', 'createdBy', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isValidId(data.schoolId)
         && isShortString(data.staffId, 1, 32)
@@ -269,6 +280,7 @@ service cloud.firestore {
         && isOptString(data, 'qualifications', 160)
         && isOptString(data, 'joiningDate', 32)
         && isOptString(data, 'classTeacherOfClassId', 128)
+        && isOptString(data, 'accessCode', 24)
         && isBoundedList(data, 'subjects', 30)
         && isBoundedList(data, 'assignedClassIds', 30)
         && isShortString(data.createdBy, 1, 128);
@@ -276,7 +288,7 @@ service cloud.firestore {
 
     function isValidStudent(data) {
       return data.keys().hasAll(['id', 'schoolId', 'admissionNumber', 'rollNumber', 'name', 'classId', 'className', 'section', 'academicYear', 'status', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'schoolId', 'userId', 'admissionNumber', 'rollNumber', 'name', 'email', 'classId', 'className', 'section', 'academicYear', 'guardianName', 'guardianPhone', 'guardianEmail', 'status', 'history', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'schoolId', 'userId', 'admissionNumber', 'rollNumber', 'name', 'email', 'classId', 'className', 'section', 'academicYear', 'guardianName', 'guardianPhone', 'guardianEmail', 'accessCode', 'status', 'history', 'createdBy', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isValidId(data.schoolId)
         && isShortString(data.admissionNumber, 1, 32)
@@ -292,6 +304,7 @@ service cloud.firestore {
         && isOptString(data, 'guardianName', 120)
         && isOptString(data, 'guardianPhone', 32)
         && isOptString(data, 'guardianEmail', 160)
+        && isOptString(data, 'accessCode', 24)
         && isBoundedList(data, 'history', 50)
         && isShortString(data.createdBy, 1, 128);
     }
@@ -507,7 +520,7 @@ service cloud.firestore {
         && isShortString(data.schoolName, 2, 200)
         && isShortString(data.academicYear, 2, 40)
         && isShortString(data.schoolEmail, 3, 160)
-        && isShortString(data.address, 4, 500)
+        && isShortString(data.address, 2, 500)
         && isShortString(data.principalName, 2, 120)
         && isShortString(data.principalEmail, 3, 160)
         && data.authMethod in ['email_password', 'google']
@@ -578,9 +591,32 @@ service cloud.firestore {
         && isBoundedList(data, 'classSections', 200);
     }
 
+    function isValidMemberAccessCode(data) {
+      return data.keys().hasAll(['code', 'schoolId', 'schoolCode', 'schoolName', 'role', 'memberName', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['code', 'schoolId', 'schoolCode', 'schoolName', 'role', 'memberName', 'email', 'classId', 'classCode', 'className', 'teacherId', 'teacherCode', 'teacherName', 'rollNumber', 'status', 'linkedProfileId', 'linkedUid', 'createdBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.code)
+        && isValidId(data.schoolId)
+        && isShortString(data.schoolCode, 2, 24)
+        && isShortString(data.schoolName, 2, 140)
+        && data.role in ['coordinator', 'teacher', 'student']
+        && isShortString(data.memberName, 2, 120)
+        && data.status in ['active', 'claimed', 'revoked']
+        && isShortString(data.createdBy, 1, 128)
+        && isOptString(data, 'email', 160)
+        && isOptString(data, 'classId', 128)
+        && isOptString(data, 'classCode', 24)
+        && isOptString(data, 'className', 100)
+        && isOptString(data, 'teacherId', 128)
+        && isOptString(data, 'teacherCode', 24)
+        && isOptString(data, 'teacherName', 120)
+        && isOptString(data, 'rollNumber', 24)
+        && isOptString(data, 'linkedProfileId', 128)
+        && isOptString(data, 'linkedUid', 128);
+    }
+
     function isValidEmailDirectoryEntry(data) {
       return data.keys().hasAll(['emailKey', 'email', 'schoolId', 'role', 'status', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['emailKey', 'email', 'schoolId', 'schoolName', 'role', 'displayName', 'linkedProfileId', 'classId', 'section', 'assignedClassIds', 'coordinatorPermissions', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['emailKey', 'email', 'schoolId', 'schoolName', 'role', 'displayName', 'accessCode', 'linkedProfileId', 'classId', 'section', 'assignedClassIds', 'coordinatorPermissions', 'status', 'createdBy', 'createdAt', 'updatedAt'])
         && isValidId(data.emailKey)
         && isShortString(data.email, 3, 160)
         && isValidId(data.schoolId)
@@ -589,6 +625,7 @@ service cloud.firestore {
         && isShortString(data.createdBy, 1, 128)
         && isOptString(data, 'schoolName', 140)
         && isOptString(data, 'displayName', 120)
+        && isOptString(data, 'accessCode', 24)
         && isOptString(data, 'linkedProfileId', 128)
         && isOptString(data, 'classId', 128)
         && isOptString(data, 'section', 32)
@@ -597,23 +634,38 @@ service cloud.firestore {
 
     function isValidSchoolJoinRequest(data) {
       return data.keys().hasAll(['id', 'applicationNumber', 'schoolId', 'schoolCode', 'schoolName', 'applicantUid', 'applicantEmail', 'applicantName', 'requestedRole', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'applicationNumber', 'schoolId', 'schoolCode', 'accessCode', 'schoolName', 'applicantUid', 'applicantEmail', 'applicantName', 'phone', 'requestedRole', 'requestedClassId', 'requestedSection', 'requestedClassInfo', 'note', 'status', 'decisionNote', 'reviewedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'applicationNumber', 'schoolId', 'schoolCode', 'accessCode', 'classCode', 'teacherCode', 'studentCode', 'targetTeacherId', 'targetTeacherUid', 'targetTeacherName', 'schoolName', 'applicantUid', 'applicantEmail', 'applicantName', 'phone', 'requestedRole', 'requestedClassId', 'requestedSection', 'requestedClassInfo', 'note', 'status', 'approvalStage', 'teacherApprovedBy', 'teacherApprovedName', 'teacherApprovedAt', 'coordinatorApprovedBy', 'coordinatorApprovedName', 'coordinatorApprovedAt', 'principalApprovedBy', 'principalApprovedAt', 'decisionNote', 'reviewedBy', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isValidId(data.applicationNumber)
         && isValidId(data.schoolId)
         && isValidId(data.schoolCode)
         && isOptString(data, 'accessCode', 32)
+        && isOptString(data, 'classCode', 24)
+        && isOptString(data, 'teacherCode', 24)
+        && isOptString(data, 'studentCode', 24)
+        && isOptString(data, 'targetTeacherId', 128)
+        && isOptString(data, 'targetTeacherUid', 128)
+        && isOptString(data, 'targetTeacherName', 120)
         && isShortString(data.schoolName, 2, 140)
         && isValidId(data.applicantUid)
         && isShortString(data.applicantEmail, 3, 160)
         && isShortString(data.applicantName, 2, 120)
         && data.requestedRole in ['coordinator', 'teacher', 'student']
         && data.status in ['pending', 'approved', 'rejected']
+        && (!('approvalStage' in data) || data.approvalStage in ['teacher_pending', 'coordinator_pending', 'principal_pending', 'approved', 'rejected'])
         && isOptString(data, 'phone', 32)
         && isOptString(data, 'requestedClassId', 128)
         && isOptString(data, 'requestedSection', 32)
         && isOptString(data, 'requestedClassInfo', 120)
         && isOptString(data, 'note', 500)
+        && isOptString(data, 'teacherApprovedBy', 128)
+        && isOptString(data, 'teacherApprovedName', 120)
+        && isOptString(data, 'teacherApprovedAt', 40)
+        && isOptString(data, 'coordinatorApprovedBy', 128)
+        && isOptString(data, 'coordinatorApprovedName', 120)
+        && isOptString(data, 'coordinatorApprovedAt', 40)
+        && isOptString(data, 'principalApprovedBy', 128)
+        && isOptString(data, 'principalApprovedAt', 40)
         && isOptString(data, 'decisionNote', 500)
         && isOptString(data, 'reviewedBy', 128);
     }
@@ -679,7 +731,7 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           isMainHead() ||
-          (isPrincipalOf(schoolId) && incoming().diff(existing()).affectedKeys().hasOnly(['address', 'email', 'phone', 'academicYear', 'settings', 'coordinatorCount', 'teacherCount', 'studentCount', 'allocatedCoordinators', 'allocatedTeachers', 'allocatedStudents', 'logoDataUrl', 'setupCompleted', 'updatedAt']))
+          (isPrincipalOf(schoolId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'address', 'email', 'phone', 'academicYear', 'schoolType', 'board', 'principalName', 'settings', 'coordinatorCount', 'teacherCount', 'studentCount', 'allocatedCoordinators', 'allocatedTeachers', 'allocatedStudents', 'logoDataUrl', 'activationVerified', 'setupCompleted', 'updatedAt']))
         );
       allow delete: if isValidId(schoolId) && isMainHead();
     }
@@ -956,7 +1008,7 @@ service cloud.firestore {
       allow update: if isValidId(userId) && isSignedIn() && isValidNotificationPreferences(incoming())
         && request.auth.uid == userId && incoming().userId == existing().userId
         && incoming().updatedAt == request.time;
-      allow delete: if false;
+      allow delete: if isValidId(userId) && isMainHead();
     }
 
     match /auditLogs/{logId} {
@@ -1009,6 +1061,7 @@ service cloud.firestore {
         && (
           isMainHead() ||
           (existing().type == 'member' && isPrincipalOf(existing().schoolId)) ||
+          (existing().type == 'member' && isStaffOf(existing().schoolId) && incoming().status in ['pending', 'rejected'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'applicantMessage', 'decisionNote', 'updatedAt'])) ||
           (existing().status == 'more_info_required' && incoming().status == 'submitted' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'applicantResponseNote', 'updatedAt']))
         );
       allow delete: if isValidId(applicationNumber) && isMainHead();
@@ -1031,6 +1084,26 @@ service cloud.firestore {
           (isPrincipalOf(existing().schoolId) && incoming().diff(existing()).affectedKeys().hasOnly(['coordinatorCount', 'teacherCount', 'studentCount', 'classSections', 'updatedAt']))
         );
       allow delete: if isValidId(code) && isMainHead();
+    }
+
+    match /memberAccessCodes/{code} {
+      allow get: if isValidId(code);
+      allow list: if isSignedIn() && (
+        isBootstrappedMainHead() ||
+        (userDocExists() && existing().schoolId == userDoc().schoolId)
+      );
+      allow create: if isValidId(code) && isSignedIn() && isValidMemberAccessCode(incoming())
+        && incoming().code == code
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isMainHead() || isPrincipalOf(incoming().schoolId));
+      allow update: if isValidId(code) && isSignedIn() && isValidMemberAccessCode(incoming())
+        && incoming().code == existing().code
+        && incoming().schoolId == existing().schoolId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (isMainHead() || isPrincipalOf(existing().schoolId));
+      allow delete: if isValidId(code) && isSignedIn() && (isMainHead() || isPrincipalOf(existing().schoolId));
     }
 
     match /emailDirectory/{emailKey} {
@@ -1058,27 +1131,69 @@ service cloud.firestore {
     match /schoolJoinRequests/{requestId} {
       allow get: if isValidId(requestId) && isSignedIn() && (
         isMainHead() ||
-        isPrincipalOf(existing().schoolId) ||
+        isStaffOf(existing().schoolId) ||
         existing().applicantUid == request.auth.uid
       );
       allow list: if isSignedIn() && (
         isBootstrappedMainHead() ||
         existing().applicantUid == request.auth.uid ||
-        (userDocExists() && userDoc().role == 'principal' && existing().schoolId == userDoc().schoolId)
+        (userDocExists() && userDoc().role in ['principal', 'coordinator', 'teacher'] && existing().schoolId == userDoc().schoolId)
       );
       allow create: if isValidId(requestId) && isSignedIn() && isValidSchoolJoinRequest(incoming())
         && incoming().id == requestId
         && incoming().applicantUid == request.auth.uid
         && incoming().status == 'pending'
         && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
+        && incoming().updatedAt == request.time
+        && (
+          (incoming().requestedRole == 'student' && incoming().approvalStage == 'teacher_pending') ||
+          (incoming().requestedRole in ['coordinator', 'teacher'] && (!('approvalStage' in incoming()) || incoming().approvalStage == 'principal_pending'))
+        );
       allow update: if isValidId(requestId) && isSignedIn() && isValidSchoolJoinRequest(incoming())
         && incoming().id == existing().id
         && incoming().schoolId == existing().schoolId
         && incoming().applicantUid == existing().applicantUid
+        && incoming().requestedRole == existing().requestedRole
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && (isMainHead() || isPrincipalOf(existing().schoolId));
+        && (
+          isMainHead() ||
+          // Stage 1: Class Teacher approves (teacher_pending -> coordinator_pending) or rejects student join
+          (
+            isSameSchool(existing().schoolId) && userDoc().role == 'teacher'
+            && existing().requestedRole == 'student'
+            && existing().status == 'pending'
+            && existing().approvalStage == 'teacher_pending'
+            && (
+              (incoming().approvalStage == 'coordinator_pending' && incoming().status == 'pending') ||
+              (incoming().approvalStage == 'rejected' && incoming().status == 'rejected')
+            )
+            && incoming().diff(existing()).affectedKeys().hasOnly(['approvalStage', 'status', 'teacherApprovedBy', 'teacherApprovedName', 'teacherApprovedAt', 'decisionNote', 'reviewedBy', 'updatedAt'])
+          ) ||
+          // Stage 2: Academic Coordinator approves (coordinator_pending -> principal_pending) or rejects student join
+          (
+            isSameSchool(existing().schoolId) && userDoc().role == 'coordinator'
+            && existing().requestedRole == 'student'
+            && existing().status == 'pending'
+            && existing().approvalStage == 'coordinator_pending'
+            && (
+              (incoming().approvalStage == 'principal_pending' && incoming().status == 'pending') ||
+              (incoming().approvalStage == 'rejected' && incoming().status == 'rejected')
+            )
+            && incoming().diff(existing()).affectedKeys().hasOnly(['approvalStage', 'status', 'coordinatorApprovedBy', 'coordinatorApprovedName', 'coordinatorApprovedAt', 'decisionNote', 'reviewedBy', 'updatedAt'])
+          ) ||
+          // Stage 3: Principal final approval (strictly requires principal_pending for students; direct for coordinator/teacher) or rejection
+          (
+            isPrincipalOf(existing().schoolId)
+            && existing().status == 'pending'
+            && (
+              (incoming().status == 'rejected' && (!('approvalStage' in incoming()) || incoming().approvalStage == 'rejected')) ||
+              (existing().requestedRole == 'student' && existing().approvalStage == 'principal_pending' && incoming().status == 'approved' && incoming().approvalStage == 'approved') ||
+              (existing().requestedRole in ['coordinator', 'teacher'] && incoming().status == 'approved')
+            )
+            && incoming().diff(existing()).affectedKeys().hasOnly(['approvalStage', 'status', 'principalApprovedBy', 'principalApprovedAt', 'decisionNote', 'reviewedBy', 'updatedAt'])
+          )
+        );
       allow delete: if isValidId(requestId) && isSignedIn() && (isMainHead() || isPrincipalOf(existing().schoolId));
     }
 

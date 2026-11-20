@@ -28,6 +28,7 @@ export interface PlatformUser {
   assignedClassIds?: string[];
   assignedSubjectIds?: string[];
   coordinatorPermissions?: CoordinatorPermissions;
+  accessCode?: string;
   isDemo?: boolean;
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -66,6 +67,9 @@ export interface School {
   schoolType?: string;
   board?: string;
   logoDataUrl?: string;
+  schoolPrefix?: string;
+  activationCode?: string;
+  activationVerified?: boolean;
   setupCompleted?: boolean;
   isDemo?: boolean;
   createdBy: string;
@@ -205,6 +209,7 @@ export interface TeacherProfile {
   joiningDate?: string;
   assignedClassIds?: string[];
   classTeacherOfClassId?: string;
+  accessCode?: string;
   status: 'active' | 'on_leave' | 'inactive';
   createdBy: string;
   createdAt?: unknown;
@@ -234,6 +239,7 @@ export interface StudentProfile {
   guardianName?: string;
   guardianPhone?: string;
   guardianEmail?: string;
+  accessCode?: string;
   status: 'active' | 'promoted' | 'transferred' | 'withdrawn' | 'inactive';
   history?: StudentHistoryEntry[];
   createdBy: string;
@@ -549,6 +555,7 @@ export interface ClassSectionRange {
 
 export interface SchoolCodeClassSlot {
   classId: string;
+  classCode?: string;
   className: string;
   gradeLevel: string;
   section: string;
@@ -568,6 +575,29 @@ export interface SchoolCodeEntry {
   updatedAt?: unknown;
 }
 
+export interface MemberAccessCode {
+  code: string;
+  schoolId: string;
+  schoolCode: string;
+  schoolName: string;
+  role: 'coordinator' | 'teacher' | 'student';
+  memberName: string;
+  email?: string;
+  classId?: string;
+  classCode?: string;
+  className?: string;
+  teacherId?: string;
+  teacherCode?: string;
+  teacherName?: string;
+  rollNumber?: string;
+  status: 'active' | 'claimed' | 'revoked';
+  linkedProfileId?: string;
+  linkedUid?: string;
+  createdBy: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
 export interface EmailDirectoryEntry {
   emailKey: string;
   email: string;
@@ -575,6 +605,7 @@ export interface EmailDirectoryEntry {
   schoolName?: string;
   role: 'principal' | 'coordinator' | 'teacher' | 'student';
   displayName?: string;
+  accessCode?: string;
   linkedProfileId?: string;
   classId?: string;
   section?: string;
@@ -586,12 +617,25 @@ export interface EmailDirectoryEntry {
   updatedAt?: unknown;
 }
 
+export type JoinApprovalStage =
+  | 'teacher_pending'
+  | 'coordinator_pending'
+  | 'principal_pending'
+  | 'approved'
+  | 'rejected';
+
 export interface SchoolJoinRequest {
   id: string;
   applicationNumber: string;
   schoolId: string;
   schoolCode: string;
   accessCode?: string;
+  classCode?: string;
+  teacherCode?: string;
+  studentCode?: string;
+  targetTeacherId?: string;
+  targetTeacherUid?: string;
+  targetTeacherName?: string;
   schoolName: string;
   applicantUid: string;
   applicantEmail: string;
@@ -603,6 +647,15 @@ export interface SchoolJoinRequest {
   requestedClassInfo?: string;
   note?: string;
   status: 'pending' | 'approved' | 'rejected';
+  approvalStage?: JoinApprovalStage;
+  teacherApprovedBy?: string;
+  teacherApprovedName?: string;
+  teacherApprovedAt?: string;
+  coordinatorApprovedBy?: string;
+  coordinatorApprovedName?: string;
+  coordinatorApprovedAt?: string;
+  principalApprovedBy?: string;
+  principalApprovedAt?: string;
   decisionNote?: string;
   reviewedBy?: string;
   createdAt?: unknown;

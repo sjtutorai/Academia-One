@@ -15,11 +15,28 @@ import {
   CheckCircle2,
   Save,
   Upload,
+  UserCheck,
+  KeyRound,
+  Copy,
+  Check,
+  Download,
+  XCircle,
 } from 'lucide-react';
-import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  setDoc,
+  updateDoc,
+  where,
+  writeBatch,
+  serverTimestamp,
+} from 'firebase/firestore';
 import { db, generateId, handleFirestoreError, OperationType, formatFirestoreDate } from '../../lib/firebase';
 import { getSchoolAccessMode, computeLetterGrade } from '../../lib/permissions';
 import { recordAuditLog } from '../../lib/audit';
+import { exportToCsv } from '../../lib/csv';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSchoolData, type SchoolDataBundle } from '../../hooks/useSchoolData';
 import { DashboardShell, type NavItem } from '../../components/DashboardShell';
@@ -41,13 +58,18 @@ import type {
   Homework,
   HomeworkSubmission,
   LearningMaterial,
+  MemberAccessCode,
   PlatformUser,
+  SchoolJoinRequest,
+  TeacherProfile,
 } from '../../types/models';
 
 const TEACHER_NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', path: '/teacher/dashboard', icon: LayoutDashboard },
   { id: 'timetable', label: 'My Timetable', path: '/teacher/timetable', icon: CalendarDays },
   { id: 'classes', label: 'My Classes', path: '/teacher/classes', icon: BookOpen },
+  { id: 'student-codes', label: 'Class Student Codes', path: '/teacher/student-codes', icon: KeyRound },
+  { id: 'approvals', label: 'Student Approvals', path: '/teacher/approvals', icon: UserCheck },
   { id: 'attendance', label: 'Attendance', path: '/teacher/attendance', icon: ClipboardCheck },
   { id: 'homework', label: 'Homework & Reviews', path: '/teacher/homework', icon: ClipboardList },
   { id: 'marks', label: 'Exams & Marks', path: '/teacher/marks', icon: Award },
@@ -147,6 +169,31 @@ export default function TeacherPortal() {
         />
         <Route path="timetable" element={<TeacherTimetableView data={scopedData} />} />
         <Route path="classes" element={<TeacherClassesView data={scopedData} search={globalSearch} />} />
+        <Route
+          path="student-codes"
+          element={
+            <TeacherStudentCodesView
+              user={activeUser}
+              schoolCode={activeSchool?.schoolPrefix || activeSchool?.code || ''}
+              schoolName={activeSchool?.name || 'School'}
+              teacherProfile={teacherProfile}
+              assignedClassIds={Array.from(assignedClassSet)}
+              data={scopedData}
+              search={globalSearch}
+            />
+          }
+        />
+        <Route
+          path="approvals"
+          element={
+            <TeacherStudentApprovalsView
+              user={activeUser}
+              teacherProfile={teacherProfile}
+              assignedClassIds={Array.from(assignedClassSet)}
+              canWrite={access.canWrite}
+            />
+          }
+        />
         <Route
           path="attendance"
           element={
@@ -1668,3 +1715,575 @@ function TeacherAnnouncementsView({
     </div>
   );
 }
+
+// ============================================================================
+// 9. Class Student Codes Distribution (Hand Out Codes to Students in Class)
+// ============================================================================
+function TeacherStudentCodesView({
+  user,
+  schoolCode,
+  schoolName,
+  teacherProfile,
+  assignedClassIds,
+  data,
+  search,
+}: {
+  user: PlatformUser;
+  schoolCode: string;
+  schoolName: string;
+  teacherProfile?: TeacherProfile;
+  assignedClassIds: string[];
+  data: SchoolDataBundle;
+  search: string;
+}) {
+  const { pushToast } = useToast();
+  const [memberCodes, setMemberCodes] = useState<MemberAccessCode[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [classFilter, setClassFilter] = useState('all');
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user.schoolId) return;
+    const q = query(collection(db, 'memberAccessCodes'), where('schoolId', '==', user.schoolId));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setMemberCodes(snap.docs.map((d) => d.data() as MemberAccessCode));
+        setLoading(false);
+      },
+      () => setLoading(false),
+    );
+    return () => unsub();
+  }, [user.schoolId]);
+
+  const myTeacherCode = useMemo(() => {
+    if (teacherProfile?.accessCode) return teacherProfile.accessCode;
+    if (user.accessCode) return user.accessCode;
+    const match = memberCodes.find(
+      (c) =>
+        c.role === 'teacher' &&
+        (c.linkedUid === user.uid ||
+          (teacherProfile?.id && c.linkedProfileId === teacherProfile.id) ||
+          (c.email && c.email.toLowerCase() === user.email.toLowerCase())),
+    );
+    return match?.code || '';
+  }, [teacherProfile, user, memberCodes]);
+
+  const classIdSet = useMemo(() => new Set(assignedClassIds), [assignedClassIds]);
+
+  const rows = useMemo(() => {
+    const byStudentCode = new Map<
+      string,
+      {
+        studentCode: string;
+        studentName: string;
+        rollNumber: string;
+        classId: string;
+        classCode: string;
+        className: string;
+        teacherCode: string;
+        status: string;
+      }
+    >();
+
+    // 1. Pull from memberAccessCodes where role == student
+    memberCodes
+      .filter((c) => c.role === 'student')
+      .filter((c) => {
+        if (c.classId && classIdSet.has(c.classId)) return true;
+        if (teacherProfile?.id && c.teacherId === teacherProfile.id) return true;
+        if (myTeacherCode && c.teacherCode && c.teacherCode.toUpperCase() === myTeacherCode.toUpperCase()) return true;
+        return classIdSet.size === 0;
+      })
+      .forEach((c) => {
+        const cls = data.classes.find((cl) => cl.id === c.classId);
+        byStudentCode.set(c.code, {
+          studentCode: c.code,
+          studentName: c.memberName,
+          rollNumber: c.rollNumber || '',
+          classId: c.classId || '',
+          classCode: c.classCode || cls?.code || '',
+          className: c.className || cls?.name || '',
+          teacherCode: c.teacherCode || myTeacherCode,
+          status: c.status,
+        });
+      });
+
+    // 2. Merge any students in scopedData.students that already have an accessCode
+    data.students.forEach((st) => {
+      if (!st.accessCode || byStudentCode.has(st.accessCode)) return;
+      const cls = data.classes.find((cl) => cl.id === st.classId);
+      byStudentCode.set(st.accessCode, {
+        studentCode: st.accessCode,
+        studentName: st.name,
+        rollNumber: st.rollNumber || '',
+        classId: st.classId,
+        classCode: cls?.code || '',
+        className: cls?.name || st.className || '',
+        teacherCode: myTeacherCode,
+        status: st.status,
+      });
+    });
+
+    const q = search.trim().toLowerCase();
+    return Array.from(byStudentCode.values())
+      .filter((r) => (classFilter === 'all' ? true : r.classId === classFilter))
+      .filter(
+        (r) =>
+          !q ||
+          r.studentName.toLowerCase().includes(q) ||
+          r.studentCode.toLowerCase().includes(q) ||
+          r.classCode.toLowerCase().includes(q) ||
+          r.rollNumber.toLowerCase().includes(q),
+      )
+      .sort((a, b) => a.studentCode.localeCompare(b.studentCode, undefined, { numeric: true }));
+  }, [memberCodes, data.students, data.classes, classIdSet, teacherProfile?.id, myTeacherCode, classFilter, search]);
+
+  const copyText = (key: string, text: string, label: string) => {
+    navigator.clipboard?.writeText(text);
+    setCopiedKey(key);
+    pushToast('success', `${label} copied to clipboard.`);
+    setTimeout(() => setCopiedKey((prev) => (prev === key ? null : prev)), 2000);
+  };
+
+  const handleExportCsv = () => {
+    exportToCsv(
+      `${(schoolCode || 'school').toLowerCase()}_class_student_codes.csv`,
+      ['StudentName', 'RollNo', 'SchoolCode', 'ClassName', 'ClassCode', 'TeacherCode', 'StudentCode', 'Status'],
+      rows.map((r) => [
+        r.studentName,
+        r.rollNumber,
+        schoolCode,
+        r.className,
+        r.classCode,
+        r.teacherCode,
+        r.studentCode,
+        r.status,
+      ]),
+    );
+    pushToast('success', 'Class student access codes exported to CSV.');
+  };
+
+  if (loading) return <SkeletonTable rows={6} cols={6} />;
+
+  return (
+    <div className="space-y-5">
+      {/* Teacher & School Code Summary Banner */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold text-teal-700">Classroom Code Distribution</p>
+          <h2 className="text-base font-bold font-display text-slate-900 mt-0.5">
+            Student Join Codes for {schoolName}
+          </h2>
+          <p className="text-xs text-slate-500 mt-1">
+            Share all 4 codes with each student in class (School Code, Class Code, your Teacher Code, and their personal
+            Student Code). When they join, their request arrives in your Student Approvals queue first.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-xs">
+            <p className="text-[10px] text-slate-500">School Code</p>
+            <p className="font-mono font-bold text-slate-900">{schoolCode || '—'}</p>
+          </div>
+          <div className="bg-teal-50/70 border border-teal-200 rounded-lg px-3.5 py-2 text-xs">
+            <p className="text-[10px] text-teal-800">Your Teacher Code</p>
+            <p className="font-mono font-bold text-teal-900">{myTeacherCode || 'Not issued yet'}</p>
+          </div>
+          <Button variant="secondary" size="sm" disabled={rows.length === 0} onClick={handleExportCsv}>
+            <Download className="w-4 h-4" />
+            Export CSV
+          </Button>
+        </div>
+      </div>
+
+      {/* Filter Bar */}
+      {data.classes.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setClassFilter('all')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border cursor-pointer ${
+              classFilter === 'all'
+                ? 'bg-[#0B1528] text-white border-[#0B1528]'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            All Assigned Classes ({rows.length})
+          </button>
+          {data.classes.map((cls) => (
+            <button
+              key={cls.id}
+              type="button"
+              onClick={() => setClassFilter(cls.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border cursor-pointer ${
+                classFilter === cls.id
+                  ? 'bg-teal-700 text-white border-teal-700'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              {cls.name} ({cls.code})
+            </button>
+          ))}
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <EmptyState
+          title="No Student Codes Found for Your Classes"
+          description="Once your Principal adds students or completes initial school setup, every student's 4-code bundle appears here ready to share in class."
+        />
+      ) : (
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500">
+                <tr>
+                  <th className="py-3 px-4 font-semibold">Student</th>
+                  <th className="py-3 px-4 font-semibold">School Code</th>
+                  <th className="py-3 px-4 font-semibold">Class Code</th>
+                  <th className="py-3 px-4 font-semibold">Teacher Code</th>
+                  <th className="py-3 px-4 font-semibold">Student Code</th>
+                  <th className="py-3 px-4 font-semibold">Status</th>
+                  <th className="py-3 px-4 font-semibold text-right">Share</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {rows.map((row) => {
+                  const bundleText = `School: ${schoolCode} | Class: ${row.classCode || '—'} | Teacher: ${row.teacherCode || '—'} | Student (${row.studentName}): ${row.studentCode}`;
+                  return (
+                    <tr key={row.studentCode} className="hover:bg-slate-50/70">
+                      <td className="py-3 px-4">
+                        <p className="font-medium text-slate-900">{row.studentName}</p>
+                        <p className="text-[11px] text-slate-500">
+                          {row.className || 'Assigned Class'}
+                          {row.rollNumber ? ` · Roll #${row.rollNumber}` : ''}
+                        </p>
+                      </td>
+                      <td className="py-3 px-4 font-mono text-xs text-slate-700 tabular-nums">{schoolCode}</td>
+                      <td className="py-3 px-4 font-mono text-xs font-semibold text-slate-800 tabular-nums">
+                        {row.classCode || '—'}
+                      </td>
+                      <td className="py-3 px-4 font-mono text-xs text-slate-700 tabular-nums">
+                        {row.teacherCode || '—'}
+                      </td>
+                      <td className="py-3 px-4 font-mono text-xs font-bold text-teal-800 tabular-nums">
+                        {row.studentCode}
+                      </td>
+                      <td className="py-3 px-4">
+                        <StatusText status={row.status} />
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => copyText(row.studentCode, bundleText, `${row.studentName}'s 4 codes`)}
+                        >
+                          {copiedKey === row.studentCode ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                          {copiedKey === row.studentCode ? 'Copied' : 'Copy 4 Codes'}
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// 10. Student Join Approvals — Stage 1 of 3 (Teacher -> Coordinator -> Principal)
+// ============================================================================
+function TeacherStudentApprovalsView({
+  user,
+  teacherProfile,
+  assignedClassIds,
+  canWrite,
+}: {
+  user: PlatformUser;
+  teacherProfile?: TeacherProfile;
+  assignedClassIds: string[];
+  canWrite: boolean;
+}) {
+  const { pushToast } = useToast();
+  const [requests, setRequests] = useState<SchoolJoinRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<SchoolJoinRequest | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+
+  useEffect(() => {
+    if (!user.schoolId) return;
+    const q = query(collection(db, 'schoolJoinRequests'), where('schoolId', '==', user.schoolId));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setRequests(snap.docs.map((d) => d.data() as SchoolJoinRequest));
+        setLoading(false);
+      },
+      () => setLoading(false),
+    );
+    return () => unsub();
+  }, [user.schoolId]);
+
+  const classIdSet = useMemo(() => new Set(assignedClassIds), [assignedClassIds]);
+  const myTeacherCode = (teacherProfile?.accessCode || user.accessCode || '').toUpperCase();
+
+  const myStudentRequests = useMemo(() => {
+    return requests
+      .filter((req) => req.requestedRole === 'student')
+      .filter((req) => {
+        if (teacherProfile?.id && req.targetTeacherId && req.targetTeacherId === teacherProfile.id) return true;
+        if (req.targetTeacherUid && req.targetTeacherUid === user.uid) return true;
+        if (myTeacherCode && req.teacherCode && req.teacherCode.toUpperCase() === myTeacherCode) return true;
+        if (!req.targetTeacherId && !req.targetTeacherUid && req.requestedClassId && classIdSet.has(req.requestedClassId)) {
+          return true;
+        }
+        return false;
+      });
+  }, [requests, teacherProfile?.id, user.uid, myTeacherCode, classIdSet]);
+
+  const pendingStage1 = myStudentRequests.filter(
+    (r) => r.status === 'pending' && r.approvalStage === 'teacher_pending',
+  );
+  const reviewedOrForwarded = myStudentRequests.filter(
+    (r) => !(r.status === 'pending' && r.approvalStage === 'teacher_pending'),
+  );
+
+  const handleApproveToCoordinator = async (req: SchoolJoinRequest) => {
+    if (!canWrite) return;
+    setProcessingId(req.id);
+    try {
+      const batch = writeBatch(db);
+      const now = serverTimestamp();
+      batch.update(doc(db, 'schoolJoinRequests', req.id), {
+        approvalStage: 'coordinator_pending',
+        status: 'pending',
+        teacherApprovedBy: user.uid,
+        teacherApprovedName: user.displayName,
+        teacherApprovedAt: new Date().toISOString(),
+        updatedAt: now,
+      });
+      batch.update(doc(db, 'applicationStatuses', req.applicationNumber), {
+        status: 'pending',
+        applicantMessage: `Approved by Class Teacher (${user.displayName}) — forwarded to Academic Coordinator for Stage 2 review.`,
+        updatedAt: now,
+      });
+      await batch.commit();
+      await recordAuditLog({
+        schoolId: user.schoolId,
+        actorUid: user.uid,
+        actorName: user.displayName,
+        actorRole: 'teacher',
+        action: 'TEACHER_APPROVED_STUDENT_JOIN',
+        targetType: 'schoolJoinRequest',
+        targetId: req.id,
+        targetLabel: `${req.applicantName} (${req.studentCode || req.accessCode || req.applicationNumber})`,
+      }).catch(() => undefined);
+      pushToast('success', `${req.applicantName} approved & forwarded to Academic Coordinator (Stage 2 of 3).`);
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to approve student request.');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleReject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectTarget || !canWrite) return;
+    setProcessingId(rejectTarget.id);
+    const reason = rejectReason.trim() || 'Student codes or identity could not be verified by class teacher.';
+    try {
+      const batch = writeBatch(db);
+      const now = serverTimestamp();
+      batch.update(doc(db, 'schoolJoinRequests', rejectTarget.id), {
+        status: 'rejected',
+        approvalStage: 'rejected',
+        decisionNote: reason.slice(0, 500),
+        reviewedBy: user.uid,
+        updatedAt: now,
+      });
+      batch.update(doc(db, 'applicationStatuses', rejectTarget.applicationNumber), {
+        status: 'rejected',
+        decisionNote: reason.slice(0, 500),
+        applicantMessage: `Rejected by Class Teacher (${user.displayName}): ${reason}`,
+        updatedAt: now,
+      });
+      await batch.commit();
+      await recordAuditLog({
+        schoolId: user.schoolId,
+        actorUid: user.uid,
+        actorName: user.displayName,
+        actorRole: 'teacher',
+        action: 'TEACHER_REJECTED_STUDENT_JOIN',
+        targetType: 'schoolJoinRequest',
+        targetId: rejectTarget.id,
+        targetLabel: rejectTarget.applicantName,
+        details: reason,
+      }).catch(() => undefined);
+      pushToast('info', `Rejected student join request for ${rejectTarget.applicantName}.`);
+      setRejectTarget(null);
+      setRejectReason('');
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to reject request.');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  if (loading) return <SkeletonTable rows={5} cols={4} />;
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white border border-slate-200 rounded-xl p-5">
+        <p className="text-xs font-semibold text-teal-700">Stage 1 of 3 · Teacher Verification</p>
+        <h2 className="text-base font-bold font-display text-slate-900 mt-0.5">
+          Student Join Approval Queue ({pendingStage1.length} pending)
+        </h2>
+        <p className="text-xs text-slate-500 mt-1">
+          Verify each student&apos;s School, Class, Teacher, and Student codes. Approving forwards the request to the
+          Academic Coordinator (Stage 2), who then forwards to the Principal (Stage 3).
+        </p>
+      </div>
+
+      {pendingStage1.length === 0 ? (
+        <EmptyState
+          title="No Pending Student Requests"
+          description="When students submit their 4 access codes selecting your Teacher Code, they will appear here for Stage 1 verification."
+        />
+      ) : (
+        <div className="space-y-3">
+          {pendingStage1.map((req) => (
+            <div key={req.id} className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-slate-900">{req.applicantName}</h3>
+                    <StatusText status="teacher_pending" />
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {req.applicantEmail}
+                    {req.phone ? ` · ${req.phone}` : ''} · Ref{' '}
+                    <span className="font-mono text-slate-700">{req.applicationNumber}</span>
+                  </p>
+                  {req.requestedClassInfo && (
+                    <p className="text-xs text-slate-700 mt-1">Class: {req.requestedClassInfo}</p>
+                  )}
+                </div>
+                {canWrite && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={processingId === req.id}
+                      onClick={() => {
+                        setRejectTarget(req);
+                        setRejectReason('');
+                      }}
+                    >
+                      <XCircle className="w-3.5 h-3.5 text-red-600" />
+                      Reject
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={processingId === req.id}
+                      onClick={() => handleApproveToCoordinator(req)}
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      {processingId === req.id ? 'Forwarding…' : 'Approve & Forward to Coordinator'}
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs bg-slate-50 border border-slate-200/80 rounded-lg p-3">
+                <div>
+                  <p className="text-[10px] text-slate-500">School Code</p>
+                  <p className="font-mono font-bold text-slate-900">{req.schoolCode}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500">Class Code</p>
+                  <p className="font-mono font-bold text-slate-900">{req.classCode || '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500">Teacher Code</p>
+                  <p className="font-mono font-bold text-slate-900">{req.teacherCode || '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500">Student Code</p>
+                  <p className="font-mono font-bold text-teal-800">{req.studentCode || req.accessCode || '—'}</p>
+                </div>
+              </div>
+
+              {req.note && <p className="text-xs text-slate-600">Student note: {req.note}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {reviewedOrForwarded.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl p-5">
+          <h3 className="text-sm font-bold font-display text-slate-900 mb-3">
+            Forwarded &amp; Decided Requests ({reviewedOrForwarded.length})
+          </h3>
+          <div className="divide-y divide-slate-100">
+            {reviewedOrForwarded.map((req) => (
+              <div key={req.id} className="py-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">
+                    {req.applicantName}{' '}
+                    <span className="font-mono text-xs text-teal-700 ml-1">
+                      {req.studentCode || req.accessCode}
+                    </span>
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {req.requestedClassInfo || req.classCode} · Ref{' '}
+                    <span className="font-mono">{req.applicationNumber}</span>
+                  </p>
+                </div>
+                <StatusText status={req.status === 'pending' && req.approvalStage ? req.approvalStage : req.status} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <Modal
+        open={Boolean(rejectTarget)}
+        onClose={() => setRejectTarget(null)}
+        title={`Reject Request — ${rejectTarget?.applicantName || ''}`}
+      >
+        <form onSubmit={handleReject} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Rejection Reason</label>
+            <textarea
+              required
+              rows={3}
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Explain why the student code or class verification failed…"
+              className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setRejectTarget(null)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="danger" disabled={processingId === rejectTarget?.id}>
+              Confirm Rejection
+            </Button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+

@@ -297,7 +297,6 @@ function StudentOverview({
   return (
     <div className="space-y-6">
       <div className="bg-[#0F295C] text-white rounded-xl overflow-hidden shadow-xs">
-        <div className="brand-spectrum-bar w-full" />
         <div className="p-6 flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-xs font-semibold text-[#FACC15]">

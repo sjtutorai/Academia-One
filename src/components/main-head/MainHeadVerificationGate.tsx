@@ -188,8 +188,6 @@ export function MainHeadVerificationGate({ children }: { children: React.ReactNo
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col">
-      <div className="brand-spectrum-bar w-full" />
-
       <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
         <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
           {/* Deep Cobalt Header */}

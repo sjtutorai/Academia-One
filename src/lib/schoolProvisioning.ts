@@ -1,4 +1,15 @@
-import { doc, getDoc, writeBatch, setDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+  writeBatch,
+  setDoc,
+  serverTimestamp,
+  type DocumentReference,
+} from 'firebase/firestore';
 import { db, generateId, handleFirestoreError, OperationType } from './firebase';
 import { recordAuditLog } from './audit';
 import {
@@ -6,6 +17,7 @@ import {
   expandClassSectionPlan,
   formatPrincipalCode,
   formatRoleCodeRange,
+  generateActivationCode,
   sanitizePhoneDigits,
   sanitizeSchoolPrefix,
 } from './schoolCodes';
@@ -13,6 +25,9 @@ import type {
   ClassSectionRange,
   CoordinatorPermissions,
   EmailDirectoryEntry,
+  MemberAccessCode,
+  PlatformUser,
+  School,
   SchoolApplication,
   SchoolCodeClassSlot,
   SubscriptionPlan,
@@ -104,6 +119,7 @@ export async function upsertEmailDirectoryEntry(params: {
   schoolName?: string;
   role: EmailDirectoryEntry['role'];
   displayName?: string;
+  accessCode?: string;
   linkedProfileId?: string;
   classId?: string;
   section?: string;
@@ -121,6 +137,7 @@ export async function upsertEmailDirectoryEntry(params: {
     schoolName: (params.schoolName || '').slice(0, 140),
     role: params.role,
     displayName: (params.displayName || '').slice(0, 120),
+    accessCode: (params.accessCode || '').trim().toUpperCase().slice(0, 24),
     linkedProfileId: params.linkedProfileId || '',
     classId: params.classId || '',
     section: params.section || '',
@@ -139,6 +156,60 @@ export async function upsertEmailDirectoryEntry(params: {
     return emailKey;
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `emailDirectory/${emailKey}`);
+  }
+}
+
+export async function upsertMemberAccessCode(params: {
+  code: string;
+  schoolId: string;
+  schoolCode: string;
+  schoolName: string;
+  role: 'coordinator' | 'teacher' | 'student';
+  memberName: string;
+  email?: string;
+  classId?: string;
+  classCode?: string;
+  className?: string;
+  teacherId?: string;
+  teacherCode?: string;
+  teacherName?: string;
+  rollNumber?: string;
+  status?: 'active' | 'claimed' | 'revoked';
+  linkedProfileId?: string;
+  linkedUid?: string;
+  createdBy: string;
+}): Promise<MemberAccessCode> {
+  const normalizedCode = params.code.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24);
+  const record: MemberAccessCode = {
+    code: normalizedCode,
+    schoolId: params.schoolId,
+    schoolCode: params.schoolCode.trim().toUpperCase().slice(0, 16),
+    schoolName: params.schoolName.trim().slice(0, 140),
+    role: params.role,
+    memberName: params.memberName.trim().slice(0, 120),
+    email: (params.email || '').trim().toLowerCase().slice(0, 160),
+    classId: params.classId || '',
+    classCode: (params.classCode || '').trim().toUpperCase().slice(0, 24),
+    className: (params.className || '').trim().slice(0, 100),
+    teacherId: params.teacherId || '',
+    teacherCode: (params.teacherCode || '').trim().toUpperCase().slice(0, 24),
+    teacherName: (params.teacherName || '').trim().slice(0, 120),
+    rollNumber: (params.rollNumber || '').trim().slice(0, 24),
+    status: params.status || 'active',
+    linkedProfileId: params.linkedProfileId || '',
+    linkedUid: params.linkedUid || '',
+    createdBy: params.createdBy,
+  };
+
+  try {
+    await setDoc(doc(db, 'memberAccessCodes', normalizedCode), {
+      ...record,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return record;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `memberAccessCodes/${normalizedCode}`);
   }
 }
 
@@ -178,6 +249,7 @@ export async function provisionSchoolTenant(params: ProvisionSchoolParams): Prom
   schoolId: string;
   schoolCode: string;
   principalCode: string;
+  activationCode: string;
   subscriptionId: string;
   provisionedClassCount: number;
 }> {
@@ -191,6 +263,7 @@ export async function provisionSchoolTenant(params: ProvisionSchoolParams): Prom
           schoolId: current.approvedSchoolId,
           schoolCode: current.approvedSchoolCode,
           principalCode: formatPrincipalCode(current.approvedSchoolCode),
+          activationCode: '',
           subscriptionId: `sub_${current.approvedSchoolId}`,
           provisionedClassCount: 0,
         };
@@ -202,6 +275,7 @@ export async function provisionSchoolTenant(params: ProvisionSchoolParams): Prom
   const preferredPrefix = params.schoolCode || params.schoolPrefix || params.application?.schoolPrefix;
   const schoolCode = await generateUniqueSchoolPrefix(params.schoolName, preferredPrefix);
   const principalCode = formatPrincipalCode(schoolCode);
+  const activationCode = generateActivationCode(schoolCode);
   const subscriptionId = generateId('sub');
   const now = serverTimestamp();
 
@@ -238,6 +312,7 @@ export async function provisionSchoolTenant(params: ProvisionSchoolParams): Prom
   });
   const classSections: SchoolCodeClassSlot[] = plannedClassRecords.map((row) => ({
     classId: row.classId,
+    classCode: row.code,
     className: row.name,
     gradeLevel: row.gradeLevel,
     section: row.section,
@@ -290,7 +365,10 @@ export async function provisionSchoolTenant(params: ProvisionSchoolParams): Prom
     schoolType: (params.schoolType || '').slice(0, 64),
     board: (params.board || '').slice(0, 120),
     logoDataUrl: (params.logoDataUrl || '').slice(0, 200000),
-    setupCompleted: false,
+    schoolPrefix: schoolCode,
+    activationCode,
+    activationVerified: params.source !== 'admin_manual',
+    setupCompleted: params.source !== 'admin_manual',
     isDemo: false,
     createdBy: params.actorUid,
     createdAt: now,
@@ -344,6 +422,7 @@ export async function provisionSchoolTenant(params: ProvisionSchoolParams): Prom
     schoolName: params.schoolName.trim().slice(0, 140),
     role: 'principal',
     displayName: params.principalName.trim().slice(0, 120),
+    accessCode: principalCode,
     linkedProfileId: '',
     classId: '',
     section: '',
@@ -433,8 +512,14 @@ export async function provisionSchoolTenant(params: ProvisionSchoolParams): Prom
           section: cls.section,
           capacity: 40,
           academicYear: params.academicYear.trim().slice(0, 24),
-          studentCount: 0,
+          classTeacherId: '',
+          classTeacherName: '',
+          roomId: '',
+          roomName: '',
+          status: 'active',
+          createdBy: params.actorUid,
           createdAt: now,
+          updatedAt: now,
         });
       }
       try {
@@ -454,15 +539,189 @@ export async function provisionSchoolTenant(params: ProvisionSchoolParams): Prom
     targetType: 'school',
     targetId: schoolId,
     targetLabel: `${params.schoolName} (${schoolCode})`,
-    details: `Provisioned school tenant (${codeSummaryText}), ${plannedClassRecords.length} class-sections, and Principal email binding (${cleanPrincipalEmail}).`,
+    details: `Provisioned school tenant (${codeSummaryText}), Activation Code ${activationCode}, ${plannedClassRecords.length} class-sections, and Principal email binding (${cleanPrincipalEmail}).`,
   }).catch(() => undefined);
 
   return {
     schoolId,
     schoolCode,
     principalCode,
+    activationCode,
     subscriptionId,
     provisionedClassCount: plannedClassRecords.length,
   };
+}
+
+async function commitDeletesInChunks(refs: DocumentReference[]): Promise<number> {
+  const uniqueMap = new Map<string, DocumentReference>();
+  refs.forEach((r) => uniqueMap.set(r.path, r));
+  const uniqueRefs = Array.from(uniqueMap.values());
+  const CHUNK_SIZE = 350;
+  for (let i = 0; i < uniqueRefs.length; i += CHUNK_SIZE) {
+    const batch = writeBatch(db);
+    uniqueRefs.slice(i, i + CHUNK_SIZE).forEach((ref) => batch.delete(ref));
+    await batch.commit();
+  }
+  return uniqueRefs.length;
+}
+
+/**
+ * Permanently removes a user's access and deletes all linked Firestore records
+ * (users, emailDirectory, notificationPreferences, notifications, teachers, students,
+ * schoolJoinRequests, and memberAccessCodes). Immediately reflected in Firebase Console.
+ */
+export async function permanentlyDeleteUserAccess(params: {
+  user: PlatformUser;
+  actorUid: string;
+  actorName: string;
+}): Promise<{ deletedDocs: number }> {
+  const { user } = params;
+  if (user.email.trim().toLowerCase() === 'sjtutorai@gmail.com' || user.role === 'main_head') {
+    throw new Error('The platform Main Head account cannot be deleted.');
+  }
+
+  const refs: DocumentReference[] = [
+    doc(db, 'users', user.uid),
+    doc(db, 'notificationPreferences', user.uid),
+  ];
+
+  const cleanEmail = (user.email || '').trim().toLowerCase();
+  if (cleanEmail) {
+    refs.push(doc(db, 'emailDirectory', emailToKey(cleanEmail)));
+  }
+
+  const safeQueryRefs = async (colName: string, field: string, value: string) => {
+    if (!value) return;
+    try {
+      const snap = await getDocs(query(collection(db, colName), where(field, '==', value)));
+      snap.docs.forEach((d) => refs.push(d.ref));
+    } catch {
+      // Ignore collection if empty or not matching
+    }
+  };
+
+  await Promise.all([
+    safeQueryRefs('teachers', 'userId', user.uid),
+    safeQueryRefs('teachers', 'email', cleanEmail),
+    safeQueryRefs('students', 'userId', user.uid),
+    safeQueryRefs('students', 'email', cleanEmail),
+    safeQueryRefs('schoolJoinRequests', 'applicantUid', user.uid),
+    safeQueryRefs('notifications', 'userId', user.uid),
+    safeQueryRefs('memberAccessCodes', 'linkedUid', user.uid),
+    safeQueryRefs('memberAccessCodes', 'email', cleanEmail),
+  ]);
+
+  if (user.accessCode) {
+    refs.push(doc(db, 'memberAccessCodes', user.accessCode.trim().toUpperCase()));
+  }
+
+  let deletedDocs = 0;
+  try {
+    deletedDocs = await commitDeletesInChunks(refs);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `users/${user.uid}`);
+  }
+
+  await recordAuditLog({
+    schoolId: user.schoolId || 'platform',
+    actorUid: params.actorUid,
+    actorName: params.actorName,
+    actorRole: 'main_head',
+    action: 'PERMANENTLY_DELETE_USER_ACCESS',
+    targetType: 'user',
+    targetId: user.uid,
+    targetLabel: `${user.displayName} (${user.email})`,
+    details: `Permanently removed access and deleted ${deletedDocs} Firestore document(s) across users, emailDirectory, role records, and access codes.`,
+  }).catch(() => undefined);
+
+  return { deletedDocs };
+}
+
+/**
+ * Permanently deletes a school tenant and cascades deletion across all tenant collections
+ * in Firestore (schools, schoolCodes, memberAccessCodes, subscriptions, classes, subjects,
+ * rooms, teachers, students, timetable, attendance, homework, exams, notices, join requests,
+ * emailDirectory, and non-main-head user profiles belonging to the school).
+ */
+export async function permanentlyDeleteSchoolCascade(params: {
+  school: School;
+  actorUid: string;
+  actorName: string;
+}): Promise<{ deletedDocs: number }> {
+  const { school } = params;
+  const refs: DocumentReference[] = [doc(db, 'schools', school.id)];
+  if (school.code) {
+    refs.push(doc(db, 'schoolCodes', school.code.trim().toUpperCase()));
+  }
+
+  const tenantCollections = [
+    'schoolSubscriptions',
+    'memberAccessCodes',
+    'classes',
+    'subjects',
+    'rooms',
+    'teachers',
+    'students',
+    'timetablePeriods',
+    'attendanceRecords',
+    'homework',
+    'homeworkSubmissions',
+    'examinations',
+    'examResults',
+    'learningMaterials',
+    'announcements',
+    'schoolJoinRequests',
+    'emailDirectory',
+    'notifications',
+  ];
+
+  await Promise.all(
+    tenantCollections.map(async (colName) => {
+      try {
+        const snap = await getDocs(query(collection(db, colName), where('schoolId', '==', school.id)));
+        snap.docs.forEach((d) => refs.push(d.ref));
+      } catch {
+        // Non-blocking per collection
+      }
+    }),
+  );
+
+  // Also remove non-main-head users + their notificationPreferences belonging to this school
+  try {
+    const userSnap = await getDocs(query(collection(db, 'users'), where('schoolId', '==', school.id)));
+    userSnap.docs.forEach((d) => {
+      const u = d.data() as PlatformUser;
+      if (u.role !== 'main_head' && u.email?.toLowerCase() !== 'sjtutorai@gmail.com') {
+        refs.push(d.ref);
+        refs.push(doc(db, 'notificationPreferences', d.id));
+        if (u.email) {
+          refs.push(doc(db, 'emailDirectory', emailToKey(u.email)));
+        }
+      }
+    });
+  } catch {
+    // Non-blocking
+  }
+
+  let deletedDocs = 0;
+  try {
+    deletedDocs = await commitDeletesInChunks(refs);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `schools/${school.id}`);
+  }
+
+  await recordAuditLog({
+    schoolId: 'platform',
+    actorUid: params.actorUid,
+    actorName: params.actorName,
+    actorRole: 'main_head',
+    action: 'PERMANENTLY_DELETE_SCHOOL_CASCADE',
+    targetType: 'school',
+    targetId: school.id,
+    targetLabel: `${school.name} (${school.code})`,
+    details: `Permanently deleted school tenant and cascaded deletion across ${deletedDocs} Firestore document(s).`,
+  }).catch(() => undefined);
+
+  return { deletedDocs };
 }
 

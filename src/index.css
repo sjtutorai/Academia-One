@@ -64,20 +64,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .brand-spectrum-bar {
-    background: linear-gradient(
-      90deg,
-      #2563EB 0%,
-      #2563EB 25%,
-      #EA4335 25%,
-      #EA4335 50%,
-      #FBBC05 50%,
-      #FBBC05 75%,
-      #34A853 75%,
-      #34A853 100%
-    );
-  }
-
   .animate-orb-slow {
     animation: orb-drift-slow 18s ease-in-out infinite;
   }

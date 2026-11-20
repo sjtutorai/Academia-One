@@ -30,7 +30,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { db, generateId, formatFirestoreDateTime } from '../../lib/firebase';
-import { emailToKey, upsertEmailDirectoryEntry } from '../../lib/schoolProvisioning';
+import { emailToKey, upsertEmailDirectoryEntry, upsertMemberAccessCode } from '../../lib/schoolProvisioning';
 import { exportToCsv } from '../../lib/csv';
 import {
   SECTION_LETTERS,
@@ -57,6 +57,7 @@ import {
 import { DetectLocationAddressPicker } from '../../components/shared/DetectLocationAddressPicker';
 import type {
   CoordinatorPermissions,
+  MemberAccessCode,
   PlatformUser,
   Room,
   School,
@@ -64,6 +65,7 @@ import type {
   SchoolCodeClassSlot,
   SchoolCodeEntry,
   SchoolJoinRequest,
+  TeacherProfile,
 } from '../../types/models';
 
 interface ClassDraft {
@@ -233,6 +235,7 @@ export function PrincipalSetupWizardView({
         });
         newlyAddedSlots.push({
           classId: id,
+          classCode: code,
           className: name,
           gradeLevel: item.grade,
           section: item.section,
@@ -272,6 +275,7 @@ export function PrincipalSetupWizardView({
         const mergedSlots: SchoolCodeClassSlot[] = [
           ...existingClasses.map((c) => ({
             classId: c.id,
+            classCode: c.code,
             className: c.name,
             gradeLevel: c.gradeLevel,
             section: c.section,
@@ -1169,11 +1173,12 @@ export function PrincipalJoinRequestsView({
           guardianName: '',
           guardianPhone: approvingReq.phone || '',
           guardianEmail: '',
+          accessCode: (approvingReq.studentCode || approvingReq.accessCode || '').trim().toUpperCase().slice(0, 24),
           status: 'active',
           history: [
             {
               date: new Date().toISOString().slice(0, 10),
-              event: `Approved via School Code join application ${approvingReq.applicationNumber}`,
+              event: `Approved via 3-stage verification (${approvingReq.applicationNumber})`,
               academicYear: school.academicYear || '2026-2027',
             },
           ],
@@ -1196,6 +1201,7 @@ export function PrincipalJoinRequestsView({
           joiningDate: new Date().toISOString().slice(0, 10),
           assignedClassIds: selectedClassIds,
           classTeacherOfClassId: '',
+          accessCode: (approvingReq.accessCode || staffId).trim().toUpperCase().slice(0, 24),
           status: 'active',
           createdBy: actor.uid,
           createdAt: now,
@@ -1204,6 +1210,7 @@ export function PrincipalJoinRequestsView({
       }
 
       // Write Email Directory binding so applicant auto-claims their approved role & schoolId immediately
+      const issuedCode = (approvingReq.studentCode || approvingReq.accessCode || '').trim().toUpperCase().slice(0, 24);
       const dirPayload: Record<string, unknown> = {
         emailKey,
         email: approvingReq.applicantEmail.toLowerCase(),
@@ -1211,6 +1218,7 @@ export function PrincipalJoinRequestsView({
         schoolName: school.name,
         role: approvingReq.requestedRole,
         displayName: approvingReq.applicantName.slice(0, 120),
+        accessCode: issuedCode,
         linkedProfileId,
         classId: finalClassId,
         section: finalSection,
@@ -1231,6 +1239,9 @@ export function PrincipalJoinRequestsView({
 
       batch.update(doc(db, 'schoolJoinRequests', approvingReq.id), {
         status: 'approved',
+        approvalStage: 'approved',
+        principalApprovedBy: actor.uid,
+        principalApprovedAt: new Date().toISOString(),
         decisionNote: noteText.slice(0, 500),
         reviewedBy: actor.uid,
         updatedAt: now,
@@ -1245,6 +1256,18 @@ export function PrincipalJoinRequestsView({
       });
 
       await batch.commit();
+
+      // Mark named memberAccessCode as claimed if one exists
+      if (issuedCode) {
+        await updateDoc(doc(db, 'memberAccessCodes', issuedCode), {
+          status: 'claimed',
+          linkedUid: approvingReq.applicantUid,
+          linkedProfileId,
+          email: approvingReq.applicantEmail.toLowerCase(),
+          updatedAt: serverTimestamp(),
+        }).catch(() => undefined);
+      }
+
       await recordAuditLog({
         schoolId: school.id,
         actorUid: actor.uid,
@@ -1281,6 +1304,7 @@ export function PrincipalJoinRequestsView({
       const batch = writeBatch(db);
       batch.update(doc(db, 'schoolJoinRequests', rejectingReq.id), {
         status: 'rejected',
+        approvalStage: 'rejected',
         decisionNote: decisionNote.trim().slice(0, 500),
         reviewedBy: actor.uid,
         updatedAt: now,
@@ -1334,58 +1358,101 @@ export function PrincipalJoinRequestsView({
         />
       ) : (
         <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100">
-          {filtered.map((req) => (
-            <div key={req.id} className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <StatusText status={req.status} />
-                  <span className="text-slate-300">·</span>
-                  <span className="font-semibold text-teal-800 capitalize">{req.requestedRole}</span>
-                  {req.accessCode && (
-                    <>
-                      <span className="text-slate-300">·</span>
-                      <span className="font-mono font-bold text-[#0B1528]">{req.accessCode}</span>
-                    </>
-                  )}
-                  <span className="text-slate-300">·</span>
-                  <span className="font-mono text-slate-500">{req.applicationNumber}</span>
-                  <span className="text-slate-300">·</span>
-                  <span className="text-slate-400 tabular-nums">{formatFirestoreDateTime(req.createdAt)}</span>
-                </div>
-                <p className="text-sm font-bold text-slate-900">{req.applicantName}</p>
-                <p className="text-xs text-slate-600">
-                  {req.applicantEmail} {req.phone ? `· ${req.phone}` : ''}
-                </p>
-                {req.requestedClassInfo && (
+          {filtered.map((req) => {
+            const isStudentChain = req.requestedRole === 'student';
+            const stage = req.approvalStage || (req.status === 'pending' ? 'principal_pending' : req.status);
+            const awaitingLowerStage =
+              isStudentChain && req.status === 'pending' && (stage === 'teacher_pending' || stage === 'coordinator_pending');
+            return (
+              <div key={req.id} className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <StatusText status={req.status === 'pending' && req.approvalStage ? req.approvalStage : req.status} />
+                    <span className="text-slate-300">·</span>
+                    <span className="font-semibold text-teal-800 capitalize">{req.requestedRole}</span>
+                    {req.accessCode && (
+                      <>
+                        <span className="text-slate-300">·</span>
+                        <span className="font-mono font-bold text-[#0B1528]">{req.accessCode}</span>
+                      </>
+                    )}
+                    <span className="text-slate-300">·</span>
+                    <span className="font-mono text-slate-500">{req.applicationNumber}</span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-slate-400 tabular-nums">{formatFirestoreDateTime(req.createdAt)}</span>
+                  </div>
+                  <p className="text-sm font-bold text-slate-900">{req.applicantName}</p>
                   <p className="text-xs text-slate-600">
-                    {req.requestedClassId ? 'Auto-Identified Class: ' : 'Requested Class / Subject: '}
-                    <span className="font-medium text-slate-800">{req.requestedClassInfo}</span>
+                    {req.applicantEmail} {req.phone ? `· ${req.phone}` : ''}
                   </p>
-                )}
-                {req.note && <p className="text-xs text-slate-500 italic">&ldquo;{req.note}&rdquo;</p>}
-                {req.decisionNote && <p className="text-xs text-slate-700 pt-1">Decision: {req.decisionNote}</p>}
-              </div>
-
-              {req.status === 'pending' && (
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={!canWrite}
-                    onClick={() => {
-                      setRejectingReq(req);
-                      setDecisionNote('');
-                    }}
-                  >
-                    <XCircle className="w-3.5 h-3.5" /> Reject
-                  </Button>
-                  <Button variant="primary" size="sm" disabled={!canWrite} onClick={() => openApproveModal(req)}>
-                    <UserCheck className="w-3.5 h-3.5" /> Approve & Assign
-                  </Button>
+                  {isStudentChain && (req.classCode || req.teacherCode || req.studentCode) && (
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 w-fit">
+                      <span>School: <strong>{req.schoolCode}</strong></span>
+                      {req.classCode && <span>· Class: <strong>{req.classCode}</strong></span>}
+                      {req.teacherCode && <span>· Teacher: <strong>{req.teacherCode}</strong></span>}
+                      {req.studentCode && <span>· Student: <strong>{req.studentCode}</strong></span>}
+                    </div>
+                  )}
+                  {isStudentChain && (
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600 pt-0.5">
+                      <span className={req.teacherApprovedAt ? 'text-emerald-700 font-semibold' : stage === 'teacher_pending' ? 'text-amber-700 font-semibold' : ''}>
+                        1. Teacher{req.teacherApprovedName ? ` (${req.teacherApprovedName} ✓)` : req.targetTeacherName ? ` (${req.targetTeacherName})` : ''}
+                      </span>
+                      <span className="text-slate-300">→</span>
+                      <span className={req.coordinatorApprovedAt ? 'text-emerald-700 font-semibold' : stage === 'coordinator_pending' ? 'text-amber-700 font-semibold' : ''}>
+                        2. Coordinator{req.coordinatorApprovedName ? ` (${req.coordinatorApprovedName} ✓)` : ''}
+                      </span>
+                      <span className="text-slate-300">→</span>
+                      <span className={req.status === 'approved' ? 'text-emerald-700 font-semibold' : stage === 'principal_pending' ? 'text-blue-700 font-semibold' : ''}>
+                        3. Principal Final
+                      </span>
+                    </div>
+                  )}
+                  {req.requestedClassInfo && (
+                    <p className="text-xs text-slate-600">
+                      {req.requestedClassId ? 'Assigned Class: ' : 'Requested Class / Subject: '}
+                      <span className="font-medium text-slate-800">{req.requestedClassInfo}</span>
+                    </p>
+                  )}
+                  {req.note && <p className="text-xs text-slate-500 italic">&ldquo;{req.note}&rdquo;</p>}
+                  {req.decisionNote && <p className="text-xs text-slate-700 pt-1">Decision: {req.decisionNote}</p>}
                 </div>
-              )}
-            </div>
-          ))}
+
+                {req.status === 'pending' && (
+                  <div className="flex flex-col items-end gap-1.5 shrink-0">
+                    {awaitingLowerStage && (
+                      <span className="text-[11px] font-medium text-amber-700">
+                        {stage === 'teacher_pending'
+                          ? 'Awaiting Class Teacher approval first'
+                          : 'Awaiting Academic Coordinator approval first'}
+                      </span>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={!canWrite}
+                        onClick={() => {
+                          setRejectingReq(req);
+                          setDecisionNote('');
+                        }}
+                      >
+                        <XCircle className="w-3.5 h-3.5" /> Reject
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={!canWrite || awaitingLowerStage}
+                        onClick={() => openApproveModal(req)}
+                      >
+                        <UserCheck className="w-3.5 h-3.5" /> Final Approve
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -1607,16 +1674,29 @@ interface GeneratedCodeRow {
 export function PrincipalAccessCodesView({
   school,
   classes,
+  teachers = [],
   actor,
   canWrite,
 }: {
   school: School | null;
   classes: SchoolClass[];
+  teachers?: TeacherProfile[];
   actor: PlatformUser;
   canWrite: boolean;
 }) {
   const { pushToast } = useToast();
   const [codeDoc, setCodeDoc] = useState<SchoolCodeEntry | null>(null);
+  const [namedCodes, setNamedCodes] = useState<MemberAccessCode[]>([]);
+  const [issueModalOpen, setIssueModalOpen] = useState(false);
+  const [issuing, setIssuing] = useState(false);
+  const [issueForm, setIssueForm] = useState({
+    role: 'coordinator' as 'coordinator' | 'teacher' | 'student',
+    memberName: '',
+    email: '',
+    classId: '',
+    teacherId: '',
+    rollNumber: '',
+  });
   const [roleTab, setRoleTab] = useState<'all' | 'principal' | 'coordinator' | 'teacher' | 'student'>('all');
   const [classFilter, setClassFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
@@ -1647,6 +1727,21 @@ export function PrincipalAccessCodesView({
     return () => unsub();
   }, [school?.code, school?.allocatedCoordinators, school?.allocatedTeachers, school?.allocatedStudents]);
 
+  useEffect(() => {
+    if (!school?.id) return;
+    const q = query(collection(db, 'memberAccessCodes'), where('schoolId', '==', school.id));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map((d) => d.data() as MemberAccessCode);
+        rows.sort((a, b) => a.code.localeCompare(b.code));
+        setNamedCodes(rows);
+      },
+      () => undefined,
+    );
+    return () => unsub();
+  }, [school?.id]);
+
   const prefix = school?.code || 'SCH';
   const coordCount = codeDoc?.coordinatorCount ?? school?.allocatedCoordinators ?? 6;
   const teacherCount = codeDoc?.teacherCount ?? school?.allocatedTeachers ?? 20;
@@ -1656,6 +1751,7 @@ export function PrincipalAccessCodesView({
     if (classes.length > 0) {
       return classes.slice(0, 200).map((c) => ({
         classId: c.id,
+        classCode: c.code,
         className: c.name,
         gradeLevel: c.gradeLevel,
         section: c.section,
@@ -1663,6 +1759,60 @@ export function PrincipalAccessCodesView({
     }
     return codeDoc?.classSections || [];
   }, [classes, codeDoc?.classSections]);
+
+  const handleIssueNamedCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!school || !canWrite) return;
+    if (issueForm.memberName.trim().length < 2) {
+      pushToast('error', 'Enter the member full name.');
+      return;
+    }
+    setIssuing(true);
+    try {
+      const existingForRole = namedCodes.filter((c) => c.role === issueForm.role);
+      const nextSeq = existingForRole.length + 1;
+      const totalBaseline = issueForm.role === 'student' ? Math.max(nextSeq, 100) : Math.max(nextSeq, 10);
+      let candidate = formatMemberRoleCode(prefix, issueForm.role, nextSeq, totalBaseline);
+      let bump = nextSeq;
+      while (namedCodes.some((c) => c.code === candidate)) {
+        bump += 1;
+        candidate = formatMemberRoleCode(prefix, issueForm.role, bump, Math.max(bump, totalBaseline));
+      }
+
+      const cls = classes.find((c) => c.id === issueForm.classId);
+      const tch = teachers.find((t) => t.id === issueForm.teacherId);
+      const tchNamed = namedCodes.find(
+        (m) => m.role === 'teacher' && (m.linkedProfileId === tch?.id || m.memberName === tch?.name),
+      );
+
+      await upsertMemberAccessCode({
+        code: candidate,
+        schoolId: school.id,
+        schoolCode: prefix,
+        schoolName: school.name,
+        role: issueForm.role,
+        memberName: issueForm.memberName.trim(),
+        email: issueForm.email.trim().toLowerCase(),
+        classId: cls?.id || '',
+        classCode: cls?.code || '',
+        className: cls?.name || '',
+        teacherId: tch?.id || '',
+        teacherCode: tch?.accessCode || tchNamed?.code || '',
+        teacherName: tch?.name || '',
+        rollNumber: issueForm.rollNumber.trim(),
+        status: 'active',
+        createdBy: actor.uid,
+      });
+
+      pushToast('success', `Issued ${candidate} for ${issueForm.memberName.trim()} (${issueForm.role}).`);
+      setIssueModalOpen(false);
+      setIssueForm({ role: 'coordinator', memberName: '', email: '', classId: '', teacherId: '', rollNumber: '' });
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to generate named code.');
+    } finally {
+      setIssuing(false);
+    }
+  };
 
   const allCodes: GeneratedCodeRow[] = useMemo(() => {
     const rows: GeneratedCodeRow[] = [
@@ -1826,6 +1976,129 @@ export function PrincipalAccessCodesView({
           value={formatRoleCodeRange(prefix, 'student', studentCount)}
           subtext={`Mapped across ${classSlots.length} class-sections`}
         />
+      </div>
+
+      {/* Named Member Access Codes Directory (Mapped to Real Coordinator, Teacher & Student Names) */}
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+        <div className="p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold font-display text-slate-900">
+              Named Member Access Codes ({namedCodes.length})
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Personalized codes starting with <span className="font-mono font-bold text-slate-900">{prefix}</span>{' '}
+              (e.g., <span className="font-mono">{prefix}C01</span> for Coordinator,{' '}
+              <span className="font-mono">{prefix}T01</span> for Teacher,{' '}
+              <span className="font-mono">{prefix}S001</span> for Student). Student codes automatically appear in their class teacher&apos;s portal.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {namedCodes.length > 0 && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  exportToCsv(
+                    `${prefix}_named_member_codes.csv`,
+                    ['Code', 'Role', 'Member Name', 'School Code', 'Class Code', 'Teacher Code', 'Status'],
+                    namedCodes.map((m) => [
+                      m.code,
+                      m.role,
+                      m.memberName,
+                      m.schoolCode,
+                      m.classCode || '',
+                      m.teacherCode || '',
+                      m.status,
+                    ]),
+                  );
+                  pushToast('success', `Exported ${namedCodes.length} named member codes.`);
+                }}
+              >
+                <Download className="w-3.5 h-3.5" /> Export Named CSV
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!canWrite}
+              onClick={() => {
+                setIssueForm({
+                  role: 'coordinator',
+                  memberName: '',
+                  email: '',
+                  classId: classes[0]?.id || '',
+                  teacherId: teachers[0]?.id || '',
+                  rollNumber: '',
+                });
+                setIssueModalOpen(true);
+              }}
+            >
+              <Plus className="w-3.5 h-3.5" /> Issue Named Code
+            </Button>
+          </div>
+        </div>
+        {namedCodes.length === 0 ? (
+          <div className="p-6 text-xs text-slate-500">
+            No named member access codes issued yet. Add Coordinators, Teachers, or Students — or click &ldquo;Issue Named Code&rdquo; above — to generate personalized codes like <span className="font-mono font-semibold text-slate-800">{prefix}C01</span>.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
+                  <th className="py-2.5 px-4 font-semibold">Code</th>
+                  <th className="py-2.5 px-4 font-semibold">Member Name</th>
+                  <th className="py-2.5 px-4 font-semibold">Role</th>
+                  <th className="py-2.5 px-4 font-semibold">Class / Teacher Codes</th>
+                  <th className="py-2.5 px-4 font-semibold">Status</th>
+                  <th className="py-2.5 px-4 font-semibold text-right">Copy</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {namedCodes.map((m) => (
+                  <tr key={m.code} className="hover:bg-slate-50/70">
+                    <td className="py-2.5 px-4 font-mono text-xs font-bold text-[#0F295C] tabular-nums">{m.code}</td>
+                    <td className="py-2.5 px-4">
+                      <p className="text-xs font-semibold text-slate-900">{m.memberName}</p>
+                      {m.email && <p className="text-[11px] text-slate-500">{m.email}</p>}
+                    </td>
+                    <td className="py-2.5 px-4 text-xs capitalize font-medium text-teal-800">{m.role}</td>
+                    <td className="py-2.5 px-4 text-xs font-mono text-slate-600">
+                      {m.classCode ? `Class ${m.classCode}` : '—'}
+                      {m.teacherCode ? ` · Teacher ${m.teacherCode}` : ''}
+                    </td>
+                    <td className="py-2.5 px-4"><StatusText status={m.status} /></td>
+                    <td className="py-2.5 px-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const text =
+                            m.role === 'student'
+                              ? `School: ${m.schoolCode} | Class: ${m.classCode || '-'} | Teacher: ${m.teacherCode || '-'} | Student: ${m.code}`
+                              : m.code;
+                          navigator.clipboard?.writeText(text);
+                          setCopiedCode(m.code);
+                          setTimeout(() => setCopiedCode(null), 1600);
+                        }}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900 cursor-pointer"
+                      >
+                        {copiedCode === m.code ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-600" /> Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" /> {m.role === 'student' ? 'Copy 4 Codes' : 'Copy'}
+                          </>
+                        )}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Allocation Update Form */}
@@ -1996,6 +2269,107 @@ export function PrincipalAccessCodesView({
           </div>
         )}
       </div>
+
+      {/* Issue Named Member Access Code Modal */}
+      <Modal
+        open={issueModalOpen}
+        onClose={() => setIssueModalOpen(false)}
+        title="Issue Named Member Access Code"
+        subtitle={`Generates a sequential ${prefix}-prefixed code tied to this member's name.`}
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleIssueNamedCode} className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">Role *</label>
+            <select
+              value={issueForm.role}
+              onChange={(e) =>
+                setIssueForm({ ...issueForm, role: e.target.value as 'coordinator' | 'teacher' | 'student' })
+              }
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+            >
+              <option value="coordinator">Academic Coordinator ({prefix}C##)</option>
+              <option value="teacher">Teacher ({prefix}T##)</option>
+              <option value="student">Student ({prefix}S###)</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">Member Full Name *</label>
+            <input
+              type="text"
+              required
+              placeholder="e.g. Shubhangi"
+              value={issueForm.memberName}
+              onChange={(e) => setIssueForm({ ...issueForm, memberName: e.target.value })}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">Email (Optional)</label>
+            <input
+              type="email"
+              placeholder="member@school.edu"
+              value={issueForm.email}
+              onChange={(e) => setIssueForm({ ...issueForm, email: e.target.value })}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+            />
+          </div>
+          {(issueForm.role === 'student' || issueForm.role === 'teacher') && classes.length > 0 && (
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Assigned Class</label>
+              <select
+                value={issueForm.classId}
+                onChange={(e) => setIssueForm({ ...issueForm, classId: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+              >
+                <option value="">Select Class</option>
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.code} · {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {issueForm.role === 'student' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Class Teacher</label>
+                <select
+                  value={issueForm.teacherId}
+                  onChange={(e) => setIssueForm({ ...issueForm, teacherId: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+                >
+                  <option value="">Select Teacher</option>
+                  {teachers.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.accessCode || t.staffId} · {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Roll Number</label>
+                <input
+                  type="text"
+                  placeholder="01"
+                  value={issueForm.rollNumber}
+                  onChange={(e) => setIssueForm({ ...issueForm, rollNumber: e.target.value })}
+                  className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
+                />
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="secondary" onClick={() => setIssueModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={issuing}>
+              {issuing ? 'Issuing…' : 'Generate Code'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

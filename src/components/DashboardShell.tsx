@@ -93,7 +93,6 @@ export function DashboardShell({
 
   const renderSidebarNav = (isMobile = false) => (
     <div className="flex flex-col h-full bg-[#0F295C] text-blue-100">
-      <div className="h-1 w-full brand-spectrum-bar shrink-0" aria-hidden="true" />
       <div className="h-14 px-3.5 flex items-center justify-between border-b border-blue-900/80 shrink-0">
         {(!collapsed || isMobile) ? (
           <Link to="/" className="min-w-0 hover:opacity-90 transition-opacity">
@@ -264,9 +263,6 @@ export function DashboardShell({
             <span>{accessMode.bannerMessage}</span>
           </div>
         )}
-
-        {/* Top 4-Color Brand Spectrum Bar */}
-        <div className="h-1 w-full brand-spectrum-bar shrink-0" aria-hidden="true" />
 
         {/* Top Navigation Bar */}
         <header className="sticky top-0 z-30 h-16 bg-white/95 backdrop-blur-sm border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-4">

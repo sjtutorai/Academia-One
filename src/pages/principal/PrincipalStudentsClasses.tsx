@@ -10,8 +10,8 @@ import {
   type ParsedCsvRow,
 } from '../../lib/csv';
 import { recordAuditLog } from '../../lib/audit';
-import { emailToKey, upsertEmailDirectoryEntry } from '../../lib/schoolProvisioning';
-import { sanitizePhoneDigits } from '../../lib/schoolCodes';
+import { emailToKey, upsertEmailDirectoryEntry, upsertMemberAccessCode } from '../../lib/schoolProvisioning';
+import { formatMemberRoleCode, sanitizePhoneDigits } from '../../lib/schoolCodes';
 import {
   Button,
   EmptyState,
@@ -37,7 +37,10 @@ import type {
 export function PrincipalStudentsView({
   students,
   classes,
+  teachers = [],
   schoolId,
+  schoolCode = 'SCH',
+  schoolName = '',
   academicYear,
   actor,
   canWrite,
@@ -46,7 +49,10 @@ export function PrincipalStudentsView({
 }: {
   students: StudentProfile[];
   classes: SchoolClass[];
+  teachers?: TeacherProfile[];
   schoolId: string;
+  schoolCode?: string;
+  schoolName?: string;
   academicYear: string;
   actor: PlatformUser;
   canWrite: boolean;
@@ -175,6 +181,16 @@ export function PrincipalStudentsView({
       } else {
         const id = generateId('stu');
         const cleanStudentEmail = form.email.trim().toLowerCase().slice(0, 160);
+        const studentCode = formatMemberRoleCode(
+          schoolCode,
+          'student',
+          students.length + 1,
+          Math.max(students.length + 1, 100),
+        );
+        const classTeacher =
+          teachers.find((t) => t.id === cls.classTeacherId || t.classTeacherOfClassId === cls.id) ||
+          teachers.find((t) => (t.assignedClassIds || []).includes(cls.id));
+
         await setDoc(doc(db, 'students', id), {
           id,
           schoolId,
@@ -190,18 +206,40 @@ export function PrincipalStudentsView({
           guardianName: form.guardianName.trim().slice(0, 120),
           guardianPhone: form.guardianPhone.trim().slice(0, 32),
           guardianEmail: form.guardianEmail.trim().slice(0, 160),
+          accessCode: studentCode,
           status: form.status,
           history: [{ date: new Date().toISOString().slice(0, 10), event: `Enrolled in ${cls.name}`, academicYear }],
           createdBy: actor.uid,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+        await upsertMemberAccessCode({
+          code: studentCode,
+          schoolId,
+          schoolCode,
+          schoolName,
+          role: 'student',
+          memberName: form.name.trim(),
+          email: cleanStudentEmail,
+          classId: cls.id,
+          classCode: cls.code,
+          className: cls.name,
+          teacherId: classTeacher?.id || '',
+          teacherCode: classTeacher?.accessCode || classTeacher?.staffId || '',
+          teacherName: classTeacher?.name || cls.classTeacherName || '',
+          rollNumber: form.rollNumber.trim(),
+          status: 'active',
+          linkedProfileId: id,
+          createdBy: actor.uid,
+        }).catch(() => undefined);
         if (cleanStudentEmail) {
           await upsertEmailDirectoryEntry({
             email: cleanStudentEmail,
             schoolId,
+            schoolName,
             role: 'student',
             displayName: form.name.trim(),
+            accessCode: studentCode,
             linkedProfileId: id,
             classId: cls.id,
             section: cls.section,
@@ -212,11 +250,11 @@ export function PrincipalStudentsView({
           studentCount: students.length + 1,
           updatedAt: serverTimestamp(),
         }).catch(() => undefined);
-        pushToast('success', `Registered student ${form.name.trim()}.`);
+        pushToast('success', `Registered ${form.name.trim()} with Student Code ${studentCode} (Class ${cls.code}).`);
       }
       setModalOpen(false);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'students');
+      pushToast('error', err instanceof Error ? err.message : 'Unable to save student.');
     }
   };
 

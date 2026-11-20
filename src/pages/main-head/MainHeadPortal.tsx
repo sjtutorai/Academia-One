@@ -17,6 +17,9 @@ import {
   PauseCircle,
   PlayCircle,
   CheckCircle2,
+  Copy,
+  Check,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   collection,
@@ -24,7 +27,6 @@ import {
   onSnapshot,
   setDoc,
   updateDoc,
-  deleteDoc,
   serverTimestamp,
 } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
@@ -48,7 +50,7 @@ import {
 } from '../../lib/firebase';
 import { DEMO_ACCOUNTS, seedDemoEcosystem } from '../../lib/demoSeed';
 import { recordAuditLog } from '../../lib/audit';
-import { sanitizePhoneDigits } from '../../lib/schoolCodes';
+import { deriveSchoolPrefix, sanitizePhoneDigits, sanitizeSchoolPrefix } from '../../lib/schoolCodes';
 import { ROLE_HOME_ROUTES, ROLE_LABELS } from '../../lib/permissions';
 import { useAuth } from '../../contexts/AuthContext';
 import { DashboardShell, type NavItem } from '../../components/DashboardShell';
@@ -69,7 +71,11 @@ import {
   ChangeSchoolPasswordModal,
   type PasswordChangeTarget,
 } from '../../components/main-head/ChangeSchoolPasswordModal';
-import { provisionSchoolTenant } from '../../lib/schoolProvisioning';
+import {
+  permanentlyDeleteSchoolCascade,
+  permanentlyDeleteUserAccess,
+  provisionSchoolTenant,
+} from '../../lib/schoolProvisioning';
 import { MainHeadApplicationsView } from './MainHeadApplicationsView';
 import {
   MainHeadAnalyticsView,
@@ -481,6 +487,23 @@ function MainHeadSchoolsView({
     school: School;
   } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [codeManuallyEdited, setCodeManuallyEdited] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [handoffInfo, setHandoffInfo] = useState<{
+    schoolName: string;
+    schoolCode: string;
+    principalCode: string;
+    activationCode: string;
+    principalEmail: string;
+    tempPassword: string;
+    note?: string;
+  } | null>(null);
+
+  const copyText = (key: string, value: string) => {
+    navigator.clipboard?.writeText(value);
+    setCopiedField(key);
+    setTimeout(() => setCopiedField(null), 1800);
+  };
 
   const [form, setForm] = useState({
     name: '',
@@ -520,9 +543,10 @@ function MainHeadSchoolsView({
 
   const openAddSchool = (prefill?: SchoolEnquiry) => {
     setEditingSchool(null);
+    setCodeManuallyEdited(false);
     setForm({
       name: prefill?.schoolName || '',
-      code: prefill ? prefill.schoolName.replace(/[^A-Z]/gi, '').slice(0, 4).toUpperCase() : '',
+      code: prefill ? deriveSchoolPrefix(prefill.schoolName) : '',
       address: '',
       email: prefill?.email || '',
       phone: prefill?.phone || '',
@@ -539,6 +563,7 @@ function MainHeadSchoolsView({
 
   const openEditSchool = (s: School) => {
     setEditingSchool(s);
+    setCodeManuallyEdited(true);
     setForm({
       name: s.name,
       code: s.code,
@@ -558,23 +583,39 @@ function MainHeadSchoolsView({
 
   const handleSaveSchool = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (form.name.trim().length < 2 || form.code.trim().length < 2) {
-      pushToast('error', 'School name and unique code are required.');
+    const trimmedName = form.name.trim();
+    const derivedCode = sanitizeSchoolPrefix(form.code.trim() || deriveSchoolPrefix(trimmedName));
+    if (trimmedName.length < 2 || derivedCode.length < 2) {
+      pushToast('error', 'School name (min 2 letters) and unique school code are required.');
       return;
     }
+
+    const cleanPrincipalEmail = form.principalEmail.trim().toLowerCase();
+    const rawTempPassword = form.tempPassword.trim();
+    if (!editingSchool) {
+      if (cleanPrincipalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanPrincipalEmail)) {
+        pushToast('error', 'Enter a valid Principal email address.');
+        return;
+      }
+      if (rawTempPassword && rawTempPassword.length < 6) {
+        pushToast('error', 'Temporary password must be at least 6 characters long.');
+        return;
+      }
+    }
+
     setSaving(true);
     try {
-      const cleanCode = form.code.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+      const cleanCode = derivedCode.slice(0, 12);
       if (editingSchool) {
         await updateDoc(doc(db, 'schools', editingSchool.id), {
-          name: form.name.trim().slice(0, 140),
+          name: trimmedName.slice(0, 140),
           code: cleanCode.slice(0, 24),
           address: form.address.trim().slice(0, 300),
           email: form.email.trim().slice(0, 160),
           phone: form.phone.trim().slice(0, 32),
-          academicYear: form.academicYear.trim().slice(0, 24),
+          academicYear: (form.academicYear.trim() || '2026-2027').slice(0, 24),
           status: form.status,
-          subscriptionPlanId: form.subscriptionPlanId,
+          subscriptionPlanId: form.subscriptionPlanId || 'plan_free',
           updatedAt: serverTimestamp(),
         });
         await recordAuditLog({
@@ -585,9 +626,10 @@ function MainHeadSchoolsView({
           action: 'UPDATE_SCHOOL',
           targetType: 'school',
           targetId: editingSchool.id,
-          targetLabel: form.name.trim(),
-        });
-        pushToast('success', `Updated ${form.name.trim()}.`);
+          targetLabel: trimmedName,
+        }).catch(() => undefined);
+        pushToast('success', `Updated ${trimmedName}.`);
+        setModalOpen(false);
       } else {
         const plan = {
           id: 'plan_free',
@@ -597,63 +639,90 @@ function MainHeadSchoolsView({
         };
         let principalUid = '';
         let provisionNote = '';
-        const cleanPrincipalEmail = form.principalEmail.trim().toLowerCase();
+        const effectivePrincipalEmail = cleanPrincipalEmail || form.email.trim().toLowerCase() || `principal@${cleanCode.toLowerCase()}.edu`;
+        const effectivePrincipalName = form.principalName.trim() || `${trimmedName} Principal`;
+        const cleanUsernameCandidate = form.principalUsername
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]/g, '');
+        const safePrincipalUsername =
+          cleanUsernameCandidate.length >= 3
+            ? cleanUsernameCandidate.slice(0, 64)
+            : `principal.${cleanCode.toLowerCase()}`.slice(0, 64);
 
-        // Shared provisioning service creates School + SchoolCode + Subscription + EmailDirectory entry
         const provisioned = await provisionSchoolTenant({
-          schoolName: form.name.trim(),
-          schoolCode: cleanCode || undefined,
+          schoolName: trimmedName,
+          schoolCode: cleanCode,
+          schoolPrefix: cleanCode,
           academicYear: form.academicYear.trim() || '2026-2027',
           address: form.address.trim(),
-          schoolEmail: form.email.trim() || cleanPrincipalEmail || 'office@school.edu',
+          schoolEmail: form.email.trim().toLowerCase() || effectivePrincipalEmail,
           schoolPhone: form.phone.trim(),
-          principalName: form.principalName.trim() || `${form.name.trim()} Principal`,
-          principalEmail: cleanPrincipalEmail || form.email.trim() || 'principal@school.edu',
-          principalUsername: form.principalUsername.trim() || undefined,
+          principalName: effectivePrincipalName,
+          principalEmail: effectivePrincipalEmail,
+          principalUsername: safePrincipalUsername,
           plan,
           source: 'admin_manual',
           actorUid: actor.uid,
           actorName: actor.displayName,
         });
 
-        // Optional immediate secondary auth provisioning if Principal email + password supplied
-        if (cleanPrincipalEmail && form.tempPassword.trim()) {
-          const res = await provisionAuthAccountSecondary(cleanPrincipalEmail, form.tempPassword.trim());
-          principalUid = res.uid;
-          if (res.warning) provisionNote = res.warning;
-          await setDoc(doc(db, 'users', principalUid), {
-            uid: principalUid,
-            username: (form.principalUsername.trim() || `principal.${provisioned.schoolCode.toLowerCase()}`).slice(0, 64),
-            email: cleanPrincipalEmail,
-            displayName: (form.principalName.trim() || `${form.name.trim()} Principal`).slice(0, 120),
-            role: 'principal',
-            schoolId: provisioned.schoolId,
-            status: 'active',
-            mustChangePassword: true,
-            phone: form.phone.trim().slice(0, 32),
-            classId: '',
-            section: '',
-            assignedClassIds: [],
-            assignedSubjectIds: [],
-            coordinatorPermissions: {},
-            isDemo: false,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-          await updateDoc(doc(db, 'schools', provisioned.schoolId), {
-            principalUid,
-            updatedAt: serverTimestamp(),
-          }).catch(() => undefined);
+        // Provision Principal login account if email + temporary password supplied
+        if (cleanPrincipalEmail && rawTempPassword) {
+          try {
+            const res = await provisionAuthAccountSecondary(cleanPrincipalEmail, rawTempPassword);
+            principalUid = res.uid;
+            if (res.warning) provisionNote = res.warning;
+            await setDoc(doc(db, 'users', principalUid), {
+              uid: principalUid,
+              username: safePrincipalUsername,
+              email: cleanPrincipalEmail,
+              displayName: effectivePrincipalName.slice(0, 120),
+              role: 'principal',
+              schoolId: provisioned.schoolId,
+              status: 'active',
+              mustChangePassword: true,
+              phone: form.phone.trim().slice(0, 32),
+              accessCode: provisioned.principalCode,
+              classId: '',
+              section: '',
+              assignedClassIds: [],
+              assignedSubjectIds: [],
+              coordinatorPermissions: {},
+              isDemo: false,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+            await updateDoc(doc(db, 'schools', provisioned.schoolId), {
+              principalUid,
+              updatedAt: serverTimestamp(),
+            }).catch(() => undefined);
+          } catch (authErr) {
+            provisionNote =
+              authErr instanceof Error
+                ? `School created, but Principal password provisioning noted: ${authErr.message}. The Principal can still sign in via Google or Sign Up with ${cleanPrincipalEmail}.`
+                : 'School created. Principal can sign in with Google or register using the bound email.';
+          }
         }
 
+        setModalOpen(false);
+        setHandoffInfo({
+          schoolName: trimmedName,
+          schoolCode: provisioned.schoolCode,
+          principalCode: provisioned.principalCode,
+          activationCode: provisioned.activationCode,
+          principalEmail: effectivePrincipalEmail,
+          tempPassword: rawTempPassword,
+          note: provisionNote,
+        });
         pushToast(
           'success',
-          `Registered ${form.name.trim()} with School Code ${provisioned.schoolCode}. ${provisionNote}`,
+          `Registered ${trimmedName} (${provisioned.schoolCode}). Activation Code: ${provisioned.activationCode}`,
         );
       }
-      setModalOpen(false);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'schools');
+      const msg = err instanceof Error ? err.message : 'Unable to save school.';
+      pushToast('error', msg);
     } finally {
       setSaving(false);
     }
@@ -665,18 +734,15 @@ function MainHeadSchoolsView({
     const { type, school } = confirmAction;
     try {
       if (type === 'delete') {
-        await deleteDoc(doc(db, 'schools', school.id));
-        await recordAuditLog({
-          schoolId: school.id,
+        const res = await permanentlyDeleteSchoolCascade({
+          school,
           actorUid: actor.uid,
           actorName: actor.displayName,
-          actorRole: actor.role,
-          action: 'DELETE_SCHOOL',
-          targetType: 'school',
-          targetId: school.id,
-          targetLabel: school.name,
         });
-        pushToast('success', `Deleted school "${school.name}".`);
+        pushToast(
+          'success',
+          `Permanently deleted "${school.name}" and ${res.deletedDocs} linked Firestore document(s).`,
+        );
       } else {
         const nextStatus = type === 'activate' ? 'active' : type === 'suspend' ? 'suspended' : 'archived';
         await updateDoc(doc(db, 'schools', school.id), {
@@ -692,13 +758,13 @@ function MainHeadSchoolsView({
           targetType: 'school',
           targetId: school.id,
           targetLabel: school.name,
-        });
+        }).catch(() => undefined);
         pushToast('success', `School "${school.name}" marked ${nextStatus}.`);
       }
       setConfirmAction(null);
       setDetailSchool(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `schools/${school.id}`);
+      pushToast('error', err instanceof Error ? err.message : 'Action failed.');
     } finally {
       setSaving(false);
     }
@@ -924,19 +990,30 @@ function MainHeadSchoolsView({
                 type="text"
                 required
                 value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                onChange={(e) => {
+                  const nextName = e.target.value;
+                  setForm((prev) => ({
+                    ...prev,
+                    name: nextName,
+                    code: !editingSchool && !codeManuallyEdited ? deriveSchoolPrefix(nextName) : prev.code,
+                  }));
+                }}
+                placeholder="e.g. JSS Public School"
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">School Code *</label>
+              <label className="block text-xs font-medium text-slate-700 mb-1">3-Letter School Code *</label>
               <input
                 type="text"
                 required
                 value={form.code}
-                onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
-                placeholder="e.g. OAK"
-                className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
+                onChange={(e) => {
+                  setCodeManuallyEdited(true);
+                  setForm((prev) => ({ ...prev, code: sanitizeSchoolPrefix(e.target.value) }));
+                }}
+                placeholder="e.g. JSS"
+                className="w-full px-3 py-2 text-sm font-mono uppercase border border-slate-300 rounded-lg"
               />
             </div>
           </div>
@@ -1077,6 +1154,30 @@ function MainHeadSchoolsView({
                   {detailSchool.teacherCount || 0} teachers · {detailSchool.studentCount || 0} students
                 </p>
               </div>
+              {detailSchool.activationCode && (
+                <div className="col-span-2 p-3.5 bg-blue-50/70 border border-blue-200 rounded-lg flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[11px] font-semibold text-blue-800">
+                      Main Head Activation Code ({detailSchool.setupCompleted ? 'Setup Completed' : 'Awaiting School Activation & Setup'})
+                    </p>
+                    <p className="font-mono text-sm font-bold text-[#0F295C] tracking-wider mt-0.5">
+                      {detailSchool.activationCode}
+                    </p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => copyText('detail_activation', detailSchool.activationCode || '')}
+                  >
+                    {copiedField === 'detail_activation' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    {copiedField === 'detail_activation' ? 'Copied' : 'Copy Code'}
+                  </Button>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-200">
@@ -1138,21 +1239,116 @@ function MainHeadSchoolsView({
         danger={confirmAction?.type === 'delete' || confirmAction?.type === 'suspend'}
         title={
           confirmAction?.type === 'delete'
-            ? `Delete ${confirmAction.school.name}?`
+            ? `Permanently Delete ${confirmAction.school.name}?`
             : `${confirmAction?.type === 'activate' ? 'Activate' : 'Suspend'} ${confirmAction?.school.name}?`
         }
         description={
           confirmAction?.type === 'delete'
-            ? 'Deleting a school removes the tenant registration record. Ensure backups are exported first.'
+            ? 'This permanently removes the school, its access codes, classes, staff, students, and linked user profiles directly from Firestore.'
             : 'Changing school status immediately updates login access for all users assigned to this school.'
         }
         warning={
           confirmAction?.type === 'delete'
-            ? `Dependency warning: ${confirmAction.school.studentCount || 0} students and ${confirmAction.school.teacherCount || 0} teachers are associated with schoolId "${confirmAction.school.id}".`
+            ? `Permanent cascade deletion: ${confirmAction.school.studentCount || 0} students, ${confirmAction.school.teacherCount || 0} teachers, and all tenant records for schoolId "${confirmAction.school.id}" will be erased.`
             : undefined
         }
-        confirmLabel={confirmAction?.type === 'delete' ? 'Permanently Delete' : 'Confirm Action'}
+        confirmLabel={confirmAction?.type === 'delete' ? 'Permanently Delete All' : 'Confirm Action'}
       />
+
+      {/* Credentials & Activation Code Handoff Modal */}
+      <Modal
+        open={Boolean(handoffInfo)}
+        onClose={() => setHandoffInfo(null)}
+        title="School Registered — Activation Handoff"
+        subtitle="Share these credentials and the Main Head Activation Code with the school's Principal."
+        maxWidth="max-w-lg"
+      >
+        {handoffInfo && (
+          <div className="space-y-4 text-sm">
+            <div className="p-4 bg-[#0F295C] text-white rounded-xl space-y-1.5">
+              <p className="text-[11px] uppercase tracking-wider text-blue-200 font-semibold">
+                Main Head Activation Code (Required on First Login)
+              </p>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xl font-bold font-mono tracking-wider text-yellow-300 tabular-nums">
+                  {handoffInfo.activationCode}
+                </span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => copyText('handoff_activation', handoffInfo.activationCode)}
+                >
+                  {copiedField === 'handoff_activation' ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                  {copiedField === 'handoff_activation' ? 'Copied' : 'Copy'}
+                </Button>
+              </div>
+              <p className="text-xs text-blue-100">
+                When the Principal logs in, they will enter this code and complete the full school registration setup (classes, rooms, named coordinators, teachers & students) to generate member codes.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                <p className="text-slate-500">School Name</p>
+                <p className="font-semibold text-slate-900 mt-0.5">{handoffInfo.schoolName}</p>
+              </div>
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                <p className="text-slate-500">3-Letter School Code</p>
+                <p className="font-mono font-bold text-slate-900 mt-0.5">{handoffInfo.schoolCode}</p>
+              </div>
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                <p className="text-slate-500">Principal Login Email</p>
+                <p className="font-mono text-slate-900 mt-0.5 break-all">{handoffInfo.principalEmail}</p>
+              </div>
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                <p className="text-slate-500">Temporary Password</p>
+                <p className="font-mono text-slate-900 mt-0.5">
+                  {handoffInfo.tempPassword || 'Sign in with Google / Reset Password'}
+                </p>
+              </div>
+            </div>
+
+            {handoffInfo.note && (
+              <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                {handoffInfo.note}
+              </p>
+            )}
+
+            <div className="flex justify-between items-center gap-2 pt-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  const summary = [
+                    `School: ${handoffInfo.schoolName}`,
+                    `School Code: ${handoffInfo.schoolCode}`,
+                    `Main Head Activation Code: ${handoffInfo.activationCode}`,
+                    `Principal Email: ${handoffInfo.principalEmail}`,
+                    handoffInfo.tempPassword ? `Temporary Password: ${handoffInfo.tempPassword}` : '',
+                  ]
+                    .filter(Boolean)
+                    .join('\n');
+                  copyText('handoff_all', summary);
+                }}
+              >
+                {copiedField === 'handoff_all' ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                {copiedField === 'handoff_all' ? 'Copied All Details' : 'Copy All Handoff Details'}
+              </Button>
+              <Button variant="primary" size="sm" onClick={() => setHandoffInfo(null)}>
+                Done
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -1177,6 +1373,8 @@ function MainHeadUsersView({
   const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
   const [editing, setEditing] = useState<PlatformUser | null>(null);
   const [passwordTarget, setPasswordTarget] = useState<PasswordChangeTarget | null>(null);
+  const [deletingUser, setDeletingUser] = useState<PlatformUser | null>(null);
+  const [deletingBusy, setDeletingBusy] = useState(false);
   const [editRole, setEditRole] = useState<UserRole>('student');
   const [editSchool, setEditSchool] = useState('unassigned');
   const [editStatus, setEditStatus] = useState<PlatformUser['status']>('active');
@@ -1262,8 +1460,20 @@ function MainHeadUsersView({
                       }}
                     >
                       <KeyRound className="w-3.5 h-3.5 text-[#2563EB]" />
-                      Change Password
+                      Password
                     </Button>
+                    {u.role !== 'main_head' &&
+                      u.email.trim().toLowerCase() !== 'sjtutorai@gmail.com' &&
+                      u.uid !== actor.uid && (
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => setDeletingUser(u)}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Remove Access
+                        </Button>
+                      )}
                   </div>
                 </td>
               </tr>
@@ -1351,6 +1561,41 @@ function MainHeadUsersView({
         target={passwordTarget}
         actor={actor}
         onClose={() => setPasswordTarget(null)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(deletingUser)}
+        onClose={() => setDeletingUser(null)}
+        busy={deletingBusy}
+        danger
+        title={deletingUser ? `Remove Access & Delete ${deletingUser.displayName}?` : ''}
+        description="This immediately signs the user out and permanently deletes their profile, email directory binding, linked teacher/student records, join requests, and access codes from Firestore."
+        warning={
+          deletingUser
+            ? `Permanent Firestore Deletion: ${deletingUser.email} (${ROLE_LABELS[deletingUser.role]}) will be removed from console.firebase.google.com immediately.`
+            : undefined
+        }
+        confirmLabel="Remove Access & Delete"
+        onConfirm={async () => {
+          if (!deletingUser) return;
+          setDeletingBusy(true);
+          try {
+            const res = await permanentlyDeleteUserAccess({
+              user: deletingUser,
+              actorUid: actor.uid,
+              actorName: actor.displayName,
+            });
+            pushToast(
+              'success',
+              `Removed access for ${deletingUser.displayName} and deleted ${res.deletedDocs} Firestore document(s).`,
+            );
+            setDeletingUser(null);
+          } catch (err) {
+            pushToast('error', err instanceof Error ? err.message : 'Unable to delete user access.');
+          } finally {
+            setDeletingBusy(false);
+          }
+        }}
       />
     </div>
   );

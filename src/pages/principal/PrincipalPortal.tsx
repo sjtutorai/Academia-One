@@ -49,8 +49,14 @@ import {
 } from '../../components/ui/Primitives';
 import { NotificationsAndPreferencesView } from '../../components/shared/NotificationsAndPreferencesView';
 import { ProfileSecurityView } from '../../components/shared/ProfileSecurityView';
-import { upsertEmailDirectoryEntry } from '../../lib/schoolProvisioning';
-import { formatPrincipalCode, sanitizePhoneDigits } from '../../lib/schoolCodes';
+import { upsertEmailDirectoryEntry, upsertMemberAccessCode } from '../../lib/schoolProvisioning';
+import {
+  deriveSchoolPrefix,
+  formatMemberRoleCode,
+  formatPrincipalCode,
+  sanitizePhoneDigits,
+} from '../../lib/schoolCodes';
+import { PrincipalActivationGate } from './PrincipalActivationGate';
 import {
   PrincipalSetupWizardView,
   PrincipalJoinRequestsView,
@@ -92,13 +98,25 @@ const PRINCIPAL_NAV: NavItem[] = [
 ];
 
 export default function PrincipalPortal() {
-  const { activeUser, activeSchool } = useAuth();
+  const { activeUser, activeSchool, isPreviewMode } = useAuth();
   const schoolId = activeUser?.schoolId || '';
   const data = useSchoolData(schoolId, true);
   const access = getSchoolAccessMode(activeSchool);
   const [globalSearch, setGlobalSearch] = useState('');
 
   if (!activeUser) return null;
+
+  // Lock Main Head-registered schools into the Activation Code + Full Setup Wizard until completed
+  if (
+    !isPreviewMode &&
+    activeSchool &&
+    activeSchool.source === 'admin_manual' &&
+    (!activeSchool.activationVerified || !activeSchool.setupCompleted)
+  ) {
+    return <PrincipalActivationGate school={activeSchool} actor={activeUser} />;
+  }
+
+  const schoolPrefix = activeSchool?.code || deriveSchoolPrefix(activeSchool?.name || '');
 
   return (
     <DashboardShell
@@ -129,6 +147,7 @@ export default function PrincipalPortal() {
             <PrincipalAccessCodesView
               school={activeSchool}
               classes={data.classes}
+              teachers={data.teachers}
               actor={activeUser}
               canWrite={access.canWrite}
             />
@@ -152,6 +171,7 @@ export default function PrincipalPortal() {
               coordinators={data.schoolUsers.filter((u) => u.role === 'coordinator')}
               classes={data.classes}
               schoolId={schoolId}
+              schoolCode={schoolPrefix}
               schoolName={activeSchool?.name || ''}
               actor={activeUser}
               canWrite={access.canWrite}
@@ -166,6 +186,7 @@ export default function PrincipalPortal() {
               teachers={data.teachers}
               classes={data.classes}
               schoolId={schoolId}
+              schoolCode={schoolPrefix}
               schoolName={activeSchool?.name || ''}
               actor={activeUser}
               canWrite={access.canWrite}
@@ -180,7 +201,10 @@ export default function PrincipalPortal() {
             <PrincipalStudentsView
               students={data.students}
               classes={data.classes}
+              teachers={data.teachers}
               schoolId={schoolId}
+              schoolCode={schoolPrefix}
+              schoolName={activeSchool?.name || ''}
               academicYear={activeSchool?.academicYear || '2026-2027'}
               actor={activeUser}
               canWrite={access.canWrite}
@@ -451,6 +475,7 @@ function PrincipalCoordinatorsView({
   classes,
   schoolId,
   schoolName,
+  schoolCode,
   actor,
   canWrite,
   loading,
@@ -459,6 +484,7 @@ function PrincipalCoordinatorsView({
   classes: ReturnType<typeof useSchoolData>['classes'];
   schoolId: string;
   schoolName: string;
+  schoolCode: string;
   actor: PlatformUser;
   canWrite: boolean;
   loading: boolean;
@@ -559,6 +585,12 @@ function PrincipalCoordinatorsView({
         pushToast('success', 'Coordinator scope and permissions updated.');
       } else {
         const cleanEmail = form.email.trim().toLowerCase();
+        const coordCode = formatMemberRoleCode(
+          schoolCode,
+          'coordinator',
+          coordinators.length + 1,
+          Math.max(coordinators.length + 1, 10),
+        );
         const res = await provisionAuthAccountSecondary(
           cleanEmail,
           form.tempPassword.trim() || `Coord#${Math.random().toString(36).slice(2, 9)}`,
@@ -573,6 +605,7 @@ function PrincipalCoordinatorsView({
           status: 'active',
           mustChangePassword: true,
           phone: form.phone.trim().slice(0, 32),
+          accessCode: coordCode,
           classId: '',
           section: '',
           assignedClassIds: form.assignedClassIds,
@@ -588,8 +621,21 @@ function PrincipalCoordinatorsView({
           schoolName,
           role: 'coordinator',
           displayName: form.displayName.trim(),
+          accessCode: coordCode,
           assignedClassIds: form.assignedClassIds,
           coordinatorPermissions: form.perms,
+          createdBy: actor.uid,
+        }).catch(() => undefined);
+        await upsertMemberAccessCode({
+          code: coordCode,
+          schoolId,
+          schoolCode,
+          schoolName,
+          role: 'coordinator',
+          memberName: form.displayName.trim(),
+          email: cleanEmail,
+          status: 'active',
+          linkedUid: res.uid,
           createdBy: actor.uid,
         }).catch(() => undefined);
         await recordAuditLog({
@@ -600,13 +646,13 @@ function PrincipalCoordinatorsView({
           action: 'CREATE_COORDINATOR',
           targetType: 'user',
           targetId: res.uid,
-          targetLabel: cleanEmail,
-        });
-        pushToast('success', `Coordinator created & registered for Email/Google login. ${res.warning || ''}`);
+          targetLabel: `${cleanEmail} (${coordCode})`,
+        }).catch(() => undefined);
+        pushToast('success', `Coordinator ${form.displayName.trim()} created with Code ${coordCode}. ${res.warning || ''}`);
       }
       setModalOpen(false);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'users');
+      pushToast('error', err instanceof Error ? err.message : 'Unable to save coordinator.');
     } finally {
       setSaving(false);
     }
@@ -656,7 +702,14 @@ function PrincipalCoordinatorsView({
                 return (
                   <tr key={c.uid} className="hover:bg-slate-50/70">
                     <td className="py-3 px-4">
-                      <p className="font-semibold text-slate-900">{c.displayName}</p>
+                      <p className="font-semibold text-slate-900">
+                        {c.displayName}{' '}
+                        {c.accessCode && (
+                          <span className="ml-1.5 font-mono text-[11px] font-bold text-teal-700 bg-teal-50 border border-teal-200 px-1.5 py-0.5 rounded">
+                            {c.accessCode}
+                          </span>
+                        )}
+                      </p>
                       <p className="text-xs text-slate-500">{c.email} · @{c.username}</p>
                     </td>
                     <td className="py-3 px-4 text-xs font-mono text-slate-700">{classNames || 'None'}</td>
@@ -786,6 +839,7 @@ function PrincipalTeachersView({
   teachers,
   classes,
   schoolId,
+  schoolCode,
   schoolName,
   actor,
   canWrite,
@@ -795,6 +849,7 @@ function PrincipalTeachersView({
   teachers: TeacherProfile[];
   classes: ReturnType<typeof useSchoolData>['classes'];
   schoolId: string;
+  schoolCode: string;
   schoolName: string;
   actor: PlatformUser;
   canWrite: boolean;
@@ -894,6 +949,15 @@ function PrincipalTeachersView({
       } else {
         const id = generateId('tch');
         const cleanEmail = form.email.trim().toLowerCase();
+        const teacherCode = formatMemberRoleCode(
+          schoolCode,
+          'teacher',
+          teachers.length + 1,
+          Math.max(teachers.length + 1, 10),
+        );
+        const primaryCls =
+          classes.find((c) => c.id === form.classTeacherOfClassId) ||
+          classes.find((c) => form.assignedClassIds.includes(c.id));
         const prov = await provisionAuthAccountSecondary(
           cleanEmail,
           form.tempPassword.trim() || `Teach#${Math.random().toString(36).slice(2, 9)}`,
@@ -908,8 +972,9 @@ function PrincipalTeachersView({
           status: 'active',
           mustChangePassword: true,
           phone: form.phone.trim().slice(0, 32),
-          classId: '',
-          section: '',
+          accessCode: teacherCode,
+          classId: primaryCls?.id || '',
+          section: primaryCls?.section || '',
           assignedClassIds: form.assignedClassIds,
           assignedSubjectIds: [],
           coordinatorPermissions: {},
@@ -921,7 +986,7 @@ function PrincipalTeachersView({
           id,
           schoolId,
           userId: prov.uid,
-          staffId: form.staffId.trim().slice(0, 32),
+          staffId: (form.staffId.trim() || teacherCode).slice(0, 32),
           name: form.name.trim().slice(0, 120),
           email: cleanEmail,
           phone: form.phone.trim().slice(0, 32),
@@ -930,6 +995,7 @@ function PrincipalTeachersView({
           joiningDate: form.joiningDate.slice(0, 32),
           assignedClassIds: form.assignedClassIds,
           classTeacherOfClassId: form.classTeacherOfClassId,
+          accessCode: teacherCode,
           status: form.status,
           createdBy: actor.uid,
           createdAt: serverTimestamp(),
@@ -941,8 +1007,28 @@ function PrincipalTeachersView({
           schoolName,
           role: 'teacher',
           displayName: form.name.trim(),
+          accessCode: teacherCode,
           linkedProfileId: id,
           assignedClassIds: form.assignedClassIds,
+          createdBy: actor.uid,
+        }).catch(() => undefined);
+        await upsertMemberAccessCode({
+          code: teacherCode,
+          schoolId,
+          schoolCode,
+          schoolName,
+          role: 'teacher',
+          memberName: form.name.trim(),
+          email: cleanEmail,
+          classId: primaryCls?.id || '',
+          classCode: primaryCls?.code || '',
+          className: primaryCls?.name || '',
+          teacherId: id,
+          teacherCode,
+          teacherName: form.name.trim(),
+          status: 'active',
+          linkedProfileId: id,
+          linkedUid: prov.uid,
           createdBy: actor.uid,
         }).catch(() => undefined);
         await updateDoc(doc(db, 'schools', schoolId), {
@@ -957,13 +1043,13 @@ function PrincipalTeachersView({
           action: 'CREATE_TEACHER',
           targetType: 'teacher',
           targetId: id,
-          targetLabel: form.name.trim(),
-        });
-        pushToast('success', `Teacher added & registered for Email/Google login. ${prov.warning || ''}`);
+          targetLabel: `${form.name.trim()} (${teacherCode})`,
+        }).catch(() => undefined);
+        pushToast('success', `Teacher ${form.name.trim()} added with Code ${teacherCode}. ${prov.warning || ''}`);
       }
       setModalOpen(false);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'teachers');
+      pushToast('error', err instanceof Error ? err.message : 'Unable to save teacher.');
     } finally {
       setSaving(false);
     }

@@ -653,7 +653,7 @@ export default function SchoolRegistrationPage() {
 
     try {
       // Ensure a fresh Firebase Auth ID token is active on this write session
-      await activeFbUser.getIdToken();
+      await activeFbUser.getIdToken(true);
 
       const verificationEmailHash = await hashVerificationEmail(safeApplicantEmail);
       const batch = writeBatch(db);
@@ -859,8 +859,6 @@ export default function SchoolRegistrationPage() {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] pb-16">
-      {/* Top 4-Color Brand Spectrum Bar & Header */}
-      <div className="h-1 w-full brand-spectrum-bar" aria-hidden="true" />
       <header className="bg-[#0F295C] text-white border-b border-blue-900">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">

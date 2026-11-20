@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -15,8 +15,20 @@ import {
   Plus,
   CheckCircle2,
   AlertTriangle,
+  UserCheck,
+  XCircle,
 } from 'lucide-react';
-import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  setDoc,
+  updateDoc,
+  where,
+  writeBatch,
+  serverTimestamp,
+} from 'firebase/firestore';
 import { db, generateId, handleFirestoreError, OperationType, formatFirestoreDate } from '../../lib/firebase';
 import { getSchoolAccessMode, detectExamConflicts } from '../../lib/permissions';
 import { exportToCsv } from '../../lib/csv';
@@ -41,11 +53,13 @@ import type {
   DayOfWeek,
   Examination,
   PlatformUser,
+  SchoolJoinRequest,
 } from '../../types/models';
 
 const COORD_NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', path: '/coordinator/dashboard', icon: LayoutDashboard },
   { id: 'classes', label: 'Assigned Classes', path: '/coordinator/classes', icon: BookOpen },
+  { id: 'approvals', label: 'Student Approvals', path: '/coordinator/approvals', icon: UserCheck },
   { id: 'attendance', label: 'Attendance Monitoring', path: '/coordinator/attendance', icon: ClipboardCheck },
   { id: 'schedule', label: 'Timetable & Exams', path: '/coordinator/schedule', icon: CalendarDays },
   { id: 'homework', label: 'Homework Tracking', path: '/coordinator/homework', icon: ClipboardList },
@@ -141,6 +155,16 @@ export default function CoordinatorPortal() {
         <Route
           path="classes"
           element={<CoordinatorClassesView data={scopedData} search={globalSearch} />}
+        />
+        <Route
+          path="approvals"
+          element={
+            <CoordinatorStudentApprovalsView
+              user={activeUser}
+              assignedClassIds={Array.from(assignedClassSet)}
+              canWrite={access.canWrite}
+            />
+          }
         />
         <Route
           path="attendance"
@@ -1406,3 +1430,312 @@ function CoordinatorReportsView({ data }: { data: SchoolDataBundle }) {
     </div>
   );
 }
+
+// ============================================================================
+// 8. Student Join Approvals — Stage 2 of 3 (Teacher -> Coordinator -> Principal)
+// ============================================================================
+function CoordinatorStudentApprovalsView({
+  user,
+  assignedClassIds,
+  canWrite,
+}: {
+  user: PlatformUser;
+  assignedClassIds: string[];
+  canWrite: boolean;
+}) {
+  const { pushToast } = useToast();
+  const [requests, setRequests] = useState<SchoolJoinRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<SchoolJoinRequest | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+
+  useEffect(() => {
+    if (!user.schoolId) return;
+    const q = query(collection(db, 'schoolJoinRequests'), where('schoolId', '==', user.schoolId));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setRequests(snap.docs.map((d) => d.data() as SchoolJoinRequest));
+        setLoading(false);
+      },
+      () => setLoading(false),
+    );
+    return () => unsub();
+  }, [user.schoolId]);
+
+  const classIdSet = useMemo(() => new Set(assignedClassIds), [assignedClassIds]);
+
+  const scopedStudentRequests = useMemo(() => {
+    return requests
+      .filter((r) => r.requestedRole === 'student')
+      .filter((r) => {
+        if (classIdSet.size === 0) return true;
+        return !r.requestedClassId || classIdSet.has(r.requestedClassId);
+      });
+  }, [requests, classIdSet]);
+
+  const pendingStage2 = scopedStudentRequests.filter(
+    (r) => r.status === 'pending' && r.approvalStage === 'coordinator_pending',
+  );
+  const awaitingTeacher = scopedStudentRequests.filter(
+    (r) => r.status === 'pending' && r.approvalStage === 'teacher_pending',
+  );
+  const forwardedOrDecided = scopedStudentRequests.filter(
+    (r) =>
+      !(r.status === 'pending' && r.approvalStage === 'coordinator_pending') &&
+      !(r.status === 'pending' && r.approvalStage === 'teacher_pending'),
+  );
+
+  const handleApproveToPrincipal = async (req: SchoolJoinRequest) => {
+    if (!canWrite) return;
+    setProcessingId(req.id);
+    try {
+      const batch = writeBatch(db);
+      const now = serverTimestamp();
+      batch.update(doc(db, 'schoolJoinRequests', req.id), {
+        approvalStage: 'principal_pending',
+        status: 'pending',
+        coordinatorApprovedBy: user.uid,
+        coordinatorApprovedName: user.displayName,
+        coordinatorApprovedAt: new Date().toISOString(),
+        updatedAt: now,
+      });
+      batch.update(doc(db, 'applicationStatuses', req.applicationNumber), {
+        status: 'pending',
+        applicantMessage: `Approved by Teacher & Academic Coordinator (${user.displayName}) — awaiting Principal final approval (Stage 3 of 3).`,
+        updatedAt: now,
+      });
+      await batch.commit();
+      await recordAuditLog({
+        schoolId: user.schoolId,
+        actorUid: user.uid,
+        actorName: user.displayName,
+        actorRole: 'coordinator',
+        action: 'COORDINATOR_APPROVED_STUDENT_JOIN',
+        targetType: 'schoolJoinRequest',
+        targetId: req.id,
+        targetLabel: `${req.applicantName} (${req.studentCode || req.accessCode || req.applicationNumber})`,
+      }).catch(() => undefined);
+      pushToast('success', `${req.applicantName} approved & forwarded to Principal for final activation (Stage 3 of 3).`);
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to forward student request.');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleReject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectTarget || !canWrite) return;
+    setProcessingId(rejectTarget.id);
+    const reason = rejectReason.trim() || 'Rejected by Academic Coordinator during Stage 2 verification.';
+    try {
+      const batch = writeBatch(db);
+      const now = serverTimestamp();
+      batch.update(doc(db, 'schoolJoinRequests', rejectTarget.id), {
+        status: 'rejected',
+        approvalStage: 'rejected',
+        decisionNote: reason.slice(0, 500),
+        reviewedBy: user.uid,
+        updatedAt: now,
+      });
+      batch.update(doc(db, 'applicationStatuses', rejectTarget.applicationNumber), {
+        status: 'rejected',
+        decisionNote: reason.slice(0, 500),
+        applicantMessage: `Rejected by Academic Coordinator (${user.displayName}): ${reason}`,
+        updatedAt: now,
+      });
+      await batch.commit();
+      await recordAuditLog({
+        schoolId: user.schoolId,
+        actorUid: user.uid,
+        actorName: user.displayName,
+        actorRole: 'coordinator',
+        action: 'COORDINATOR_REJECTED_STUDENT_JOIN',
+        targetType: 'schoolJoinRequest',
+        targetId: rejectTarget.id,
+        targetLabel: rejectTarget.applicantName,
+        details: reason,
+      }).catch(() => undefined);
+      pushToast('info', `Rejected student join request for ${rejectTarget.applicantName}.`);
+      setRejectTarget(null);
+      setRejectReason('');
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to reject request.');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  if (loading) return <SkeletonTable rows={5} cols={4} />;
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white border border-slate-200 rounded-xl p-5">
+        <p className="text-xs font-semibold text-teal-700">Stage 2 of 3 · Coordinator Verification</p>
+        <h2 className="text-base font-bold font-display text-slate-900 mt-0.5">
+          Student Join Approval Queue ({pendingStage2.length} ready for review)
+        </h2>
+        <p className="text-xs text-slate-500 mt-1">
+          Only student requests already verified by their Class Teacher (Stage 1) can be approved here and forwarded to
+          the Principal for Stage 3 final activation.
+        </p>
+      </div>
+
+      {pendingStage2.length === 0 ? (
+        <EmptyState
+          title="No Student Requests Awaiting Coordinator Review"
+          description="Once Class Teachers approve student join requests in Stage 1, they appear here for your Stage 2 verification."
+        />
+      ) : (
+        <div className="space-y-3">
+          {pendingStage2.map((req) => (
+            <div key={req.id} className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-slate-900">{req.applicantName}</h3>
+                    <StatusText status="coordinator_pending" />
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {req.applicantEmail}
+                    {req.phone ? ` · ${req.phone}` : ''} · Ref{' '}
+                    <span className="font-mono text-slate-700">{req.applicationNumber}</span>
+                  </p>
+                  <p className="text-xs text-emerald-700 font-medium mt-1">
+                    Stage 1 Verified by Class Teacher: {req.teacherApprovedName || req.targetTeacherName || 'Assigned Teacher'}
+                  </p>
+                </div>
+
+                {canWrite && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={processingId === req.id}
+                      onClick={() => {
+                        setRejectTarget(req);
+                        setRejectReason('');
+                      }}
+                    >
+                      <XCircle className="w-3.5 h-3.5 text-red-600" />
+                      Reject
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={processingId === req.id}
+                      onClick={() => handleApproveToPrincipal(req)}
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      {processingId === req.id ? 'Forwarding…' : 'Approve & Forward to Principal'}
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs bg-slate-50 border border-slate-200/80 rounded-lg p-3">
+                <div>
+                  <p className="text-[10px] text-slate-500">School Code</p>
+                  <p className="font-mono font-bold text-slate-900">{req.schoolCode}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500">Class Code</p>
+                  <p className="font-mono font-bold text-slate-900">{req.classCode || '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500">Teacher Code</p>
+                  <p className="font-mono font-bold text-slate-900">{req.teacherCode || '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-slate-500">Student Code</p>
+                  <p className="font-mono font-bold text-teal-800">{req.studentCode || req.accessCode || '—'}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {awaitingTeacher.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl p-5">
+          <h3 className="text-sm font-bold font-display text-slate-900 mb-3">
+            Still Awaiting Stage 1 Teacher Approval ({awaitingTeacher.length})
+          </h3>
+          <div className="divide-y divide-slate-100">
+            {awaitingTeacher.map((req) => (
+              <div key={req.id} className="py-2.5 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-900">
+                    {req.applicantName}{' '}
+                    <span className="font-mono text-xs text-slate-600">{req.studentCode || req.accessCode}</span>
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Class {req.classCode || req.requestedClassInfo} · Routed to{' '}
+                    {req.targetTeacherName || req.teacherCode || 'Class Teacher'}
+                  </p>
+                </div>
+                <StatusText status="teacher_pending" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {forwardedOrDecided.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl p-5">
+          <h3 className="text-sm font-bold font-display text-slate-900 mb-3">
+            Forwarded to Principal &amp; Decided ({forwardedOrDecided.length})
+          </h3>
+          <div className="divide-y divide-slate-100">
+            {forwardedOrDecided.map((req) => (
+              <div key={req.id} className="py-2.5 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-900">
+                    {req.applicantName}{' '}
+                    <span className="font-mono text-xs text-teal-700">{req.studentCode || req.accessCode}</span>
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Ref <span className="font-mono">{req.applicationNumber}</span>
+                    {req.requestedClassInfo ? ` · ${req.requestedClassInfo}` : ''}
+                  </p>
+                </div>
+                <StatusText status={req.status === 'pending' && req.approvalStage ? req.approvalStage : req.status} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <Modal
+        open={Boolean(rejectTarget)}
+        onClose={() => setRejectTarget(null)}
+        title={`Reject Request — ${rejectTarget?.applicantName || ''}`}
+      >
+        <form onSubmit={handleReject} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Rejection Reason</label>
+            <textarea
+              required
+              rows={3}
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Explain why the student join request is rejected…"
+              className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setRejectTarget(null)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="danger" disabled={processingId === rejectTarget?.id}>
+              Confirm Rejection
+            </Button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+

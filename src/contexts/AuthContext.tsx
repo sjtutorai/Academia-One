@@ -148,6 +148,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           role: dirEntry.role,
           schoolId: dirEntry.schoolId,
           status: 'active',
+          accessCode: dirEntry.accessCode || existing.accessCode || '',
           classId: dirEntry.classId || existing.classId || '',
           section: dirEntry.section || existing.section || '',
           assignedClassIds: dirEntry.assignedClassIds || existing.assignedClassIds || [],
@@ -158,6 +159,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           role: claimed.role,
           schoolId: claimed.schoolId,
           status: 'active',
+          accessCode: claimed.accessCode,
           classId: claimed.classId,
           section: claimed.section,
           assignedClassIds: claimed.assignedClassIds,
@@ -189,6 +191,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       status: 'active',
       mustChangePassword: false,
       phone: '',
+      accessCode: dirEntry?.accessCode || '',
       classId: dirEntry?.classId || '',
       section: dirEntry?.section || '',
       assignedClassIds: dirEntry?.assignedClassIds || [],
@@ -239,6 +242,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     return () => unsub();
   }, [ensureUserProfile]);
+
+  // Real-time access revocation guard: if Main Head permanently deletes a user's Firestore doc
+  // (or marks them suspended/inactive), immediately revoke their active session and sign out.
+  useEffect(() => {
+    if (!firebaseUser || !realProfile || previewPersona) return;
+    const email = (firebaseUser.email || '').trim().toLowerCase();
+    if (email === BOOTSTRAPPED_MAIN_HEAD_EMAIL || realProfile.role === 'main_head') return;
+
+    const unsub = onSnapshot(
+      doc(db, 'users', firebaseUser.uid),
+      (snap) => {
+        if (!snap.exists()) {
+          setAuthError('Your account access has been permanently removed by the platform administrator.');
+          setRealProfile(null);
+          setActiveSchool(null);
+          signOut(auth).catch(() => undefined);
+          return;
+        }
+        const liveProfile = snap.data() as PlatformUser;
+        if (liveProfile.status === 'suspended' || liveProfile.status === 'inactive') {
+          setAuthError(`Your account is currently ${liveProfile.status}. Contact your administrator.`);
+          setRealProfile(null);
+          setActiveSchool(null);
+          signOut(auth).catch(() => undefined);
+          return;
+        }
+        setRealProfile(liveProfile);
+      },
+      () => {
+        // Ignore transient network errors
+      },
+    );
+    return () => unsub();
+  }, [firebaseUser?.uid, realProfile?.uid, previewPersona]);
 
   // Real-time subscription to active user's school document (for tenant enforcement & read-only grace mode)
   useEffect(() => {
@@ -352,6 +389,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           status: 'active',
           mustChangePassword: false,
           phone: '',
+          accessCode: dirEntry?.accessCode || '',
           classId: dirEntry?.classId || '',
           section: dirEntry?.section || '',
           assignedClassIds: dirEntry?.assignedClassIds || [],

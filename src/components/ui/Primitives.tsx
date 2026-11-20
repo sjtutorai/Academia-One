@@ -182,6 +182,9 @@ export function StatusText({ status }: { status: string }) {
       'on_leave',
       'contacted',
       'scheduled',
+      'teacher_pending',
+      'coordinator_pending',
+      'principal_pending',
     ].includes(normalized)
   ) {
     color = 'text-yellow-700';
@@ -273,24 +276,31 @@ export function Modal({
   const prefersReducedMotion = useReducedMotion();
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
     previousFocusRef.current = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') onCloseRef.current();
     };
     window.addEventListener('keydown', onKey);
-    // Move focus into dialog container for keyboard accessibility
+    // Focus dialog once on initial open only; never steal focus on parent re-renders
     const timer = window.setTimeout(() => {
-      dialogRef.current?.focus();
+      if (dialogRef.current && !dialogRef.current.contains(document.activeElement)) {
+        dialogRef.current.focus();
+      }
     }, 30);
     return () => {
       window.clearTimeout(timer);
       window.removeEventListener('keydown', onKey);
       previousFocusRef.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   return (
     <AnimatePresence>
