@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { sortClassesInOrder } from '../lib/schoolCodes';
 import type {
   SchoolClass,
   Subject,
@@ -75,11 +76,13 @@ export function useSchoolData(
       colName: string,
       q: ReturnType<typeof query>,
       setter: React.Dispatch<React.SetStateAction<T[]>>,
+      transform?: (items: T[]) => T[],
     ) =>
       onSnapshot(
         q,
         (snap) => {
-          setter(snap.docs.map((d) => d.data() as T));
+          const items = snap.docs.map((d) => d.data() as T);
+          setter(transform ? transform(items) : items);
           markSettled();
         },
         (err) => {
@@ -88,8 +91,11 @@ export function useSchoolData(
         },
       );
 
-    const sub = <T,>(colName: string, setter: React.Dispatch<React.SetStateAction<T[]>>) =>
-      subQuery<T>(colName, query(collection(db, colName), where('schoolId', '==', schoolId)), setter);
+    const sub = <T,>(
+      colName: string,
+      setter: React.Dispatch<React.SetStateAction<T[]>>,
+      transform?: (items: T[]) => T[],
+    ) => subQuery<T>(colName, query(collection(db, colName), where('schoolId', '==', schoolId)), setter, transform);
 
     const studentsQuery = studentUidFilter
       ? query(collection(db, 'students'), where('schoolId', '==', schoolId), where('userId', '==', studentUidFilter))
@@ -113,7 +119,7 @@ export function useSchoolData(
       : query(collection(db, 'examResults'), where('schoolId', '==', schoolId));
 
     const unsubs = [
-      sub<SchoolClass>('classes', setClasses),
+      sub<SchoolClass>('classes', setClasses, sortClassesInOrder),
       sub<Subject>('subjects', setSubjects),
       sub<Room>('rooms', setRooms),
       sub<TeacherProfile>('teachers', setTeachers),

@@ -27,12 +27,16 @@ service cloud.firestore {
     }
 
     function isVerified() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn()
+        && ('email_verified' in request.auth.token)
+        && request.auth.token.email_verified == true;
     }
 
     function isBootstrappedMainHead() {
       return isSignedIn()
+        && ('email' in request.auth.token)
         && request.auth.token.email == 'sjtutorai@gmail.com'
+        && ('email_verified' in request.auth.token)
         && request.auth.token.email_verified == true;
     }
 
@@ -42,6 +46,7 @@ service cloud.firestore {
 
     function hasEmailDirectoryEntry() {
       return isSignedIn()
+        && ('email' in request.auth.token)
         && request.auth.token.email is string
         && exists(/databases/$(database)/documents/emailDirectory/$(authEmailKey()));
     }
@@ -138,16 +143,8 @@ service cloud.firestore {
         && isShortString(data.createdBy, 1, 128)
         && isOptString(data, 'address', 300)
         && isOptString(data, 'email', 160)
-        && isOptString(data, 'phone', 32)
         && isOptString(data, 'principalUid', 128)
-        && isOptString(data, 'principalUsername', 64)
-        && isOptString(data, 'principalName', 120)
         && isOptString(data, 'principalEmail', 160)
-        && isOptString(data, 'subscriptionStart', 40)
-        && isOptString(data, 'subscriptionEnd', 40)
-        && isOptString(data, 'source', 32)
-        && isOptString(data, 'schoolType', 64)
-        && isOptString(data, 'board', 120)
         && isOptString(data, 'logoDataUrl', 200000)
         && isOptString(data, 'schoolPrefix', 12)
         && isOptString(data, 'activationCode', 32)
@@ -526,40 +523,14 @@ service cloud.firestore {
         && data.authMethod in ['email_password', 'google']
         && isShortString(data.requestedPlanId, 1, 128)
         && data.status in ['submitted', 'under_review', 'more_info_required', 'approved', 'rejected', 'withdrawn']
-        && isOptString(data, 'applicantDesignation', 64)
-        && isOptString(data, 'applicantPhone', 64)
-        && isOptString(data, 'organizationName', 200)
-        && isOptString(data, 'preferredContactMethod', 32)
         && isOptString(data, 'authorityRelationship', 200)
-        && isOptString(data, 'displayName', 200)
-        && isOptString(data, 'institutionType', 64)
-        && isOptString(data, 'affiliationBoard', 120)
-        && isOptString(data, 'mediumOfInstruction', 120)
-        && isOptString(data, 'establishedYear', 32)
-        && isOptString(data, 'externalRecognitionCode', 64)
         && isOptString(data, 'logoDataUrl', 500000)
-        && isOptString(data, 'website', 300)
-        && isOptString(data, 'schoolPhone', 64)
-        && isOptString(data, 'alternateContact', 160)
-        && isOptString(data, 'country', 80)
-        && isOptString(data, 'stateRegion', 80)
-        && isOptString(data, 'district', 80)
-        && isOptString(data, 'city', 80)
-        && isOptString(data, 'postalCode', 32)
         && isOptString(data, 'campusAddress', 500)
         && isOptString(data, 'classesOffered', 800)
         && isBoundedList(data, 'classSectionPlan', 30)
-        && isOptString(data, 'schoolPrefix', 12)
-        && isOptString(data, 'workingDaysSummary', 120)
-        && isOptString(data, 'principalPhone', 64)
-        && isOptString(data, 'principalDesignation', 120)
-        && isOptString(data, 'consentPolicyVersion', 40)
         && isOptString(data, 'internalNotes', 2000)
         && isOptString(data, 'applicantMessage', 1000)
         && isOptString(data, 'decisionNote', 500)
-        && isOptString(data, 'approvedSchoolId', 128)
-        && isOptString(data, 'approvedSchoolCode', 24)
-        && isOptString(data, 'reviewedBy', 128)
         && isBoundedList(data, 'activityLog', 50);
     }
 
@@ -639,13 +610,6 @@ service cloud.firestore {
         && isValidId(data.applicationNumber)
         && isValidId(data.schoolId)
         && isValidId(data.schoolCode)
-        && isOptString(data, 'accessCode', 32)
-        && isOptString(data, 'classCode', 24)
-        && isOptString(data, 'teacherCode', 24)
-        && isOptString(data, 'studentCode', 24)
-        && isOptString(data, 'targetTeacherId', 128)
-        && isOptString(data, 'targetTeacherUid', 128)
-        && isOptString(data, 'targetTeacherName', 120)
         && isShortString(data.schoolName, 2, 140)
         && isValidId(data.applicantUid)
         && isShortString(data.applicantEmail, 3, 160)
@@ -653,21 +617,13 @@ service cloud.firestore {
         && data.requestedRole in ['coordinator', 'teacher', 'student']
         && data.status in ['pending', 'approved', 'rejected']
         && (!('approvalStage' in data) || data.approvalStage in ['teacher_pending', 'coordinator_pending', 'principal_pending', 'approved', 'rejected'])
-        && isOptString(data, 'phone', 32)
-        && isOptString(data, 'requestedClassId', 128)
-        && isOptString(data, 'requestedSection', 32)
+        && isOptString(data, 'accessCode', 32)
+        && isOptString(data, 'classCode', 24)
+        && isOptString(data, 'teacherCode', 24)
+        && isOptString(data, 'studentCode', 24)
         && isOptString(data, 'requestedClassInfo', 120)
         && isOptString(data, 'note', 500)
-        && isOptString(data, 'teacherApprovedBy', 128)
-        && isOptString(data, 'teacherApprovedName', 120)
-        && isOptString(data, 'teacherApprovedAt', 40)
-        && isOptString(data, 'coordinatorApprovedBy', 128)
-        && isOptString(data, 'coordinatorApprovedName', 120)
-        && isOptString(data, 'coordinatorApprovedAt', 40)
-        && isOptString(data, 'principalApprovedBy', 128)
-        && isOptString(data, 'principalApprovedAt', 40)
-        && isOptString(data, 'decisionNote', 500)
-        && isOptString(data, 'reviewedBy', 128);
+        && isOptString(data, 'decisionNote', 500);
     }
 
     function isValidAdminSecurityConfig(data) {
@@ -700,28 +656,38 @@ service cloud.firestore {
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
         && (
-          isMainHead() ||
-          (isPrincipalOf(incoming().schoolId) && incoming().role in ['coordinator', 'teacher', 'student']) ||
-          (request.auth.uid == userId && incoming().uid == request.auth.uid && hasEmailDirectoryEntry() && emailDirectoryDoc().status == 'active' && incoming().role == emailDirectoryDoc().role && incoming().schoolId == emailDirectoryDoc().schoolId && incoming().status == 'active') ||
           (request.auth.uid == userId && incoming().uid == request.auth.uid && incoming().role == 'student' && incoming().schoolId == 'unassigned' && incoming().status == 'active') ||
-          (isBootstrappedMainHead() && request.auth.uid == userId && incoming().uid == request.auth.uid && incoming().role == 'main_head')
+          (request.auth.uid == userId && incoming().uid == request.auth.uid && hasEmailDirectoryEntry() && emailDirectoryDoc().status == 'active' && incoming().role == emailDirectoryDoc().role && incoming().schoolId == emailDirectoryDoc().schoolId && incoming().status == 'active') ||
+          (isBootstrappedMainHead() && request.auth.uid == userId && incoming().uid == request.auth.uid && incoming().role == 'main_head') ||
+          isMainHead() ||
+          (isPrincipalOf(incoming().schoolId) && incoming().role in ['coordinator', 'teacher', 'student'])
         );
       allow update: if isValidId(userId) && isSignedIn() && isValidUser(incoming())
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          isMainHead() ||
-          (isPrincipalOf(existing().schoolId) && incoming().schoolId == existing().schoolId && incoming().role in ['coordinator', 'teacher', 'student']) ||
+          (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'mustChangePassword', 'updatedAt'])) ||
           (request.auth.uid == userId && hasEmailDirectoryEntry() && emailDirectoryDoc().status == 'active' && incoming().role == emailDirectoryDoc().role && incoming().schoolId == emailDirectoryDoc().schoolId && incoming().status == 'active') ||
-          (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'mustChangePassword', 'updatedAt']))
+          isMainHead() ||
+          (isPrincipalOf(existing().schoolId) && incoming().schoolId == existing().schoolId && incoming().role in ['coordinator', 'teacher', 'student'])
         );
       allow delete: if isValidId(userId) && isMainHead();
     }
 
     match /schools/{schoolId} {
-      allow get: if isValidId(schoolId) && isSignedIn() && (isMainHead() || isSameSchool(schoolId));
-      allow list: if isSignedIn() && (isBootstrappedMainHead() || (userDocExists() && existing().id == userDoc().schoolId));
+      allow get: if isValidId(schoolId) && isSignedIn() && (
+        isSameSchool(schoolId) ||
+        isMainHead() ||
+        (resource != null && 'principalUid' in existing() && existing().principalUid == request.auth.uid) ||
+        (resource != null && ('email' in request.auth.token) && request.auth.token.email is string && 'principalEmail' in existing() && existing().principalEmail.lower() == request.auth.token.email.lower()) ||
+        (hasEmailDirectoryEntry() && emailDirectoryDoc().status == 'active' && emailDirectoryDoc().schoolId == schoolId)
+      );
+      allow list: if isSignedIn() && (
+        isBootstrappedMainHead() ||
+        (userDocExists() && existing().id == userDoc().schoolId) ||
+        ('principalUid' in existing() && existing().principalUid == request.auth.uid)
+      );
       allow create: if isValidId(schoolId) && isMainHead() && isValidSchool(incoming())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
@@ -788,7 +754,11 @@ service cloud.firestore {
 
     match /classes/{classId} {
       allow get: if isValidId(classId) && isSignedIn() && (isMainHead() || isSameSchool(existing().schoolId));
-      allow list: if isSignedIn() && (isBootstrappedMainHead() || existing().schoolId == userDoc().schoolId);
+      allow list: if isSignedIn() && (
+        isBootstrappedMainHead() ||
+        (userDocExists() && userDoc().role == 'main_head' && userDoc().status == 'active') ||
+        (userDocExists() && existing().schoolId == userDoc().schoolId)
+      );
       allow create: if isValidId(classId) && isSignedIn() && isValidClass(incoming())
         && incoming().createdAt == request.time && incoming().updatedAt == request.time
         && (isMainHead() || isPrincipalOf(incoming().schoolId));
@@ -837,7 +807,7 @@ service cloud.firestore {
         && (
           isMainHead() ||
           isPrincipalOf(existing().schoolId) ||
-          (isSameSchool(existing().schoolId) && request.auth.token.email is string && existing().email.lower() == request.auth.token.email.lower() && incoming().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['userId', 'updatedAt']))
+          (isSameSchool(existing().schoolId) && ('email' in request.auth.token) && request.auth.token.email is string && existing().email.lower() == request.auth.token.email.lower() && incoming().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['userId', 'updatedAt']))
         );
       allow delete: if isValidId(teacherId) && isSignedIn() && (isMainHead() || isPrincipalOf(existing().schoolId));
     }
@@ -847,7 +817,7 @@ service cloud.firestore {
         isMainHead() ||
         isStaffOf(existing().schoolId) ||
         (isSameSchool(existing().schoolId) && existing().userId == request.auth.uid) ||
-        (isSameSchool(existing().schoolId) && request.auth.token.email is string && 'email' in existing() && existing().email.lower() == request.auth.token.email.lower())
+        (isSameSchool(existing().schoolId) && ('email' in request.auth.token) && request.auth.token.email is string && 'email' in existing() && existing().email.lower() == request.auth.token.email.lower())
       );
       allow list: if isSignedIn() && (
         isBootstrappedMainHead() ||
@@ -862,7 +832,7 @@ service cloud.firestore {
         && (
           isMainHead() ||
           isPrincipalOf(existing().schoolId) ||
-          (isSameSchool(existing().schoolId) && request.auth.token.email is string && 'email' in existing() && existing().email.lower() == request.auth.token.email.lower() && incoming().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['userId', 'updatedAt']))
+          (isSameSchool(existing().schoolId) && ('email' in request.auth.token) && request.auth.token.email is string && 'email' in existing() && existing().email.lower() == request.auth.token.email.lower() && incoming().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['userId', 'updatedAt']))
         );
       allow delete: if isValidId(studentId) && isSignedIn() && (isMainHead() || isPrincipalOf(existing().schoolId));
     }
@@ -1047,7 +1017,10 @@ service cloud.firestore {
 
     match /applicationStatuses/{applicationNumber} {
       allow get: if isValidId(applicationNumber);
-      allow list: if false;
+      allow list: if isSignedIn() && (
+        isBootstrappedMainHead() ||
+        (userDocExists() && userDoc().role == 'main_head' && userDoc().status == 'active')
+      );
       allow create: if isValidId(applicationNumber) && isSignedIn() && isValidApplicationStatus(incoming())
         && incoming().applicationNumber == applicationNumber
         && incoming().status in ['submitted', 'pending']
@@ -1069,7 +1042,10 @@ service cloud.firestore {
 
     match /schoolCodes/{code} {
       allow get: if isValidId(code);
-      allow list: if false;
+      allow list: if isSignedIn() && (
+        isBootstrappedMainHead() ||
+        (userDocExists() && userDoc().role == 'main_head' && userDoc().status == 'active')
+      );
       allow create: if isValidId(code) && isMainHead() && isValidSchoolCodeEntry(incoming())
         && incoming().code == code
         && incoming().createdAt == request.time
@@ -1090,6 +1066,7 @@ service cloud.firestore {
       allow get: if isValidId(code);
       allow list: if isSignedIn() && (
         isBootstrappedMainHead() ||
+        (userDocExists() && userDoc().role == 'main_head' && userDoc().status == 'active') ||
         (userDocExists() && existing().schoolId == userDoc().schoolId)
       );
       allow create: if isValidId(code) && isSignedIn() && isValidMemberAccessCode(incoming())
@@ -1108,8 +1085,8 @@ service cloud.firestore {
 
     match /emailDirectory/{emailKey} {
       allow get: if isValidId(emailKey) && isSignedIn() && (
+        (('email' in request.auth.token) && request.auth.token.email is string && emailKey == authEmailKey()) ||
         isMainHead() ||
-        (request.auth.token.email is string && emailKey == authEmailKey()) ||
         (resource != null && isPrincipalOf(existing().schoolId))
       );
       allow list: if isSignedIn() && (

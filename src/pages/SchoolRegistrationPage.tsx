@@ -25,7 +25,7 @@ import {
   UserCheck,
   BookOpen,
 } from 'lucide-react';
-import { doc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db, generateId, OperationType } from '../lib/firebase';
 import { generateApplicationNumber, hashVerificationEmail } from '../lib/schoolProvisioning';
 import {
@@ -201,10 +201,23 @@ const CLASS_PLAN_PRESETS: { label: string; grades: string[]; from: string; to: s
 ];
 
 export default function SchoolRegistrationPage() {
-  const { firebaseUser, activeUser, loading: authLoading, signInUnified, signUpEmailPassword, signInGoogle, logout } =
-    useAuth();
+  const {
+    firebaseUser,
+    activeUser,
+    loading: authLoading,
+    emailVerified,
+    needsEmailVerification,
+    signInUnified,
+    signUpEmailPassword,
+    signInGoogle,
+    checkEmailVerification,
+    resendVerificationEmail,
+    logout,
+  } = useAuth();
   const { pushToast } = useToast();
   const prefersReducedMotion = useReducedMotion();
+  const [checkingStep1Verify, setCheckingStep1Verify] = useState(false);
+  const [resendingStep1Verify, setResendingStep1Verify] = useState(false);
 
   const [step, setStep] = useState(1);
   const [direction, setDirection] = useState(1);
@@ -457,6 +470,9 @@ export default function SchoolRegistrationPage() {
       if (!firebaseUser) {
         return 'Sign in or create your account using Email & Password or Google Sign-In before continuing.';
       }
+      if (needsEmailVerification) {
+        return 'Verify your email address first using the verification link sent to your inbox, then click "I\'ve Verified My Email" above.';
+      }
       const effectiveApplicantEmail = (firebaseUser.email || draft.applicantEmail).trim().toLowerCase();
       if (draft.applicantName.trim().length < 2) return 'Enter the applicant full name (at least 2 characters).';
       if (!emailRe.test(effectiveApplicantEmail)) return 'A valid account email address is required.';
@@ -497,7 +513,7 @@ export default function SchoolRegistrationPage() {
       }
     }
     if (targetStep === 5) {
-      if (draft.academicYear.trim().length < 2) return 'Enter the current academic year (e.g., 2026-2027).';
+      if (draft.academicYear.trim().length < 2) return 'Enter the current academic year.';
       if (!draft.classSectionPlan || draft.classSectionPlan.length === 0) {
         return 'Select at least one Class and Section range from the dropdowns.';
       }
@@ -555,11 +571,11 @@ export default function SchoolRegistrationPage() {
       }
     }
 
-    const activeFbUser = auth.currentUser || firebaseUser;
+    const activeFbUser = auth.currentUser;
     if (!activeFbUser) {
       setDirection(-1);
       setStep(1);
-      setStepError('Please sign in with Email & Password or Google in Step 1 before submitting.');
+      setStepError('Your sign-in session expired. Please sign in with Email & Password or Google on Step 1 before submitting.');
       return;
     }
 
@@ -647,7 +663,7 @@ export default function SchoolRegistrationPage() {
       setSubmitting(false);
       setDirection(-1);
       setStep(5);
-      setStepError('Step 5: Academic year (e.g., 2026-2027) is required.');
+      setStepError('Step 5: Academic year is required.');
       return;
     }
 
@@ -656,7 +672,6 @@ export default function SchoolRegistrationPage() {
       await activeFbUser.getIdToken(true);
 
       const verificationEmailHash = await hashVerificationEmail(safeApplicantEmail);
-      const batch = writeBatch(db);
       const now = serverTimestamp();
 
       const applicationPayload = {
@@ -742,10 +757,13 @@ export default function SchoolRegistrationPage() {
         updatedAt: now,
       };
 
-      batch.set(doc(db, 'schoolApplications', applicationId), applicationPayload);
-      batch.set(doc(db, 'applicationStatuses', applicationNumber), statusPayload);
+      // Write schoolApplications and applicationStatuses as separate requests so each gets
+      // its own Firestore Security Rules evaluation budget.
+      await setDoc(doc(db, 'schoolApplications', applicationId), applicationPayload);
+      await setDoc(doc(db, 'applicationStatuses', applicationNumber), statusPayload).catch((statusErr) => {
+        console.warn('Application status mirror write warning:', statusErr instanceof Error ? statusErr.message : statusErr);
+      });
 
-      await batch.commit();
       localStorage.removeItem(DRAFT_STORAGE_KEY);
       localStorage.removeItem('academiaone_school_reg_draft_v3');
       localStorage.removeItem('academiaone_school_reg_draft_v2');
@@ -1127,35 +1145,108 @@ export default function SchoolRegistrationPage() {
                     </div>
                   ) : (
                     <>
-                      {/* Verified Signed-In Account Card */}
-                      <div className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-200 flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
-                            <CheckCircle2 className="w-5 h-5" />
+                      {/* Signed-In Account Verification Status Card */}
+                      {needsEmailVerification ? (
+                        <div className="p-4 rounded-xl bg-amber-50/90 border border-amber-200 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-amber-900">
+                                Email Verification Required · Email &amp; Password
+                              </p>
+                              <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
+                                We sent a verification link to <strong>{effectiveApplicantEmail}</strong>. Click the link in your inbox (or spam folder), then confirm below to continue your school application.
+                              </p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              onClick={async () => {
+                                await logout();
+                                pushToast('info', 'Signed out. Sign in with another account to continue.');
+                              }}
+                            >
+                              <LogOut className="w-3.5 h-3.5" />
+                              Switch Account
+                            </Button>
                           </div>
-                          <div className="min-w-0">
-                            <p className="text-xs font-semibold text-emerald-900">
-                              Account Verified · {signedInProvider === 'google' ? 'Google Sign-In' : 'Email & Password'}
-                            </p>
-                            <p className="text-xs text-emerald-800 truncate mt-0.5">
-                              <strong>{activeUser?.displayName || firebaseUser.displayName || draft.applicantName || 'Applicant'}</strong>{' '}
-                              ({effectiveApplicantEmail})
-                            </p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="navy"
+                              size="sm"
+                              loading={checkingStep1Verify}
+                              onClick={async () => {
+                                setCheckingStep1Verify(true);
+                                try {
+                                  const ok = await checkEmailVerification();
+                                  if (ok) {
+                                    setStepError('');
+                                    pushToast('success', 'Email verified! You can now proceed with your application.');
+                                  } else {
+                                    pushToast('info', 'Not verified yet. Click the link in your email first.');
+                                  }
+                                } finally {
+                                  setCheckingStep1Verify(false);
+                                }
+                              }}
+                            >
+                              I&apos;ve Verified My Email
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              loading={resendingStep1Verify}
+                              onClick={async () => {
+                                setResendingStep1Verify(true);
+                                try {
+                                  const res = await resendVerificationEmail();
+                                  if (res.ok) {
+                                    pushToast('success', 'Verification email resent. Check your inbox and spam folder.');
+                                  } else {
+                                    pushToast('error', res.error || 'Could not resend verification email.');
+                                  }
+                                } finally {
+                                  setResendingStep1Verify(false);
+                                }
+                              }}
+                            >
+                              Resend Verification Email
+                            </Button>
                           </div>
                         </div>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          onClick={async () => {
-                            await logout();
-                            pushToast('info', 'Signed out. Sign in with another account to continue.');
-                          }}
-                        >
-                          <LogOut className="w-3.5 h-3.5" />
-                          Switch Account
-                        </Button>
-                      </div>
+                      ) : (
+                        <div className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-200 flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                              <CheckCircle2 className="w-5 h-5" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-emerald-900">
+                                {emailVerified ? 'Account Verified' : 'Account Signed In'} ·{' '}
+                                {signedInProvider === 'google' ? 'Google Sign-In' : 'Email & Password'}
+                              </p>
+                              <p className="text-xs text-emerald-800 truncate mt-0.5">
+                                <strong>{activeUser?.displayName || firebaseUser.displayName || draft.applicantName || 'Applicant'}</strong>{' '}
+                                ({effectiveApplicantEmail})
+                              </p>
+                            </div>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={async () => {
+                              await logout();
+                              pushToast('info', 'Signed out. Sign in with another account to continue.');
+                            }}
+                          >
+                            <LogOut className="w-3.5 h-3.5" />
+                            Switch Account
+                          </Button>
+                        </div>
+                      )}
 
                       {/* Applicant Contact Details */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1243,7 +1334,7 @@ export default function SchoolRegistrationPage() {
                           <input
                             value={draft.authorityRelationship}
                             onChange={(e) => updateField('authorityRelationship', e.target.value)}
-                            placeholder="e.g., Managing Trustee authorized by School Board"
+                            placeholder="Describe your role or board authorization"
                             className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 transition-colors focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                           />
                         </div>
@@ -1925,7 +2016,7 @@ export default function SchoolRegistrationPage() {
                           maxLength={6}
                           className="w-full text-sm font-mono uppercase border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
                         />
-                        <p className="text-[11px] text-slate-400 mt-1">Letters only (e.g. JSS)</p>
+                        <p className="text-[11px] text-slate-400 mt-1">Letters only (2–6 characters)</p>
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-slate-700 mb-1">Coordinators *</label>

@@ -29,6 +29,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { Button, useToast } from '../components/ui/Primitives';
 import { BrandLogo } from '../components/ui/BrandLogo';
+import { PWAInstallButton } from '../components/shared/PWAControls';
 import { isValidPhoneDigits, sanitizePhoneDigits } from '../lib/schoolCodes';
 import type { PlatformSettings } from '../types/models';
 
@@ -134,16 +135,16 @@ export default function LandingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-slate-900">
+    <div className="min-h-[100dvh] bg-[#F8FAFC] text-slate-900">
       {/* Sticky Top Navigation */}
       <header
-        className={`sticky top-0 z-40 transition-all duration-200 border-b ${
+        className={`sticky top-0 z-40 transition-all duration-200 border-b safe-top ${
           scrolled
             ? 'bg-white/95 backdrop-blur-md border-slate-200 py-3 shadow-xs'
             : 'bg-[#0F295C] border-blue-900/80 py-4'
         }`}
       >
-        <div className="max-w-7xl mx-auto px-6 flex items-center justify-between gap-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between gap-4 sm:gap-8">
           <Link
             to="/"
             className="whitespace-nowrap shrink-0 hover:opacity-90 transition-opacity"
@@ -171,7 +172,11 @@ export default function LandingPage() {
             </a>
           </nav>
 
-          <div className="hidden lg:flex items-center gap-4 shrink-0">
+          <div className="hidden lg:flex items-center gap-3 shrink-0">
+            <PWAInstallButton
+              variant="compact"
+              className={scrolled ? '' : '!bg-blue-800/80 !text-white !border-blue-700 hover:!bg-blue-700'}
+            />
             {activeUser ? (
               <Button
                 variant="primary"
@@ -205,14 +210,20 @@ export default function LandingPage() {
             )}
           </div>
 
-          <button
-            type="button"
-            className={`lg:hidden p-2 rounded-lg transition-colors cursor-pointer ${scrolled ? 'text-slate-700 hover:bg-slate-100' : 'text-white hover:bg-slate-800'}`}
-            onClick={() => setMobileMenuOpen((v) => !v)}
-            aria-label="Toggle navigation menu"
-          >
-            {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-          </button>
+          <div className="flex lg:hidden items-center gap-2">
+            <PWAInstallButton
+              variant="compact"
+              className={scrolled ? '' : '!bg-blue-800/80 !text-white !border-blue-700 hover:!bg-blue-700'}
+            />
+            <button
+              type="button"
+              className={`p-2 rounded-lg transition-colors cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center ${scrolled ? 'text-slate-700 hover:bg-slate-100' : 'text-white hover:bg-slate-800'}`}
+              onClick={() => setMobileMenuOpen((v) => !v)}
+              aria-label="Toggle navigation menu"
+            >
+              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+          </div>
         </div>
 
         {/* Responsive Mobile Drawer */}
@@ -235,13 +246,16 @@ export default function LandingPage() {
                   Track Application Status
                 </Link>
               </div>
-              <div className="pt-3 border-t border-slate-100 flex items-center gap-3">
-                <Button variant="secondary" className="flex-1" onClick={() => navigate('/login')}>
-                  Sign In
-                </Button>
-                <Button variant="primary" className="flex-1" onClick={() => navigate('/register-school')}>
-                  Register School
-                </Button>
+              <div className="pt-3 border-t border-slate-100 space-y-2.5">
+                <PWAInstallButton variant="header" className="w-full" />
+                <div className="flex items-center gap-3">
+                  <Button variant="secondary" className="flex-1" onClick={() => navigate('/login')}>
+                    Sign In
+                  </Button>
+                  <Button variant="primary" className="flex-1" onClick={() => navigate('/register-school')}>
+                    Register School
+                  </Button>
+                </div>
               </div>
             </motion.div>
           )}
@@ -661,7 +675,7 @@ export default function LandingPage() {
                       required
                       value={enquiry.schoolName}
                       onChange={(e) => setEnquiry({ ...enquiry, schoolName: e.target.value })}
-                      placeholder="e.g. Oakwood Science Academy"
+                      placeholder="Enter school name"
                       className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                     />
                   </div>
@@ -672,7 +686,7 @@ export default function LandingPage() {
                       required
                       value={enquiry.contactName}
                       onChange={(e) => setEnquiry({ ...enquiry, contactName: e.target.value })}
-                      placeholder="e.g. Dr. Miriam Alcott"
+                      placeholder="Enter contact person name"
                       className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                     />
                   </div>
@@ -686,7 +700,7 @@ export default function LandingPage() {
                       required
                       value={enquiry.email}
                       onChange={(e) => setEnquiry({ ...enquiry, email: e.target.value })}
-                      placeholder="principal@school.edu"
+                      placeholder="Enter official email"
                       className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                     />
                   </div>
@@ -699,7 +713,7 @@ export default function LandingPage() {
                       maxLength={15}
                       value={enquiry.phone}
                       onChange={(e) => setEnquiry({ ...enquiry, phone: sanitizePhoneDigits(e.target.value) })}
-                      placeholder="e.g. 9876543210"
+                      placeholder="Enter phone number"
                       className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg tabular-nums transition-colors focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                     />
                   </div>

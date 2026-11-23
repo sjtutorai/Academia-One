@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { sendEmailVerification } from 'firebase/auth';
-import { Lock, ShieldCheck, CheckCircle2, Mail } from 'lucide-react';
-import { auth, db, handleFirestoreError, OperationType } from '../../lib/firebase';
+import { Lock, ShieldCheck, CheckCircle2, Mail, RefreshCw } from 'lucide-react';
+import { db, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { ROLE_LABELS, ROLE_PERMISSION_MATRIX } from '../../lib/permissions';
 import { isValidPhoneDigits, sanitizePhoneDigits } from '../../lib/schoolCodes';
 import { useAuth } from '../../contexts/AuthContext';
@@ -10,17 +9,39 @@ import { Button, StatusText, useToast } from '../ui/Primitives';
 import { MainHeadAdminSecurityCard } from '../main-head/MainHeadAdminSecurityCard';
 
 export function ProfileSecurityView() {
-  const { activeUser, realProfile, firebaseUser, isPreviewMode, replaceTemporaryPassword, refreshProfile } = useAuth();
+  const {
+    activeUser,
+    realProfile,
+    firebaseUser,
+    isPreviewMode,
+    emailVerified,
+    isPasswordAccount,
+    replaceTemporaryPassword,
+    checkEmailVerification,
+    resendVerificationEmail,
+    refreshProfile,
+  } = useAuth();
   const { pushToast } = useToast();
 
   const [displayName, setDisplayName] = useState(activeUser?.displayName || '');
   const [phone, setPhone] = useState(sanitizePhoneDigits(activeUser?.phone || ''));
   const [savingProfile, setSavingProfile] = useState(false);
 
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [savingPw, setSavingPw] = useState(false);
   const [pwError, setPwError] = useState('');
+
+  const [checkingVerify, setCheckingVerify] = useState(false);
+  const [resendingVerify, setResendingVerify] = useState(false);
+  const [verifyCooldown, setVerifyCooldown] = useState(0);
+
+  useEffect(() => {
+    if (verifyCooldown <= 0) return;
+    const t = window.setInterval(() => setVerifyCooldown((c) => Math.max(0, c - 1)), 1000);
+    return () => window.clearInterval(t);
+  }, [verifyCooldown]);
 
   if (!activeUser) return null;
 
@@ -62,6 +83,10 @@ export function ProfileSecurityView() {
       setPwError('Exit Demo Role Preview to change your own password.');
       return;
     }
+    if (isPasswordAccount && !currentPassword) {
+      setPwError('Enter your current password to verify your identity.');
+      return;
+    }
     if (newPassword.length < 8) {
       setPwError('Password must be at least 8 characters.');
       return;
@@ -72,11 +97,12 @@ export function ProfileSecurityView() {
     }
     setSavingPw(true);
     try {
-      const res = await replaceTemporaryPassword(newPassword);
+      const res = await replaceTemporaryPassword(newPassword, currentPassword || undefined);
       if (!res.ok) {
         setPwError(res.error || 'Could not update password.');
         return;
       }
+      setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
       pushToast('success', 'Password changed securely.');
@@ -160,6 +186,19 @@ export function ProfileSecurityView() {
           <p className="text-xs text-slate-500">
             Passwords are hashed securely by Firebase Authentication and are never readable in plaintext.
           </p>
+          {isPasswordAccount && (
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Current Password</label>
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                disabled={isPreviewMode}
+                placeholder="Enter current password"
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600 disabled:bg-slate-50"
+              />
+            </div>
+          )}
           <div className="grid sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">New Password</label>
@@ -201,28 +240,61 @@ export function ProfileSecurityView() {
               <Mail className="w-4 h-4 text-teal-600" />
               Email Verification
             </div>
-            {firebaseUser.emailVerified ? (
+            {emailVerified ? (
               <p className="mt-2 text-xs text-emerald-700 flex items-center gap-1.5">
                 <CheckCircle2 className="w-4 h-4" />
-                Verified ({realProfile?.email})
+                Verified ({realProfile?.email || firebaseUser.email})
               </p>
             ) : (
               <div className="mt-2 space-y-3">
                 <p className="text-xs text-amber-800">
                   Your email address is not yet verified. Verify it to ensure uninterrupted security privileges.
                 </p>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={async () => {
-                    if (auth.currentUser) {
-                      await sendEmailVerification(auth.currentUser).catch(() => undefined);
-                      pushToast('success', 'Verification email resent.');
-                    }
-                  }}
-                >
-                  Resend Verification Email
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="navy"
+                    size="sm"
+                    loading={checkingVerify}
+                    onClick={async () => {
+                      setCheckingVerify(true);
+                      try {
+                        const ok = await checkEmailVerification();
+                        if (ok) {
+                          pushToast('success', 'Email verification confirmed!');
+                        } else {
+                          pushToast('info', 'Not verified yet. Open the link sent to your inbox first.');
+                        }
+                      } finally {
+                        setCheckingVerify(false);
+                      }
+                    }}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Check Status
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={resendingVerify}
+                    disabled={verifyCooldown > 0}
+                    onClick={async () => {
+                      setResendingVerify(true);
+                      try {
+                        const res = await resendVerificationEmail();
+                        if (res.ok) {
+                          setVerifyCooldown(60);
+                          pushToast('success', 'Verification email sent. Check your inbox and spam folder.');
+                        } else {
+                          pushToast('error', res.error || 'Could not send verification email.');
+                        }
+                      } finally {
+                        setResendingVerify(false);
+                      }
+                    }}
+                  >
+                    {verifyCooldown > 0 ? `Resend in ${verifyCooldown}s` : 'Resend Verification Email'}
+                  </Button>
+                </div>
               </div>
             )}
           </div>

@@ -12,10 +12,9 @@ import {
   YAxis,
   CartesianGrid,
 } from 'recharts';
-import { formatFirestoreDateTime } from '../../lib/firebase';
 import { exportToCsv } from '../../lib/csv';
 import { Button } from '../../components/ui/Primitives';
-import type { School, AuditLog } from '../../types/models';
+import type { School } from '../../types/models';
 
 const PIE_COLORS = ['#2563EB', '#EA4335', '#EAB308', '#16A34A'];
 
@@ -54,7 +53,7 @@ export function MainHeadAnalyticsView({
   const handleExport = () => {
     exportToCsv(
       'academiaone_platform_analytics.csv',
-      ['School ID', 'Name', 'Code', 'Status', 'Access Tier', 'Teachers', 'Students', 'Demo'],
+      ['School ID', 'Name', 'Code', 'Status', 'Access Tier', 'Teachers', 'Students'],
       filteredSchools.map((s) => [
         s.id,
         s.name,
@@ -63,7 +62,6 @@ export function MainHeadAnalyticsView({
         'Free Unlimited',
         s.teacherCount || 0,
         s.studentCount || 0,
-        Boolean(s.isDemo),
       ]),
     );
   };
@@ -127,82 +125,6 @@ export function MainHeadAnalyticsView({
             </div>
           )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================================
-// Audit Logs View
-// ============================================================================
-export function MainHeadAuditLogsView({ auditLogs }: { auditLogs: AuditLog[] }) {
-  const [filter, setFilter] = useState('');
-  const filtered = auditLogs.filter((l) =>
-    !filter.trim() ||
-    `${l.action} ${l.actorName} ${l.targetLabel || ''} ${l.details || ''}`.toLowerCase().includes(filter.toLowerCase()),
-  );
-
-  return (
-    <div className="space-y-4">
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
-        <input
-          type="search"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter audit entries by actor, action, or target…"
-          className="w-full sm:w-80 px-3 py-1.5 text-xs border border-slate-300 rounded-lg"
-        />
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() =>
-            exportToCsv(
-              'academiaone_audit_logs.csv',
-              ['Timestamp', 'Actor', 'Role', 'Action', 'Target', 'School ID', 'Details'],
-              filtered.map((l) => [
-                formatFirestoreDateTime(l.createdAt),
-                l.actorName,
-                l.actorRole,
-                l.action,
-                l.targetLabel || l.targetId,
-                l.schoolId,
-                l.details || '',
-              ]),
-            )
-          }
-        >
-          <Download className="w-4 h-4" />
-          Export Audit CSV
-        </Button>
-      </div>
-
-      <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
-        <table className="w-full text-left border-collapse text-xs">
-          <thead>
-            <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
-              <th className="py-3 px-4 font-semibold">Timestamp</th>
-              <th className="py-3 px-4 font-semibold">Actor</th>
-              <th className="py-3 px-4 font-semibold">Action</th>
-              <th className="py-3 px-4 font-semibold">Target</th>
-              <th className="py-3 px-4 font-semibold">Details</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {filtered.map((l) => (
-              <tr key={l.id} className="hover:bg-slate-50/70">
-                <td className="py-3 px-4 font-mono tabular-nums text-slate-500 whitespace-nowrap">
-                  {formatFirestoreDateTime(l.createdAt)}
-                </td>
-                <td className="py-3 px-4 font-medium text-slate-900">
-                  {l.actorName} <span className="text-slate-400">({l.actorRole})</span>
-                </td>
-                <td className="py-3 px-4 font-mono text-[#2563EB] font-medium">{l.action}</td>
-                <td className="py-3 px-4 text-slate-700">{l.targetLabel || l.targetId}</td>
-                <td className="py-3 px-4 text-slate-500 max-w-xs truncate">{l.details || '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
     </div>
   );

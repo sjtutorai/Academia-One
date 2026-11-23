@@ -43,7 +43,7 @@ export default function ApplicationStatusPage() {
     const normalizedRef = appNumber.trim().toUpperCase();
     const cleanEmail = verifyEmail.trim().toLowerCase();
     if (normalizedRef.length < 6) {
-      setError('Enter your complete Application Number (for example: SCH-2026-XXXXXX or JOIN-2026-XXXXXX).');
+      setError('Enter your complete Application Number.');
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {

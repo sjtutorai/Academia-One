@@ -48,7 +48,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       {children}
       <div
         aria-live="polite"
-        className="fixed bottom-5 right-5 z-50 flex flex-col gap-2.5 max-w-md w-[calc(100vw-2.5rem)] pointer-events-none"
+        className="fixed bottom-20 lg:bottom-5 right-3 sm:right-5 z-50 flex flex-col gap-2.5 max-w-md w-[calc(100vw-1.5rem)] sm:w-[calc(100vw-2.5rem)] pointer-events-none"
       >
         <AnimatePresence initial={false}>
           {toasts.map((t) => (
@@ -313,7 +313,7 @@ export function Modal({
           onClick={(e) => {
             if (e.target === e.currentTarget) onClose();
           }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-[1px]"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/50 backdrop-blur-[1px]"
           role="dialog"
           aria-modal="true"
           aria-labelledby="modal-title"
@@ -325,10 +325,10 @@ export function Modal({
             initial="initial"
             animate="animate"
             exit="exit"
-            className={`bg-white border border-slate-200 rounded-xl shadow-xl w-full ${maxWidth} max-h-[90vh] flex flex-col focus:outline-none`}
+            className={`bg-white border border-slate-200 rounded-t-2xl sm:rounded-xl shadow-xl w-full ${maxWidth} max-h-[92dvh] sm:max-h-[90dvh] flex flex-col focus:outline-none safe-bottom`}
           >
-            <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-slate-200">
-              <div>
+            <div className="flex items-start justify-between gap-3 px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-200 shrink-0">
+              <div className="min-w-0">
                 <h2 id="modal-title" className="text-base font-bold font-display text-slate-900">
                   {title}
                 </h2>
@@ -337,13 +337,13 @@ export function Modal({
               <button
                 type="button"
                 onClick={onClose}
-                className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 p-1 rounded-lg transition-colors cursor-pointer"
+                className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg transition-colors cursor-pointer shrink-0 -mr-1.5 -mt-1"
                 aria-label="Close modal"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-6 overflow-y-auto">{children}</div>
+            <div className="p-4 sm:p-6 overflow-y-auto touch-scroll">{children}</div>
           </motion.div>
         </motion.div>
       )}

@@ -40,6 +40,7 @@ import { exportToCsv } from '../../lib/csv';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSchoolData, type SchoolDataBundle } from '../../hooks/useSchoolData';
 import { DashboardShell, type NavItem } from '../../components/DashboardShell';
+import { AnimatedAssignedClassesPanel } from '../../components/shared/GradeClassControls';
 import {
   Button,
   EmptyState,
@@ -165,7 +166,14 @@ export default function TeacherPortal() {
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route
           path="dashboard"
-          element={<TeacherOverview user={activeUser} data={scopedData} teacherId={teacherProfile?.id} />}
+          element={
+            <TeacherOverview
+              user={activeUser}
+              data={scopedData}
+              allSchoolClasses={data.classes}
+              teacherId={teacherProfile?.id}
+            />
+          }
         />
         <Route path="timetable" element={<TeacherTimetableView data={scopedData} />} />
         <Route path="classes" element={<TeacherClassesView data={scopedData} search={globalSearch} />} />
@@ -250,9 +258,11 @@ export default function TeacherPortal() {
 function TeacherOverview({
   user,
   data,
+  allSchoolClasses,
 }: {
   user: PlatformUser;
   data: SchoolDataBundle;
+  allSchoolClasses: SchoolDataBundle['classes'];
   teacherId?: string;
 }) {
   if (data.loading) return <SkeletonTable rows={6} cols={4} />;
@@ -272,22 +282,30 @@ function TeacherOverview({
 
   return (
     <div className="space-y-6">
-      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-xs font-medium text-teal-700">{today} Teaching Summary</p>
-          <h2 className="text-lg font-bold font-display text-slate-900 mt-0.5">Welcome, {user.displayName}</h2>
-          <p className="text-xs text-slate-500 mt-1">
-            {data.classes.length} assigned classes · {data.subjects.length} subjects · {data.students.length} students
-          </p>
-        </div>
-        {todayPeriods[0] && (
-          <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-xs">
-            <p className="text-slate-500">Next Scheduled Period ({today})</p>
-            <p className="font-semibold text-slate-900 mt-0.5">
-              {todayPeriods[0].subjectName} · {todayPeriods[0].className} ({todayPeriods[0].startTime}–{todayPeriods[0].endTime})
+      <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-xs font-medium text-teal-700">{today} Teaching Summary</p>
+            <h2 className="text-lg font-bold font-display text-slate-900 mt-0.5">Welcome, {user.displayName}</h2>
+            <p className="text-xs text-slate-500 mt-1">
+              {data.classes.length} assigned section{data.classes.length === 1 ? '' : 's'} · {data.subjects.length} subjects · {data.students.length} students
             </p>
           </div>
-        )}
+          {todayPeriods[0] && (
+            <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-xs">
+              <p className="text-slate-500">Next Scheduled Period ({today})</p>
+              <p className="font-semibold text-slate-900 mt-0.5">
+                {todayPeriods[0].subjectName} · {todayPeriods[0].className} ({todayPeriods[0].startTime}–{todayPeriods[0].endTime})
+              </p>
+            </div>
+          )}
+        </div>
+        <AnimatedAssignedClassesPanel
+          assignedClasses={data.classes}
+          allSchoolClasses={allSchoolClasses}
+          title="Assigned Teaching Classes by Grade"
+          emptyLabel="No classes assigned to your profile yet"
+        />
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -920,7 +938,7 @@ function TeacherHomeworkView({
               minLength={3}
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
-              placeholder="e.g., Chapter 6 Problem Set"
+              placeholder="Enter assignment title"
               className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
             />
           </div>
@@ -1519,7 +1537,7 @@ function TeacherMaterialsView({
                 minLength={3}
                 value={form.title}
                 onChange={(e) => setForm({ ...form, title: e.target.value })}
-                placeholder="e.g., Quadratic Formula Reference Sheet"
+                placeholder="Enter resource title"
                 className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
               />
             </div>
@@ -1528,7 +1546,7 @@ function TeacherMaterialsView({
               <input
                 value={form.topic}
                 onChange={(e) => setForm({ ...form, topic: e.target.value })}
-                placeholder="e.g., Unit 3 Algebra"
+                placeholder="Enter topic or unit"
                 className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
               />
             </div>

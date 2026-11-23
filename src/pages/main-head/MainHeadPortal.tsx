@@ -7,11 +7,8 @@ import {
   BarChart3,
   Users,
   Bell,
-  FileClock,
   UserCircle2,
   Plus,
-  RefreshCw,
-  Eye,
   KeyRound,
   Trash2,
   PauseCircle,
@@ -19,7 +16,7 @@ import {
   CheckCircle2,
   Copy,
   Check,
-  ShieldAlert,
+  QrCode,
 } from 'lucide-react';
 import {
   collection,
@@ -42,16 +39,16 @@ import {
 import {
   auth,
   db,
-  generateId,
-  handleFirestoreError,
-  OperationType,
   provisionAuthAccountSecondary,
-  formatFirestoreDateTime,
 } from '../../lib/firebase';
-import { DEMO_ACCOUNTS, seedDemoEcosystem } from '../../lib/demoSeed';
 import { recordAuditLog } from '../../lib/audit';
-import { deriveSchoolPrefix, sanitizePhoneDigits, sanitizeSchoolPrefix } from '../../lib/schoolCodes';
-import { ROLE_HOME_ROUTES, ROLE_LABELS } from '../../lib/permissions';
+import {
+  deriveSchoolPrefix,
+  formatPrincipalCode,
+  sanitizePhoneDigits,
+  sanitizeSchoolPrefix,
+} from '../../lib/schoolCodes';
+import { ROLE_LABELS } from '../../lib/permissions';
 import { useAuth } from '../../contexts/AuthContext';
 import { DashboardShell, type NavItem } from '../../components/DashboardShell';
 import {
@@ -72,21 +69,25 @@ import {
   type PasswordChangeTarget,
 } from '../../components/main-head/ChangeSchoolPasswordModal';
 import {
+  MainHeadAccessCodesDirectory,
+  SchoolCodesModal,
+} from '../../components/main-head/SchoolCodesModal';
+import {
   permanentlyDeleteSchoolCascade,
   permanentlyDeleteUserAccess,
   provisionSchoolTenant,
+  upsertEmailDirectoryEntry,
 } from '../../lib/schoolProvisioning';
 import { MainHeadApplicationsView } from './MainHeadApplicationsView';
-import {
-  MainHeadAnalyticsView,
-  MainHeadAuditLogsView,
-} from './MainHeadSubViews';
+import { MainHeadAnalyticsView } from './MainHeadSubViews';
 import type {
+  SchoolClass,
+  MemberAccessCode,
   School,
   SchoolApplication,
+  SchoolCodeEntry,
   SchoolEnquiry,
   PlatformUser,
-  AuditLog,
   UserRole,
 } from '../../types/models';
 
@@ -94,87 +95,49 @@ const MAIN_HEAD_NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', path: '/main-head/dashboard', icon: LayoutDashboard },
   { id: 'applications', label: 'Applications', path: '/main-head/applications', icon: ClipboardCheck },
   { id: 'schools', label: 'Schools', path: '/main-head/schools', icon: Building2 },
+  { id: 'access-codes', label: 'Access Codes', path: '/main-head/access-codes', icon: KeyRound },
   { id: 'analytics', label: 'Analytics', path: '/main-head/analytics', icon: BarChart3 },
   { id: 'users', label: 'Platform Users', path: '/main-head/users', icon: Users },
   { id: 'notifications', label: 'Notifications', path: '/main-head/notifications', icon: Bell },
-  { id: 'audit', label: 'Audit Logs', path: '/main-head/audit-logs', icon: FileClock },
   { id: 'profile', label: 'Profile & Security', path: '/main-head/profile', icon: UserCircle2 },
 ];
 
 export default function MainHeadPortal() {
-  const { activeUser, enterDemoPreview } = useAuth();
-  const navigate = useNavigate();
-  const { pushToast } = useToast();
+  const { activeUser } = useAuth();
 
   const [schools, setSchools] = useState<School[]>([]);
+  const [schoolCodes, setSchoolCodes] = useState<SchoolCodeEntry[]>([]);
+  const [memberCodes, setMemberCodes] = useState<MemberAccessCode[]>([]);
+  const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [applications, setApplications] = useState<SchoolApplication[]>([]);
   const [enquiries, setEnquiries] = useState<SchoolEnquiry[]>([]);
   const [users, setUsers] = useState<PlatformUser[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [globalSearch, setGlobalSearch] = useState('');
-  const [seeding, setSeeding] = useState(false);
 
   useEffect(() => {
     let settled = 0;
     const done = () => {
       settled += 1;
-      if (settled >= 4) setLoading(false);
+      if (settled >= 3) setLoading(false);
     };
     const u1 = onSnapshot(collection(db, 'schools'), (s) => { setSchools(s.docs.map((d) => d.data() as School)); done(); }, () => done());
-    const u4 = onSnapshot(collection(db, 'schoolEnquiries'), (s) => { setEnquiries(s.docs.map((d) => d.data() as SchoolEnquiry)); done(); }, () => done());
-    const u5 = onSnapshot(collection(db, 'users'), (s) => { setUsers(s.docs.map((d) => d.data() as PlatformUser)); done(); }, () => done());
-    const u6 = onSnapshot(collection(db, 'auditLogs'), (s) => {
-      const logs = s.docs.map((d) => d.data() as AuditLog);
-      logs.sort((a, b) => ((b.createdAt as { seconds?: number })?.seconds || 0) - ((a.createdAt as { seconds?: number })?.seconds || 0));
-      setAuditLogs(logs);
-      done();
-    }, () => done());
-    const u7 = onSnapshot(collection(db, 'schoolApplications'), (s) => {
+    const u2 = onSnapshot(collection(db, 'schoolEnquiries'), (s) => { setEnquiries(s.docs.map((d) => d.data() as SchoolEnquiry)); done(); }, () => done());
+    const u3 = onSnapshot(collection(db, 'users'), (s) => { setUsers(s.docs.map((d) => d.data() as PlatformUser)); done(); }, () => done());
+    const u4 = onSnapshot(collection(db, 'schoolApplications'), (s) => {
       setApplications(s.docs.map((d) => d.data() as SchoolApplication));
     }, () => undefined);
-    return () => { u1(); u4(); u5(); u6(); u7(); };
+    const u5 = onSnapshot(collection(db, 'schoolCodes'), (s) => {
+      setSchoolCodes(s.docs.map((d) => d.data() as SchoolCodeEntry));
+    }, () => undefined);
+    const u6 = onSnapshot(collection(db, 'memberAccessCodes'), (s) => {
+      setMemberCodes(s.docs.map((d) => d.data() as MemberAccessCode));
+    }, () => undefined);
+    const u7 = onSnapshot(collection(db, 'classes'), (s) => {
+      setClasses(s.docs.map((d) => d.data() as SchoolClass));
+    }, () => undefined);
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); };
   }, []);
-
-  const handleSeedDemo = async () => {
-    if (!activeUser) return;
-    setSeeding(true);
-    try {
-      await seedDemoEcosystem(activeUser.uid, activeUser.displayName);
-      pushToast('success', 'Seeded 2 isolated demo schools (Northridge & Crestview) with full academic records.');
-    } catch (err) {
-      pushToast('error', err instanceof Error ? err.message : 'Failed to seed demo data.');
-    } finally {
-      setSeeding(false);
-    }
-  };
-
-  const handlePreviewDemoRole = (demoUid: string) => {
-    const found = users.find((u) => u.uid === demoUid);
-    const fallback = DEMO_ACCOUNTS.find((a) => a.uid === demoUid);
-    const persona: PlatformUser | null =
-      found ||
-      (fallback
-        ? {
-            uid: fallback.uid,
-            username: fallback.username,
-            email: fallback.email,
-            displayName: fallback.displayName,
-            role: fallback.role,
-            schoolId: fallback.schoolId,
-            status: 'active',
-            mustChangePassword: false,
-            classId: 'classId' in fallback ? fallback.classId : '',
-            section: 'section' in fallback ? fallback.section : '',
-            assignedClassIds: 'assignedClassIds' in fallback ? fallback.assignedClassIds : [],
-            assignedSubjectIds: 'assignedSubjectIds' in fallback ? fallback.assignedSubjectIds : [],
-            isDemo: true,
-          }
-        : null);
-    if (!persona) return;
-    enterDemoPreview(persona);
-    navigate(ROLE_HOME_ROUTES[persona.role]);
-  };
 
   return (
     <DashboardShell
@@ -192,12 +155,9 @@ export default function MainHeadPortal() {
             <MainHeadOverview
               schools={schools}
               applications={applications}
-              auditLogs={auditLogs}
               enquiries={enquiries}
+              memberCodes={memberCodes}
               loading={loading}
-              seeding={seeding}
-              onSeedDemo={handleSeedDemo}
-              onPreviewRole={handlePreviewDemoRole}
             />
           }
         />
@@ -217,10 +177,25 @@ export default function MainHeadPortal() {
           element={
             <MainHeadSchoolsView
               schools={schools}
+              schoolCodes={schoolCodes}
+              memberCodes={memberCodes}
+              classes={classes}
+              users={users}
               enquiries={enquiries}
               globalSearch={globalSearch}
               loading={loading}
               actor={activeUser!}
+            />
+          }
+        />
+        <Route
+          path="access-codes"
+          element={
+            <MainHeadAccessCodesDirectory
+              schools={schools}
+              schoolCodes={schoolCodes}
+              classes={classes}
+              memberCodes={memberCodes}
             />
           }
         />
@@ -241,7 +216,6 @@ export default function MainHeadPortal() {
           }
         />
         <Route path="notifications" element={<NotificationsAndPreferencesView />} />
-        <Route path="audit-logs" element={<MainHeadAuditLogsView auditLogs={auditLogs} />} />
         <Route path="profile" element={<ProfileSecurityView />} />
         <Route path="*" element={<Navigate to="dashboard" replace />} />
       </Routes>
@@ -255,21 +229,15 @@ export default function MainHeadPortal() {
 function MainHeadOverview({
   schools,
   applications,
-  auditLogs,
   enquiries,
+  memberCodes,
   loading,
-  seeding,
-  onSeedDemo,
-  onPreviewRole,
 }: {
   schools: School[];
   applications: SchoolApplication[];
-  auditLogs: AuditLog[];
   enquiries: SchoolEnquiry[];
+  memberCodes: MemberAccessCode[];
   loading: boolean;
-  seeding: boolean;
-  onSeedDemo: () => void;
-  onPreviewRole: (uid: string) => void;
 }) {
   const navigate = useNavigate();
   const pendingApps = applications.filter((a) => a.status === 'submitted' || a.status === 'under_review' || a.status === 'more_info_required');
@@ -310,23 +278,21 @@ function MainHeadOverview({
         </div>
       )}
 
-      {/* Demo Seed Banner if Empty OR Demo Role Switcher */}
+      {/* Quick Operations Bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold text-teal-700">Demo & Evaluation Sandbox</p>
+          <p className="text-xs font-semibold text-teal-700">Platform Governance</p>
           <h2 className="text-sm font-bold text-slate-900 mt-0.5">
-            {schools.length === 0
-              ? 'Initialize two isolated demo schools to test all five portals immediately'
-              : 'Demo schools active — inspect any tenant role or safely reset demo records'}
+            Register schools, inspect access codes, and manage active tenants
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Northridge Preparatory Academy (NRP) and Crestview International School (CVI) demonstrate full tenant isolation.
+            {schools.length} registered school{schools.length === 1 ? '' : 's'} · {memberCodes.length} issued member access code{memberCodes.length === 1 ? '' : 's'} across the platform.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="primary" size="sm" onClick={onSeedDemo} disabled={seeding}>
-            <RefreshCw className={`w-3.5 h-3.5 ${seeding ? 'animate-spin' : ''}`} />
-            {schools.length === 0 ? 'Seed 2 Demo Schools' : 'Reset Demo Data'}
+          <Button variant="secondary" size="sm" onClick={() => navigate('/main-head/access-codes')}>
+            <KeyRound className="w-3.5 h-3.5" />
+            View All Access Codes
           </Button>
           <Button variant="navy" size="sm" onClick={() => navigate('/main-head/schools')}>
             <Plus className="w-3.5 h-3.5" />
@@ -335,7 +301,7 @@ function MainHeadOverview({
         </div>
       </div>
 
-      {/* 6 Focused Overview Cards (Blue, Green, Yellow, Red accents) */}
+      {/* 6 Focused Overview Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         <StatCard label="Total Schools" value={schools.length} tone="blue" subtext="All modules included free" />
         <StatCard label="Active Campuses" value={metrics.active} tone="green" subtext="Full operational access" />
@@ -345,67 +311,21 @@ function MainHeadOverview({
         <StatCard label="Total Students" value={metrics.students} tone="green" subtext={`${enquiries.filter((e) => e.status === 'new').length} new enquiries`} />
       </div>
 
-      {/* Quick Role Inspector (Only for Demo Testing by Main Head) */}
-      {schools.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <div className="flex items-center justify-between gap-4 mb-3">
-            <div>
-              <h3 className="text-sm font-bold font-display text-slate-900">
-                Inspect Demo Role Portals (Tenant Isolation Check)
-              </h3>
-              <p className="text-xs text-slate-500">
-                Enter any seeded school portal to verify Principal, Coordinator, Teacher, and Student isolation in real time.
-              </p>
-            </div>
-          </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            {DEMO_ACCOUNTS.slice(0, 4).map((acc) => (
-              <button
-                key={acc.uid}
-                type="button"
-                onClick={() => onPreviewRole(acc.uid)}
-                className="text-left p-3.5 rounded-lg border border-slate-200 hover:border-teal-600 hover:bg-teal-50/40 transition-colors cursor-pointer"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-teal-700">{ROLE_LABELS[acc.role]}</span>
-                  <Eye className="w-3.5 h-3.5 text-slate-400" />
-                </div>
-                <p className="text-sm font-semibold text-slate-900 mt-1 truncate">{acc.displayName}</p>
-                <p className="text-[11px] text-slate-500 truncate">{acc.schoolName}</p>
-              </button>
-            ))}
-          </div>
-          <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <span>Second tenant (Crestview International):</span>
-            {DEMO_ACCOUNTS.slice(4).map((acc) => (
-              <button
-                key={acc.uid}
-                type="button"
-                onClick={() => onPreviewRole(acc.uid)}
-                className="px-2.5 py-1 rounded border border-slate-200 hover:border-teal-600 text-slate-700 font-medium cursor-pointer"
-              >
-                {ROLE_LABELS[acc.role]}: {acc.displayName}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Chart + Recent Activity */}
+      {/* Chart + School Codes Snapshot */}
       <div className="grid lg:grid-cols-12 gap-6">
         <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-sm font-bold font-display text-slate-900">School Enrollment & Staff Overview</h3>
-              <p className="text-xs text-slate-500">Live Firestore counts per registered tenant (demo schools labeled)</p>
+              <h3 className="text-sm font-bold font-display text-slate-900">School Enrollment &amp; Staff Overview</h3>
+              <p className="text-xs text-slate-500">Live Firestore counts per registered school</p>
             </div>
           </div>
           {chartData.length === 0 ? (
             <EmptyState
               title="No schools registered yet"
-              description="Seed the two demo schools or register a new institution to view growth metrics."
-              actionLabel="Seed Demo Schools"
-              onAction={onSeedDemo}
+              description="Register a new school or approve an application to view campus enrollment metrics."
+              actionLabel="Register School"
+              onAction={() => navigate('/main-head/schools')}
             />
           ) : (
             <div className="h-64">
@@ -425,28 +345,29 @@ function MainHeadOverview({
 
         <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-bold font-display text-slate-900">Recent Platform Activity</h3>
+            <h3 className="text-sm font-bold font-display text-slate-900">Registered Schools &amp; Codes</h3>
             <button
               type="button"
-              onClick={() => navigate('/main-head/audit-logs')}
+              onClick={() => navigate('/main-head/access-codes')}
               className="text-xs font-medium text-teal-700 hover:text-teal-800 cursor-pointer"
             >
-              View Audit Log
+              All Codes →
             </button>
           </div>
-          {auditLogs.length === 0 ? (
-            <p className="text-xs text-slate-500">Sensitive platform actions will be recorded here automatically.</p>
+          {schools.length === 0 ? (
+            <p className="text-xs text-slate-500">School codes and activation codes will appear here once schools are registered.</p>
           ) : (
             <div className="divide-y divide-slate-100">
-              {auditLogs.slice(0, 6).map((log) => (
-                <div key={log.id} className="py-2.5">
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="font-semibold text-slate-900 truncate">{log.action.replace(/_/g, ' ')}</span>
-                    <span className="text-slate-400 tabular-nums shrink-0">{formatFirestoreDateTime(log.createdAt)}</span>
+              {schools.slice(0, 6).map((s) => (
+                <div key={s.id} className="py-2.5 flex items-center justify-between gap-2 text-xs">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-900 truncate">{s.name}</p>
+                    <p className="text-slate-500 font-mono truncate mt-0.5">
+                      Code: <strong className="text-[#0F295C]">{s.code}</strong>
+                      {s.activationCode ? ` · Act: ${s.activationCode}` : ''}
+                    </p>
                   </div>
-                  <p className="text-xs text-slate-600 truncate mt-0.5">
-                    {log.actorName} · {log.targetLabel || log.targetId}
-                  </p>
+                  <StatusText status={s.status} />
                 </div>
               ))}
             </div>
@@ -462,12 +383,20 @@ function MainHeadOverview({
 // ============================================================================
 function MainHeadSchoolsView({
   schools,
+  schoolCodes,
+  memberCodes,
+  classes,
+  users,
   enquiries,
   globalSearch,
   loading,
   actor,
 }: {
   schools: School[];
+  schoolCodes: SchoolCodeEntry[];
+  memberCodes: MemberAccessCode[];
+  classes: SchoolClass[];
+  users: PlatformUser[];
   enquiries: SchoolEnquiry[];
   globalSearch: string;
   loading: boolean;
@@ -481,6 +410,7 @@ function MainHeadSchoolsView({
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSchool, setEditingSchool] = useState<School | null>(null);
   const [detailSchool, setDetailSchool] = useState<School | null>(null);
+  const [codesModalSchool, setCodesModalSchool] = useState<School | null>(null);
   const [passwordTarget, setPasswordTarget] = useState<PasswordChangeTarget | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     type: 'suspend' | 'activate' | 'archive' | 'delete';
@@ -591,9 +521,11 @@ function MainHeadSchoolsView({
     }
 
     const cleanPrincipalEmail = form.principalEmail.trim().toLowerCase();
+    const cleanSchoolEmail = form.email.trim().toLowerCase();
+    const targetPrincipalEmail = cleanPrincipalEmail || cleanSchoolEmail;
     const rawTempPassword = form.tempPassword.trim();
     if (!editingSchool) {
-      if (cleanPrincipalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanPrincipalEmail)) {
+      if (targetPrincipalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetPrincipalEmail)) {
         pushToast('error', 'Enter a valid Principal email address.');
         return;
       }
@@ -607,17 +539,54 @@ function MainHeadSchoolsView({
     try {
       const cleanCode = derivedCode.slice(0, 12);
       if (editingSchool) {
+        const nextPrincipalName = form.principalName.trim() || editingSchool.principalName || `${trimmedName} Principal`;
+        const nextPrincipalEmail = targetPrincipalEmail || editingSchool.principalEmail || '';
         await updateDoc(doc(db, 'schools', editingSchool.id), {
           name: trimmedName.slice(0, 140),
           code: cleanCode.slice(0, 24),
           address: form.address.trim().slice(0, 300),
-          email: form.email.trim().slice(0, 160),
+          email: cleanSchoolEmail.slice(0, 160),
           phone: form.phone.trim().slice(0, 32),
           academicYear: (form.academicYear.trim() || '2026-2027').slice(0, 24),
           status: form.status,
+          principalName: nextPrincipalName.slice(0, 120),
+          principalEmail: nextPrincipalEmail.slice(0, 160),
           subscriptionPlanId: form.subscriptionPlanId || 'plan_free',
           updatedAt: serverTimestamp(),
         });
+
+        // Keep emailDirectory and matching user account synchronized with Principal Email
+        if (nextPrincipalEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextPrincipalEmail)) {
+          const pCode = formatPrincipalCode(cleanCode);
+          await upsertEmailDirectoryEntry({
+            email: nextPrincipalEmail,
+            schoolId: editingSchool.id,
+            schoolName: trimmedName,
+            role: 'principal',
+            displayName: nextPrincipalName,
+            accessCode: pCode,
+            createdBy: actor.uid,
+            status: 'active',
+          }).catch(() => undefined);
+
+          const matchingUser = users.find(
+            (u) => u.email?.trim().toLowerCase() === nextPrincipalEmail && u.role !== 'main_head',
+          );
+          if (matchingUser) {
+            await updateDoc(doc(db, 'users', matchingUser.uid), {
+              role: 'principal',
+              schoolId: editingSchool.id,
+              status: 'active',
+              accessCode: pCode,
+              updatedAt: serverTimestamp(),
+            }).catch(() => undefined);
+            await updateDoc(doc(db, 'schools', editingSchool.id), {
+              principalUid: matchingUser.uid,
+              updatedAt: serverTimestamp(),
+            }).catch(() => undefined);
+          }
+        }
+
         await recordAuditLog({
           schoolId: editingSchool.id,
           actorUid: actor.uid,
@@ -639,7 +608,7 @@ function MainHeadSchoolsView({
         };
         let principalUid = '';
         let provisionNote = '';
-        const effectivePrincipalEmail = cleanPrincipalEmail || form.email.trim().toLowerCase() || `principal@${cleanCode.toLowerCase()}.edu`;
+        const effectivePrincipalEmail = targetPrincipalEmail || `principal@${cleanCode.toLowerCase()}.edu`;
         const effectivePrincipalName = form.principalName.trim() || `${trimmedName} Principal`;
         const cleanUsernameCandidate = form.principalUsername
           .trim()
@@ -656,7 +625,7 @@ function MainHeadSchoolsView({
           schoolPrefix: cleanCode,
           academicYear: form.academicYear.trim() || '2026-2027',
           address: form.address.trim(),
-          schoolEmail: form.email.trim().toLowerCase() || effectivePrincipalEmail,
+          schoolEmail: cleanSchoolEmail || effectivePrincipalEmail,
           schoolPhone: form.phone.trim(),
           principalName: effectivePrincipalName,
           principalEmail: effectivePrincipalEmail,
@@ -667,40 +636,66 @@ function MainHeadSchoolsView({
           actorName: actor.displayName,
         });
 
-        // Provision Principal login account if email + temporary password supplied
-        if (cleanPrincipalEmail && rawTempPassword) {
+        // If a real user account with this email already exists in Firestore, promote THAT real UID to Principal
+        const existingPrincipalUser = users.find(
+          (u) => u.email?.trim().toLowerCase() === effectivePrincipalEmail && u.role !== 'main_head',
+        );
+
+        if (existingPrincipalUser) {
+          principalUid = existingPrincipalUser.uid;
+          await updateDoc(doc(db, 'users', principalUid), {
+            displayName: effectivePrincipalName.slice(0, 120),
+            role: 'principal',
+            schoolId: provisioned.schoolId,
+            status: 'active',
+            accessCode: provisioned.principalCode,
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+          await updateDoc(doc(db, 'schools', provisioned.schoolId), {
+            principalUid,
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+          if (rawTempPassword) {
+            provisionNote = `An account for ${effectivePrincipalEmail} already existed and has been promoted to Principal. Sign in using its existing password (or click "Password" on the school row to reset it).`;
+          }
+        } else if (targetPrincipalEmail && rawTempPassword) {
+          // Provision new Principal login account when email + temporary password are supplied
           try {
-            const res = await provisionAuthAccountSecondary(cleanPrincipalEmail, rawTempPassword);
-            principalUid = res.uid;
+            const res = await provisionAuthAccountSecondary(effectivePrincipalEmail, rawTempPassword);
             if (res.warning) provisionNote = res.warning;
-            await setDoc(doc(db, 'users', principalUid), {
-              uid: principalUid,
-              username: safePrincipalUsername,
-              email: cleanPrincipalEmail,
-              displayName: effectivePrincipalName.slice(0, 120),
-              role: 'principal',
-              schoolId: provisioned.schoolId,
-              status: 'active',
-              mustChangePassword: true,
-              phone: form.phone.trim().slice(0, 32),
-              accessCode: provisioned.principalCode,
-              classId: '',
-              section: '',
-              assignedClassIds: [],
-              assignedSubjectIds: [],
-              coordinatorPermissions: {},
-              isDemo: false,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-            await updateDoc(doc(db, 'schools', provisioned.schoolId), {
-              principalUid,
-              updatedAt: serverTimestamp(),
-            }).catch(() => undefined);
+            if (res.createdInAuth) {
+              principalUid = res.uid;
+              await setDoc(doc(db, 'users', principalUid), {
+                uid: principalUid,
+                username: safePrincipalUsername,
+                email: effectivePrincipalEmail,
+                displayName: effectivePrincipalName.slice(0, 120),
+                role: 'principal',
+                schoolId: provisioned.schoolId,
+                status: 'active',
+                mustChangePassword: true,
+                phone: form.phone.trim().slice(0, 32),
+                accessCode: provisioned.principalCode,
+                classId: '',
+                section: '',
+                assignedClassIds: [],
+                assignedSubjectIds: [],
+                coordinatorPermissions: {},
+                isDemo: false,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+              await updateDoc(doc(db, 'schools', provisioned.schoolId), {
+                principalUid,
+                updatedAt: serverTimestamp(),
+              }).catch(() => undefined);
+            } else {
+              provisionNote = `School created and ${effectivePrincipalEmail} is bound as Principal. Because this email already exists in Authentication, the Principal should sign in with their existing password (or Google) to enter the Principal Activation screen.`;
+            }
           } catch (authErr) {
             provisionNote =
               authErr instanceof Error
-                ? `School created, but Principal password provisioning noted: ${authErr.message}. The Principal can still sign in via Google or Sign Up with ${cleanPrincipalEmail}.`
+                ? `School created, but Principal password provisioning noted: ${authErr.message}. The Principal can still sign in via Google or Sign Up with ${effectivePrincipalEmail}.`
                 : 'School created. Principal can sign in with Google or register using the bound email.';
           }
         }
@@ -712,7 +707,7 @@ function MainHeadSchoolsView({
           principalCode: provisioned.principalCode,
           activationCode: provisioned.activationCode,
           principalEmail: effectivePrincipalEmail,
-          tempPassword: rawTempPassword,
+          tempPassword: existingPrincipalUser ? '' : rawTempPassword,
           note: provisionNote,
         });
         pushToast(
@@ -870,9 +865,8 @@ function MainHeadSchoolsView({
               <table className="w-full text-left border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
-                    <th className="py-3 px-4 font-semibold">School</th>
+                    <th className="py-3 px-4 font-semibold">School &amp; Codes</th>
                     <th className="py-3 px-4 font-semibold">Principal</th>
-                    <th className="py-3 px-4 font-semibold">Access Tier</th>
                     <th className="py-3 px-4 font-semibold text-right">Teachers</th>
                     <th className="py-3 px-4 font-semibold text-right">Students</th>
                     <th className="py-3 px-4 font-semibold">Status</th>
@@ -883,24 +877,32 @@ function MainHeadSchoolsView({
                   {paged.map((s) => (
                     <tr key={s.id} className="hover:bg-slate-50/70">
                       <td className="py-3 px-4">
-                        <p className="font-semibold text-slate-900">
-                          {s.name} {s.isDemo && <span className="text-[11px] font-normal text-slate-400">· Demo</span>}
-                        </p>
-                        <p className="text-xs text-slate-500 font-mono">{s.code} · AY {s.academicYear}</p>
+                        <p className="font-semibold text-slate-900">{s.name}</p>
+                        <div className="flex flex-wrap items-center gap-2 mt-0.5 text-xs">
+                          <span className="font-mono font-bold text-[#0F295C]">Code: {s.code}</span>
+                          {s.activationCode && (
+                            <span className="font-mono text-blue-700">· Act: {s.activationCode}</span>
+                          )}
+                          <span className="text-slate-400">· AY {s.academicYear}</span>
+                        </div>
                       </td>
                       <td className="py-3 px-4">
                         <p className="text-xs font-medium text-slate-800">{s.principalName || 'Unassigned'}</p>
                         <p className="text-xs text-slate-500">{s.principalEmail || '—'}</p>
                       </td>
-                      <td className="py-3 px-4 text-xs">
-                        <p className="font-medium text-teal-700">Free Unlimited</p>
-                        <p className="text-slate-500">All modules included</p>
-                      </td>
                       <td className="py-3 px-4 text-right font-mono text-xs tabular-nums">{s.teacherCount || 0}</td>
                       <td className="py-3 px-4 text-right font-mono text-xs tabular-nums">{s.studentCount || 0}</td>
                       <td className="py-3 px-4"><StatusText status={s.status} /></td>
                       <td className="py-3 px-4 text-right">
-                        <div className="inline-flex items-center gap-1.5">
+                        <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => setCodesModalSchool(s)}
+                          >
+                            <QrCode className="w-3.5 h-3.5 text-teal-700" />
+                            Codes
+                          </Button>
                           <Button
                             variant="ghost"
                             size="sm"
@@ -922,6 +924,14 @@ function MainHeadSchoolsView({
                           </Button>
                           <Button variant="ghost" size="sm" onClick={() => setDetailSchool(s)}>Details</Button>
                           <Button variant="secondary" size="sm" onClick={() => openEditSchool(s)}>Edit</Button>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            onClick={() => setConfirmAction({ type: 'delete', school: s })}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Remove
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -998,7 +1008,7 @@ function MainHeadSchoolsView({
                     code: !editingSchool && !codeManuallyEdited ? deriveSchoolPrefix(nextName) : prev.code,
                   }));
                 }}
-                placeholder="e.g. JSS Public School"
+                placeholder="Enter official school name"
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
@@ -1012,7 +1022,7 @@ function MainHeadSchoolsView({
                   setCodeManuallyEdited(true);
                   setForm((prev) => ({ ...prev, code: sanitizeSchoolPrefix(e.target.value) }));
                 }}
-                placeholder="e.g. JSS"
+                placeholder="Enter school code"
                 className="w-full px-3 py-2 text-sm font-mono uppercase border border-slate-300 rounded-lg"
               />
             </div>
@@ -1077,17 +1087,19 @@ function MainHeadSchoolsView({
             />
           </div>
 
-          {!editingSchool && (
-            <div className="pt-4 border-t border-slate-200 space-y-3">
-              <p className="text-xs font-semibold text-slate-900">Initial Principal Provisioning (Optional)</p>
-              <div className="grid sm:grid-cols-2 gap-3">
-                <input
-                  type="text"
-                  placeholder="Principal Full Name"
-                  value={form.principalName}
-                  onChange={(e) => setForm({ ...form, principalName: e.target.value })}
-                  className="px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                />
+          <div className="pt-4 border-t border-slate-200 space-y-3">
+            <p className="text-xs font-semibold text-slate-900">
+              {editingSchool ? 'Principal Account Binding' : 'Initial Principal Provisioning'}
+            </p>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <input
+                type="text"
+                placeholder="Principal Full Name"
+                value={form.principalName}
+                onChange={(e) => setForm({ ...form, principalName: e.target.value })}
+                className="px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+              {!editingSchool && (
                 <input
                   type="text"
                   placeholder="Principal Username"
@@ -1095,23 +1107,25 @@ function MainHeadSchoolsView({
                   onChange={(e) => setForm({ ...form, principalUsername: e.target.value })}
                   className="px-3 py-2 text-sm border border-slate-300 rounded-lg"
                 />
-                <input
-                  type="email"
-                  placeholder="Principal Email"
-                  value={form.principalEmail}
-                  onChange={(e) => setForm({ ...form, principalEmail: e.target.value })}
-                  className="px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                />
+              )}
+              <input
+                type="email"
+                placeholder="Principal Login Email"
+                value={form.principalEmail}
+                onChange={(e) => setForm({ ...form, principalEmail: e.target.value })}
+                className="px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+              {!editingSchool && (
                 <input
                   type="password"
-                  placeholder="Temporary Password (never stored)"
+                  placeholder="Temporary Password (min 6 chars)"
                   value={form.tempPassword}
                   onChange={(e) => setForm({ ...form, tempPassword: e.target.value })}
                   className="px-3 py-2 text-sm border border-slate-300 rounded-lg"
                 />
-              </div>
+              )}
             </div>
-          )}
+          </div>
 
           <div className="flex justify-end gap-3 pt-3">
             <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button>
@@ -1182,6 +1196,18 @@ function MainHeadSchoolsView({
 
             <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-200">
               <Button
+                variant="navy"
+                size="sm"
+                onClick={() => {
+                  const s = detailSchool;
+                  setDetailSchool(null);
+                  setCodesModalSchool(s);
+                }}
+              >
+                <QrCode className="w-3.5 h-3.5" />
+                View All Codes
+              </Button>
+              <Button
                 variant="primary"
                 size="sm"
                 onClick={() => {
@@ -1218,12 +1244,24 @@ function MainHeadSchoolsView({
               )}
               <Button variant="danger" size="sm" onClick={() => setConfirmAction({ type: 'delete', school: detailSchool })}>
                 <Trash2 className="w-3.5 h-3.5" />
-                Delete School
+                Remove School
               </Button>
             </div>
           </div>
         )}
       </Modal>
+
+      <SchoolCodesModal
+        school={codesModalSchool}
+        schoolCodeEntry={
+          codesModalSchool
+            ? schoolCodes.find((sc) => sc.schoolId === codesModalSchool.id || sc.code === codesModalSchool.code)
+            : undefined
+        }
+        classes={classes}
+        memberCodes={memberCodes}
+        onClose={() => setCodesModalSchool(null)}
+      />
 
       <ChangeSchoolPasswordModal
         target={passwordTarget}

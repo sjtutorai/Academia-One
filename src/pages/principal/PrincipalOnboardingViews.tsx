@@ -35,14 +35,17 @@ import { exportToCsv } from '../../lib/csv';
 import {
   SECTION_LETTERS,
   STANDARD_CLASSES,
+  deriveClassSectionCode,
   expandSectionRange,
   formatMemberRoleCode,
   formatPrincipalCode,
   formatRoleCodeRange,
   formatSectionRangeLabel,
+  normalizeGradeLevel,
   resolveCoordinatorClassesForIndex,
   resolveStudentClassForIndex,
   sanitizePhoneDigits,
+  sortClassesInOrder,
 } from '../../lib/schoolCodes';
 import { recordAuditLog } from '../../lib/audit';
 import {
@@ -65,6 +68,7 @@ import type {
   SchoolCodeClassSlot,
   SchoolCodeEntry,
   SchoolJoinRequest,
+  StudentProfile,
   TeacherProfile,
 } from '../../types/models';
 
@@ -73,7 +77,6 @@ interface ClassDraft {
   gradeLevel: string;
   sectionFrom: string;
   sectionTo: string;
-  capacity: number;
 }
 
 interface RoomDraft {
@@ -108,10 +111,10 @@ export function PrincipalSetupWizardView({
   const [campusAddress, setCampusAddress] = useState(school?.address || '');
   const [savingAddress, setSavingAddress] = useState(false);
 
-  // Step 2: Classes & Section Ranges Builder (Choose-not-write)
+  // Step 2: Classes & Section Ranges Builder (Choose-not-write, unlimited students per section)
   const [classDrafts, setClassDrafts] = useState<ClassDraft[]>([
-    { id: 'cd_1', gradeLevel: 'Class 1', sectionFrom: 'A', sectionTo: 'G', capacity: 35 },
-    { id: 'cd_2', gradeLevel: 'Class 2', sectionFrom: 'A', sectionTo: 'H', capacity: 35 },
+    { id: 'cd_1', gradeLevel: 'Class 1', sectionFrom: 'A', sectionTo: 'G' },
+    { id: 'cd_2', gradeLevel: 'Class 2', sectionFrom: 'A', sectionTo: 'H' },
   ]);
 
   // Step 3: Campus & Examination Rooms Builder
@@ -141,7 +144,14 @@ export function PrincipalSetupWizardView({
     }
   }, [school?.address]);
 
-  if (!school) return null;
+  if (!school) {
+    return (
+      <EmptyState
+        title="School workspace loading"
+        description="Your school profile is not available yet. Refresh the page or retry loading your school record."
+      />
+    );
+  }
 
   const handleSaveCampusAddress = async () => {
     if (!canWrite || savingAddress) return;
@@ -180,13 +190,13 @@ export function PrincipalSetupWizardView({
 
   const handleSaveClassesAndSections = async () => {
     if (!canWrite) return;
-    const rowsToCreate: { grade: string; section: string; capacity: number }[] = [];
+    const rowsToCreate: { grade: string; section: string }[] = [];
     for (const draft of classDrafts) {
-      const grade = draft.gradeLevel.trim();
+      const grade = normalizeGradeLevel(draft.gradeLevel) || draft.gradeLevel.trim();
       if (!grade) continue;
       const sections = expandSectionRange(draft.sectionFrom, draft.sectionTo);
       for (const sec of sections) {
-        rowsToCreate.push({ grade, section: sec, capacity: Math.max(5, Number(draft.capacity) || 35) });
+        rowsToCreate.push({ grade, section: sec });
       }
     }
     if (rowsToCreate.length === 0) {
@@ -206,38 +216,35 @@ export function PrincipalSetupWizardView({
         name: string;
         gradeLevel: string;
         section: string;
-        capacity: number;
       }[] = [];
 
-      for (const item of rowsToCreate) {
-        const shortGrade = item.grade
-          .replace(/^Class\s+/i, '')
-          .replace(/^Grade\s+/i, '')
-          .replace(/[^A-Z0-9]/gi, '')
-          .toUpperCase();
-        const code = `C${shortGrade}${item.section}`.slice(0, 16);
+      const orderedRows = sortClassesInOrder(
+        rowsToCreate.map((r) => ({ gradeLevel: r.grade, section: r.section })),
+      );
+
+      for (const item of orderedRows) {
+        const code = deriveClassSectionCode(item.gradeLevel, item.section);
         const alreadyExists = existingClasses.some(
           (c) =>
             c.code.toUpperCase() === code ||
-            (c.gradeLevel.toLowerCase() === item.grade.toLowerCase() &&
+            (normalizeGradeLevel(c.gradeLevel).toLowerCase() === item.gradeLevel.toLowerCase() &&
               c.section.toUpperCase() === item.section.toUpperCase()),
         );
         if (alreadyExists) continue;
         const id = generateId('cls');
-        const name = `${item.grade} - Section ${item.section}`;
+        const name = `${item.gradeLevel} - Section ${item.section}`;
         toInsert.push({
           id,
           code,
           name,
-          gradeLevel: item.grade,
+          gradeLevel: item.gradeLevel,
           section: item.section,
-          capacity: item.capacity,
         });
         newlyAddedSlots.push({
           classId: id,
           classCode: code,
           className: name,
-          gradeLevel: item.grade,
+          gradeLevel: item.gradeLevel,
           section: item.section,
         });
       }
@@ -256,7 +263,7 @@ export function PrincipalSetupWizardView({
               section: cls.section,
               code: cls.code,
               academicYear: school.academicYear || '2026-2027',
-              capacity: cls.capacity,
+              capacity: 500,
               classTeacherId: '',
               classTeacherName: '',
               roomId: '',
@@ -271,8 +278,8 @@ export function PrincipalSetupWizardView({
           await batch.commit();
         }
 
-        // Sync merged classSections to schoolCodes/{school.code} so student access codes map cleanly
-        const mergedSlots: SchoolCodeClassSlot[] = [
+        // Sync merged classSections in natural academic order to schoolCodes/{school.code}
+        const mergedSlots: SchoolCodeClassSlot[] = sortClassesInOrder([
           ...existingClasses.map((c) => ({
             classId: c.id,
             classCode: c.code,
@@ -281,7 +288,7 @@ export function PrincipalSetupWizardView({
             section: c.section,
           })),
           ...newlyAddedSlots,
-        ].slice(0, 200);
+        ]).slice(0, 200);
         await updateDoc(doc(db, 'schoolCodes', school.code), {
           classSections: mergedSlots,
           updatedAt: serverTimestamp(),
@@ -695,7 +702,7 @@ export function PrincipalSetupWizardView({
                 Step 2 — Choose Classes &amp; Section Ranges
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Pick each class and choose its section range (e.g., Class 1 Section: A–G, Class 2 Section: A–H).{' '}
+                Pick each class and choose its section range.{' '}
                 <strong className="text-teal-700 tabular-nums">{generatedSectionsCount} sections staged</strong>.
               </p>
             </div>
@@ -707,7 +714,7 @@ export function PrincipalSetupWizardView({
                 const nextGrade = STANDARD_CLASSES.find((g) => !used.has(g)) || 'Class 3';
                 setClassDrafts((prev) => [
                   ...prev,
-                  { id: `cd_${Date.now()}`, gradeLevel: nextGrade, sectionFrom: 'A', sectionTo: 'D', capacity: 35 },
+                  { id: `cd_${Date.now()}`, gradeLevel: nextGrade, sectionFrom: 'A', sectionTo: 'D' },
                 ]);
               }}
             >
@@ -723,7 +730,7 @@ export function PrincipalSetupWizardView({
                   key={row.id}
                   className="grid grid-cols-12 gap-3 items-end p-3 rounded-lg bg-slate-50 border border-slate-200"
                 >
-                  <div className="col-span-12 sm:col-span-3">
+                  <div className="col-span-12 sm:col-span-4">
                     <label className="block text-[11px] font-medium text-slate-600 mb-1">Class</label>
                     <select
                       value={row.gradeLevel}
@@ -787,23 +794,8 @@ export function PrincipalSetupWizardView({
                       ))}
                     </select>
                   </div>
-                  <div className="col-span-6 sm:col-span-2">
-                    <label className="block text-[11px] font-medium text-slate-600 mb-1">Seats / Sec</label>
-                    <input
-                      type="number"
-                      min={5}
-                      max={120}
-                      value={row.capacity}
-                      onChange={(e) =>
-                        setClassDrafts((prev) =>
-                          prev.map((r) => (r.id === row.id ? { ...r, capacity: Number(e.target.value) || 35 } : r)),
-                        )
-                      }
-                      className="w-full px-3 py-2 text-xs tabular-nums bg-white border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div className="col-span-4 sm:col-span-2 pb-2 text-xs font-medium text-teal-800 tabular-nums">
-                    {formatSectionRangeLabel(row.sectionFrom, row.sectionTo)} ({rangeCount})
+                  <div className="col-span-10 sm:col-span-3 pb-2 text-xs font-medium text-teal-800 tabular-nums">
+                    {formatSectionRangeLabel(row.sectionFrom, row.sectionTo)} ({rangeCount}) · Unlimited
                   </div>
                   <div className="col-span-2 sm:col-span-1 flex justify-end">
                     <button
@@ -1642,7 +1634,7 @@ export function PrincipalJoinRequestsView({
             required
             value={decisionNote}
             onChange={(e) => setDecisionNote(e.target.value)}
-            placeholder="e.g., Email does not match current semester enrollment records…"
+            placeholder="Enter reason for rejection…"
             className="w-full text-sm border border-slate-300 rounded-lg p-3"
           />
           <div className="flex justify-end gap-2">
@@ -1666,21 +1658,31 @@ interface GeneratedCodeRow {
   code: string;
   role: 'principal' | 'coordinator' | 'teacher' | 'student';
   slotNumber: number;
+  memberName: string;
+  gradeLevel: string;
+  section: string;
   classLabel: string;
   classId: string;
+  classCode: string;
+  teacherName: string;
   rollNumber: string;
+  admissionNumber?: string;
 }
 
 export function PrincipalAccessCodesView({
   school,
   classes,
   teachers = [],
+  students = [],
+  coordinators = [],
   actor,
   canWrite,
 }: {
   school: School | null;
   classes: SchoolClass[];
   teachers?: TeacherProfile[];
+  students?: StudentProfile[];
+  coordinators?: PlatformUser[];
   actor: PlatformUser;
   canWrite: boolean;
 }) {
@@ -1815,58 +1817,223 @@ export function PrincipalAccessCodesView({
   };
 
   const allCodes: GeneratedCodeRow[] = useMemo(() => {
+    const classById = new Map(classes.map((c) => [c.id, c]));
+    const namedByCode = new Map(namedCodes.map((m) => [m.code.trim().toUpperCase(), m]));
+    const studentByCode = new Map<string, StudentProfile>();
+    const studentsWithoutSlotMatch: StudentProfile[] = [];
+    students.forEach((s) => {
+      if (s.accessCode) {
+        studentByCode.set(s.accessCode.trim().toUpperCase(), s);
+      } else {
+        studentsWithoutSlotMatch.push(s);
+      }
+    });
+    const teacherByCode = new Map<string, TeacherProfile>();
+    const teachersWithoutCode: TeacherProfile[] = [];
+    teachers.forEach((t) => {
+      if (t.accessCode) {
+        teacherByCode.set(t.accessCode.trim().toUpperCase(), t);
+      } else {
+        teachersWithoutCode.push(t);
+      }
+    });
+    const coordByCode = new Map<string, PlatformUser>();
+    const coordsWithoutCode: PlatformUser[] = [];
+    coordinators.forEach((c) => {
+      if (c.accessCode) {
+        coordByCode.set(c.accessCode.trim().toUpperCase(), c);
+      } else {
+        coordsWithoutCode.push(c);
+      }
+    });
+
     const rows: GeneratedCodeRow[] = [
       {
         code: formatPrincipalCode(prefix),
         role: 'principal',
         slotNumber: 1,
+        memberName: school?.principalName || actor.displayName || 'Principal',
+        gradeLevel: 'Campus Admin',
+        section: 'All',
         classLabel: 'All Classes & Campus Admin',
         classId: '',
+        classCode: '',
+        teacherName: '',
         rollNumber: '—',
       },
     ];
 
+    const seenCodes = new Set<string>([formatPrincipalCode(prefix)]);
+
     const safeCoords = Math.min(coordCount, 500);
+    let fallbackCoordIdx = 0;
     for (let i = 1; i <= safeCoords; i++) {
+      const code = formatMemberRoleCode(prefix, 'coordinator', i, coordCount);
+      seenCodes.add(code);
       const assigned = resolveCoordinatorClassesForIndex(classSlots, i, coordCount);
       const gradeSet = Array.from(new Set(assigned.map((s) => s.gradeLevel)));
+      const named = namedByCode.get(code);
+      const matchedCoord =
+        coordByCode.get(code) ||
+        (named?.linkedUid ? coordinators.find((c) => c.uid === named.linkedUid) : undefined) ||
+        (!named && fallbackCoordIdx < coordsWithoutCode.length ? coordsWithoutCode[fallbackCoordIdx++] : undefined);
+      const memberName = matchedCoord?.displayName || named?.memberName || '';
       rows.push({
-        code: formatMemberRoleCode(prefix, 'coordinator', i, coordCount),
+        code,
         role: 'coordinator',
         slotNumber: i,
+        memberName,
+        gradeLevel: gradeSet.join(', '),
+        section: '',
         classLabel: gradeSet.length > 0 ? `${gradeSet.join(', ')} (${assigned.length} sec)` : 'School-wide',
         classId: '',
+        classCode: '',
+        teacherName: '',
         rollNumber: '—',
       });
     }
 
     const safeTeachers = Math.min(teacherCount, 1000);
+    let fallbackTeacherIdx = 0;
     for (let i = 1; i <= safeTeachers; i++) {
+      const code = formatMemberRoleCode(prefix, 'teacher', i, teacherCount);
+      seenCodes.add(code);
+      const named = namedByCode.get(code);
+      const matchedTeacher =
+        teacherByCode.get(code) ||
+        (named?.linkedProfileId ? teachers.find((t) => t.id === named.linkedProfileId) : undefined) ||
+        (!named && fallbackTeacherIdx < teachersWithoutCode.length ? teachersWithoutCode[fallbackTeacherIdx++] : undefined);
+      const cls =
+        (matchedTeacher?.classTeacherOfClassId ? classById.get(matchedTeacher.classTeacherOfClassId) : undefined) ||
+        (named?.classId ? classById.get(named.classId) : undefined);
       rows.push({
-        code: formatMemberRoleCode(prefix, 'teacher', i, teacherCount),
+        code,
         role: 'teacher',
         slotNumber: i,
-        classLabel: 'Assigned on Approval',
-        classId: '',
+        memberName: matchedTeacher?.name || named?.memberName || '',
+        gradeLevel: cls?.gradeLevel || '',
+        section: cls?.section || '',
+        classLabel: cls ? cls.name : named?.className || 'Assigned on Approval',
+        classId: cls?.id || named?.classId || '',
+        classCode: cls?.code || named?.classCode || '',
+        teacherName: matchedTeacher?.name || named?.memberName || '',
         rollNumber: '—',
       });
     }
 
-    const safeStudents = Math.min(studentCount, 5000);
+    const safeStudents = Math.min(Math.max(studentCount, students.length), 5000);
+    let fallbackStudentIdx = 0;
     for (let i = 1; i <= safeStudents; i++) {
-      const { slot, rollNumber } = resolveStudentClassForIndex(classSlots, i, studentCount);
+      const code = formatMemberRoleCode(prefix, 'student', i, Math.max(studentCount, students.length));
+      seenCodes.add(code);
+      const named = namedByCode.get(code);
+      const matchedStudent =
+        studentByCode.get(code) ||
+        (named?.linkedProfileId ? students.find((s) => s.id === named.linkedProfileId) : undefined) ||
+        (!named && fallbackStudentIdx < studentsWithoutSlotMatch.length
+          ? studentsWithoutSlotMatch[fallbackStudentIdx++]
+          : undefined);
+
+      const { slot, rollNumber } = resolveStudentClassForIndex(classSlots, i, Math.max(studentCount, students.length));
+      const matchedCls = matchedStudent?.classId
+        ? classById.get(matchedStudent.classId)
+        : named?.classId
+          ? classById.get(named.classId)
+          : slot?.classId
+            ? classById.get(slot.classId)
+            : undefined;
+
+      const gradeLevel =
+        matchedCls?.gradeLevel ||
+        (matchedStudent?.className ? matchedStudent.className.split(' - ')[0] : '') ||
+        (named?.className ? named.className.split(' - ')[0] : '') ||
+        slot?.gradeLevel ||
+        '';
+      const section =
+        matchedCls?.section ||
+        matchedStudent?.section ||
+        (named?.className?.includes('Section ') ? named.className.split('Section ')[1] : '') ||
+        slot?.section ||
+        '';
+      const classLabel =
+        matchedCls?.name ||
+        matchedStudent?.className ||
+        named?.className ||
+        (slot ? slot.className : 'Unassigned');
+
+      const resolvedTeacher =
+        matchedCls?.classTeacherName ||
+        (matchedCls?.classTeacherId ? teachers.find((t) => t.id === matchedCls.classTeacherId)?.name : '') ||
+        named?.teacherName ||
+        '';
+
       rows.push({
-        code: formatMemberRoleCode(prefix, 'student', i, studentCount),
+        code,
         role: 'student',
         slotNumber: i,
-        classLabel: slot ? slot.className : 'Unassigned',
-        classId: slot?.classId || '',
-        rollNumber: `#${rollNumber}`,
+        memberName: matchedStudent?.name || named?.memberName || '',
+        gradeLevel,
+        section,
+        classLabel,
+        classId: matchedCls?.id || matchedStudent?.classId || named?.classId || slot?.classId || '',
+        classCode: matchedCls?.code || named?.classCode || slot?.classCode || '',
+        teacherName: resolvedTeacher,
+        rollNumber: matchedStudent?.rollNumber
+          ? `#${matchedStudent.rollNumber}`
+          : named?.rollNumber
+            ? `#${named.rollNumber}`
+            : `#${rollNumber}`,
+        admissionNumber: matchedStudent?.admissionNumber,
       });
     }
 
+    // Include any named student/teacher/coordinator codes outside the generated sequential range
+    namedCodes.forEach((m) => {
+      const upper = m.code.trim().toUpperCase();
+      if (seenCodes.has(upper)) return;
+      seenCodes.add(upper);
+      const stu = m.role === 'student' && m.linkedProfileId ? students.find((s) => s.id === m.linkedProfileId) : undefined;
+      const cls = m.classId ? classById.get(m.classId) : stu?.classId ? classById.get(stu.classId) : undefined;
+      rows.push({
+        code: upper,
+        role: m.role,
+        slotNumber: rows.length + 1,
+        memberName: stu?.name || m.memberName,
+        gradeLevel: cls?.gradeLevel || (m.className ? m.className.split(' - ')[0] : ''),
+        section: cls?.section || stu?.section || '',
+        classLabel: cls?.name || stu?.className || m.className || 'Unassigned',
+        classId: cls?.id || m.classId || '',
+        classCode: cls?.code || m.classCode || '',
+        teacherName: cls?.classTeacherName || m.teacherName || '',
+        rollNumber: stu?.rollNumber ? `#${stu.rollNumber}` : m.rollNumber ? `#${m.rollNumber}` : '—',
+        admissionNumber: stu?.admissionNumber,
+      });
+    });
+
+    // Also include any enrolled student whose custom accessCode wasn't matched above
+    students.forEach((s) => {
+      const upper = (s.accessCode || '').trim().toUpperCase();
+      if (!upper || seenCodes.has(upper)) return;
+      seenCodes.add(upper);
+      const cls = classById.get(s.classId);
+      rows.push({
+        code: upper,
+        role: 'student',
+        slotNumber: rows.length + 1,
+        memberName: s.name,
+        gradeLevel: cls?.gradeLevel || (s.className ? s.className.split(' - ')[0] : ''),
+        section: cls?.section || s.section || '',
+        classLabel: cls?.name || s.className || 'Unassigned',
+        classId: cls?.id || s.classId || '',
+        classCode: cls?.code || '',
+        teacherName: cls?.classTeacherName || '',
+        rollNumber: s.rollNumber ? `#${s.rollNumber}` : '—',
+        admissionNumber: s.admissionNumber,
+      });
+    });
+
     return rows;
-  }, [prefix, coordCount, teacherCount, studentCount, classSlots]);
+  }, [prefix, coordCount, teacherCount, studentCount, classSlots, classes, students, teachers, coordinators, namedCodes, school?.principalName, actor.displayName]);
 
   const filtered = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
@@ -1874,12 +2041,31 @@ export function PrincipalAccessCodesView({
       if (roleTab !== 'all' && row.role !== roleTab) return false;
       if (classFilter !== 'all' && row.role === 'student' && row.classId !== classFilter) return false;
       if (classFilter !== 'all' && row.role !== 'student') return false;
-      if (q && !`${row.code} ${row.role} ${row.classLabel} ${row.rollNumber}`.toLowerCase().includes(q)) {
+      if (
+        q &&
+        !`${row.code} ${row.memberName} ${row.role} ${row.classLabel} ${row.gradeLevel} ${row.section} ${row.classCode} ${row.rollNumber} ${row.admissionNumber || ''}`
+          .toLowerCase()
+          .includes(q)
+      ) {
         return false;
       }
       return true;
     });
   }, [allCodes, roleTab, classFilter, searchTerm]);
+
+  // Direct student name search matches for instant Class & Section display
+  const matchedStudentsFromSearch = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (q.length < 1) return [];
+    return allCodes
+      .filter(
+        (row) =>
+          row.role === 'student' &&
+          row.memberName &&
+          `${row.memberName} ${row.code} ${row.admissionNumber || ''}`.toLowerCase().includes(q),
+      )
+      .slice(0, 12);
+  }, [allCodes, searchTerm]);
 
   const pageSize = 50;
   const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
@@ -1948,13 +2134,29 @@ export function PrincipalAccessCodesView({
   const handleExportCsv = () => {
     exportToCsv(
       `${prefix}_access_codes.csv`,
-      ['Access Code', 'Role', 'Slot #', 'School', 'Auto-Identified Class / Scope', 'Roll No'],
-      filtered.map((r) => [r.code, r.role, String(r.slotNumber), school?.name || '', r.classLabel, r.rollNumber]),
+      ['Access Code', 'Student / Member Name', 'Role', 'Class', 'Section', 'Class / Scope', 'Roll No', 'School'],
+      filtered.map((r) => [
+        r.code,
+        r.memberName || 'Unassigned Slot',
+        r.role,
+        r.gradeLevel || '',
+        r.section || '',
+        r.classLabel,
+        r.rollNumber,
+        school?.name || '',
+      ]),
     );
     pushToast('success', `Exported ${filtered.length} access codes to CSV.`);
   };
 
-  if (!school) return null;
+  if (!school) {
+    return (
+      <EmptyState
+        title="Access codes unavailable"
+        description="Your school profile could not be loaded yet. Refresh to load your school prefix and access codes."
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -1987,9 +2189,7 @@ export function PrincipalAccessCodesView({
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               Personalized codes starting with <span className="font-mono font-bold text-slate-900">{prefix}</span>{' '}
-              (e.g., <span className="font-mono">{prefix}C01</span> for Coordinator,{' '}
-              <span className="font-mono">{prefix}T01</span> for Teacher,{' '}
-              <span className="font-mono">{prefix}S001</span> for Student). Student codes automatically appear in their class teacher&apos;s portal.
+              for Coordinators, Teachers, and Students. Student codes automatically appear in their class teacher&apos;s portal.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -2204,8 +2404,8 @@ export function PrincipalAccessCodesView({
                 setSearchTerm(e.target.value);
                 setPage(1);
               }}
-              placeholder="Search code or class…"
-              className="pl-8 pr-3 py-1.5 text-xs border border-slate-300 rounded-lg w-48 focus:outline-none focus:border-teal-600"
+              placeholder="Search student name, code, or class…"
+              className="pl-8 pr-3 py-1.5 text-xs border border-slate-300 rounded-lg w-64 focus:outline-none focus:border-teal-600"
             />
           </div>
           <Button variant="secondary" size="sm" onClick={handleExportCsv}>
@@ -2214,14 +2414,74 @@ export function PrincipalAccessCodesView({
         </div>
       </div>
 
+      {/* Instant Student Name -> Class & Section Lookup Results */}
+      {searchTerm.trim().length > 0 && matchedStudentsFromSearch.length > 0 && (
+        <div className="bg-teal-50/70 border border-teal-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-bold text-teal-900 flex items-center gap-1.5">
+              <GraduationCap className="w-4 h-4 text-teal-700" />
+              Student Class &amp; Section Lookup ({matchedStudentsFromSearch.length} match
+              {matchedStudentsFromSearch.length === 1 ? '' : 'es'})
+            </p>
+            <button
+              type="button"
+              onClick={() => setSearchTerm('')}
+              className="text-xs font-medium text-teal-800 hover:underline cursor-pointer"
+            >
+              Clear search
+            </button>
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {matchedStudentsFromSearch.map((st) => (
+              <div
+                key={`lookup-${st.code}`}
+                className="bg-white border border-teal-200/80 rounded-lg p-3.5 flex flex-col justify-between gap-2 shadow-xs"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-900 truncate">{st.memberName}</p>
+                    <p className="text-xs font-semibold text-teal-800 mt-0.5">
+                      {st.gradeLevel || st.classLabel}
+                      {st.section ? ` · Section ${st.section}` : ''}
+                    </p>
+                  </div>
+                  <span className="font-mono text-xs font-bold text-[#0F295C] bg-slate-100 px-2 py-0.5 rounded shrink-0">
+                    {st.code}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 pt-1 border-t border-slate-100">
+                  <span>
+                    Roll {st.rollNumber}
+                    {st.teacherName ? ` · Teacher: ${st.teacherName}` : ''}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(st.code);
+                      setCopiedCode(st.code);
+                      setTimeout(() => setCopiedCode(null), 1600);
+                    }}
+                    className="inline-flex items-center gap-1 font-semibold text-teal-700 hover:text-teal-900 cursor-pointer"
+                  >
+                    {copiedCode === st.code ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                    {copiedCode === st.code ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Directory Table */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
         <table className="w-full text-left border-collapse text-sm">
           <thead>
             <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
               <th className="py-3 px-4 font-semibold">Access Code</th>
+              <th className="py-3 px-4 font-semibold">Student / Member Name</th>
               <th className="py-3 px-4 font-semibold">Role</th>
-              <th className="py-3 px-4 font-semibold">Auto-Identified Class / Scope</th>
+              <th className="py-3 px-4 font-semibold">Class &amp; Section</th>
               <th className="py-3 px-4 font-semibold">Roll No.</th>
               <th className="py-3 px-4 font-semibold text-right">Copy</th>
             </tr>
@@ -2230,8 +2490,25 @@ export function PrincipalAccessCodesView({
             {paginated.map((row) => (
               <tr key={`${row.role}-${row.code}`} className="hover:bg-slate-50/70">
                 <td className="py-2.5 px-4 font-mono text-xs font-bold text-[#0B1528] tabular-nums">{row.code}</td>
+                <td className="py-2.5 px-4">
+                  {row.memberName ? (
+                    <div>
+                      <p className="text-xs font-semibold text-slate-900">{row.memberName}</p>
+                      {row.admissionNumber && (
+                        <p className="text-[11px] font-mono text-slate-400">{row.admissionNumber}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-400 italic">Open slot</span>
+                  )}
+                </td>
                 <td className="py-2.5 px-4 text-xs font-medium capitalize text-teal-800">{row.role}</td>
-                <td className="py-2.5 px-4 text-xs text-slate-700">{row.classLabel}</td>
+                <td className="py-2.5 px-4 text-xs text-slate-700">
+                  <span className="font-medium text-slate-800">{row.classLabel}</span>
+                  {row.section && !row.classLabel.includes(`Section ${row.section}`) && row.role === 'student' && (
+                    <span className="text-slate-500"> · Section {row.section}</span>
+                  )}
+                </td>
                 <td className="py-2.5 px-4 text-xs font-mono text-slate-500 tabular-nums">{row.rollNumber}</td>
                 <td className="py-2.5 px-4 text-right">
                   <button
@@ -2298,7 +2575,7 @@ export function PrincipalAccessCodesView({
             <input
               type="text"
               required
-              placeholder="e.g. Shubhangi"
+              placeholder="Enter member full name"
               value={issueForm.memberName}
               onChange={(e) => setIssueForm({ ...issueForm, memberName: e.target.value })}
               className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"

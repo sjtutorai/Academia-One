@@ -26,6 +26,7 @@ import {
 } from '../lib/motion';
 import { Button } from './ui/Primitives';
 import { BrandLogo } from './ui/BrandLogo';
+import { PWAInstallButton } from './shared/PWAControls';
 
 export interface NavItem {
   id: string;
@@ -51,7 +52,7 @@ export function DashboardShell({
   globalSearchPlaceholder = 'Search permitted records…',
   children,
 }: DashboardShellProps) {
-  const { activeUser, activeSchool, logout, isPreviewMode, exitDemoPreview } = useAuth();
+  const { activeUser, activeSchool, schoolLoading, logout, isPreviewMode, exitDemoPreview } = useAuth();
   const { unreadCount } = useNotifications();
   const location = useLocation();
   const navigate = useNavigate();
@@ -59,12 +60,14 @@ export function DashboardShell({
 
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const profileMenuRef = useRef<HTMLDivElement>(null);
 
   const accessMode = getSchoolAccessMode(activeSchool);
   const basePortalPath = activeUser ? `/${activeUser.role.replace('_', '-')}` : '/';
+  const bottomNavItems = navItems.slice(0, 4);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -132,7 +135,14 @@ export function DashboardShell({
             {ROLE_LABELS[activeUser.role]}
           </p>
           <p className="text-xs font-semibold text-white truncate mt-0.5">
-            {activeSchool?.name || (activeUser.role === 'main_head' ? 'Platform Administration' : 'Unassigned School')}
+            {activeSchool?.name ||
+              (activeUser.role === 'main_head'
+                ? 'Platform Administration'
+                : schoolLoading
+                  ? 'Loading school…'
+                  : activeUser.schoolId && activeUser.schoolId !== 'unassigned'
+                    ? 'School Unavailable'
+                    : 'Unassigned School')}
           </p>
         </div>
       )}
@@ -170,11 +180,12 @@ export function DashboardShell({
         })}
       </nav>
 
-      <div className="p-2.5 border-t border-blue-900/80 space-y-0.5 shrink-0">
+      <div className="p-2.5 border-t border-blue-900/80 space-y-1 shrink-0 safe-bottom">
+        {(!collapsed || isMobile) && <PWAInstallButton variant="sidebar" />}
         <Link
           to={`${basePortalPath}/profile`}
           onClick={() => isMobile && setMobileOpen(false)}
-          className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs font-medium text-blue-100 hover:bg-blue-900/60 hover:text-white transition-colors"
+          className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-blue-100 hover:bg-blue-900/60 hover:text-white transition-colors min-h-[40px]"
         >
           <UserCircle2 className="w-4 h-4 shrink-0 text-green-400" />
           {(!collapsed || isMobile) && <span className="truncate">{activeUser?.displayName}</span>}
@@ -185,7 +196,7 @@ export function DashboardShell({
             await logout();
             navigate('/login');
           }}
-          className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs font-medium text-blue-200 hover:bg-red-950/60 hover:text-red-300 transition-colors cursor-pointer"
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-blue-200 hover:bg-red-950/60 hover:text-red-300 transition-colors cursor-pointer min-h-[40px]"
         >
           <LogOut className="w-4 h-4 shrink-0" />
           {(!collapsed || isMobile) && <span>Sign Out</span>}
@@ -197,14 +208,14 @@ export function DashboardShell({
   const pageVariants = getPageEntranceVariants(prefersReducedMotion);
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex">
+    <div className="min-h-[100dvh] bg-[#F8FAFC] flex">
       {/* Desktop Sidebar */}
       <aside
         className={`hidden lg:block shrink-0 transition-[width] duration-200 ease-out ${
           collapsed ? 'w-[72px]' : 'w-64'
         }`}
       >
-        <div className="sticky top-0 h-screen">{renderSidebarNav(false)}</div>
+        <div className="sticky top-0 h-[100dvh]">{renderSidebarNav(false)}</div>
       </aside>
 
       {/* Mobile Animated Drawer */}
@@ -224,7 +235,7 @@ export function DashboardShell({
               initial="initial"
               animate="animate"
               exit="exit"
-              className="relative z-10 w-64 h-full shadow-2xl"
+              className="relative z-10 w-[min(82vw,288px)] h-full shadow-2xl"
             >
               {renderSidebarNav(true)}
             </motion.div>
@@ -265,134 +276,167 @@ export function DashboardShell({
         )}
 
         {/* Top Navigation Bar */}
-        <header className="sticky top-0 z-30 h-16 bg-white/95 backdrop-blur-sm border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => setMobileOpen(true)}
-              className="lg:hidden p-2 rounded-lg text-slate-600 hover:bg-blue-50 transition-colors cursor-pointer"
-              aria-label="Open navigation menu"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
-            <div className="min-w-0">
-              {breadcrumb && <p className="text-[11px] font-medium text-blue-600 truncate">{breadcrumb}</p>}
-              <h1 className="text-base sm:text-lg font-bold font-display text-[#0F295C] truncate">
-                {title}
-              </h1>
+        <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-200 safe-top safe-x">
+          <div className="h-14 sm:h-16 px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-4">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => setMobileOpen(true)}
+                className="lg:hidden min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-600 hover:bg-blue-50 transition-colors cursor-pointer shrink-0"
+                aria-label="Open navigation menu"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+              <div className="min-w-0">
+                {breadcrumb && <p className="text-[11px] font-medium text-blue-600 truncate leading-tight">{breadcrumb}</p>}
+                <h1 className="text-sm sm:text-lg font-bold font-display text-[#0F295C] truncate leading-tight">
+                  {title}
+                </h1>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+              {onGlobalSearch && (
+                <>
+                  <div className="hidden md:flex items-center relative w-56 xl:w-72">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
+                    <input
+                      type="search"
+                      value={searchValue}
+                      onChange={(e) => handleSearch(e.target.value)}
+                      placeholder={globalSearchPlaceholder}
+                      className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg transition-all duration-150 focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMobileSearchOpen((v) => !v)}
+                    className="md:hidden min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700 transition-colors cursor-pointer"
+                    aria-label={mobileSearchOpen ? 'Close search' : 'Search records'}
+                    aria-expanded={mobileSearchOpen}
+                  >
+                    {mobileSearchOpen ? <X className="w-5 h-5" /> : <Search className="w-5 h-5" />}
+                  </button>
+                </>
+              )}
+
+              <PWAInstallButton variant="compact" className="hidden sm:inline-flex" />
+
+              <Link
+                to={`${basePortalPath}/notifications`}
+                className="relative min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                aria-label="Notifications"
+              >
+                <Bell className="w-5 h-5" />
+                <AnimatePresence>
+                  {unreadCount > 0 && (
+                    <motion.span
+                      key={unreadCount}
+                      initial={prefersReducedMotion ? false : { scale: 0.75, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.75, opacity: 0 }}
+                      transition={{ duration: 0.16, ease: MOTION_EASE.out }}
+                      className="absolute top-1 right-1 min-w-[17px] h-[17px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center tabular-nums"
+                    >
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </Link>
+
+              {/* Profile Dropdown Menu (Accessible on both Mobile & Desktop) */}
+              <div ref={profileMenuRef} className="relative sm:pl-2 sm:border-l sm:border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setProfileMenuOpen((v) => !v)}
+                  className="flex items-center gap-2 text-xs text-slate-700 hover:text-slate-900 rounded-lg p-1 sm:px-1.5 hover:bg-blue-50/60 transition-colors cursor-pointer min-h-[40px]"
+                  aria-expanded={profileMenuOpen}
+                  aria-haspopup="menu"
+                  aria-label="Account menu"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-blue-600 text-white font-display font-bold text-xs flex items-center justify-center shrink-0">
+                    {(activeUser?.displayName || 'A').slice(0, 2).toUpperCase()}
+                  </div>
+                  <div className="hidden sm:block text-left leading-tight max-w-[120px]">
+                    <p className="font-semibold truncate">{activeUser?.displayName}</p>
+                    <p className="text-[11px] text-slate-500">{activeUser ? ROLE_LABELS[activeUser.role] : ''}</p>
+                  </div>
+                </button>
+
+                <AnimatePresence>
+                  {profileMenuOpen && (
+                    <motion.div
+                      variants={getDropdownVariants(prefersReducedMotion)}
+                      initial="initial"
+                      animate="animate"
+                      exit="exit"
+                      role="menu"
+                      className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-xl shadow-lg py-1.5 z-40 origin-top-right"
+                    >
+                      <div className="px-3.5 py-2 border-b border-slate-100">
+                        <p className="text-xs font-semibold text-slate-900 truncate">{activeUser?.displayName}</p>
+                        <p className="text-[11px] text-slate-500 truncate">{activeUser?.email}</p>
+                      </div>
+                      <Link
+                        to={`${basePortalPath}/profile`}
+                        onClick={() => setProfileMenuOpen(false)}
+                        role="menuitem"
+                        className="flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+                      >
+                        <UserCircle2 className="w-4 h-4 text-slate-500" />
+                        Profile & Security
+                      </Link>
+                      {activeUser?.role === 'principal' && (
+                        <Link
+                          to="/principal/settings"
+                          onClick={() => setProfileMenuOpen(false)}
+                          role="menuitem"
+                          className="flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+                        >
+                          <Settings className="w-4 h-4 text-slate-500" />
+                          School Settings
+                        </Link>
+                      )}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={async () => {
+                          setProfileMenuOpen(false);
+                          await logout();
+                          navigate('/login');
+                        }}
+                        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        Sign Out
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
-            {onGlobalSearch && (
-              <div className="hidden md:flex items-center relative w-64">
+          {/* Expandable Mobile Search Bar */}
+          {onGlobalSearch && mobileSearchOpen && (
+            <div className="md:hidden px-3 pb-3 pt-1 border-t border-slate-100 bg-white">
+              <div className="relative flex items-center">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
                 <input
                   type="search"
+                  autoFocus
                   value={searchValue}
                   onChange={(e) => handleSearch(e.target.value)}
                   placeholder={globalSearchPlaceholder}
-                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg transition-all duration-150 focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
+                  className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                 />
               </div>
-            )}
-
-            <Link
-              to={`${basePortalPath}/notifications`}
-              className="relative p-2 rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700 transition-colors"
-              aria-label="Notifications"
-            >
-              <Bell className="w-5 h-5" />
-              <AnimatePresence>
-                {unreadCount > 0 && (
-                  <motion.span
-                    key={unreadCount}
-                    initial={prefersReducedMotion ? false : { scale: 0.75, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.75, opacity: 0 }}
-                    transition={{ duration: 0.16, ease: MOTION_EASE.out }}
-                    className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center tabular-nums"
-                  >
-                    {unreadCount > 9 ? '9+' : unreadCount}
-                  </motion.span>
-                )}
-              </AnimatePresence>
-            </Link>
-
-            {/* Profile Dropdown Menu */}
-            <div ref={profileMenuRef} className="relative hidden sm:block pl-2 border-l border-slate-200">
-              <button
-                type="button"
-                onClick={() => setProfileMenuOpen((v) => !v)}
-                className="flex items-center gap-2 text-xs text-slate-700 hover:text-slate-900 rounded-lg px-1.5 py-1 hover:bg-blue-50/60 transition-colors cursor-pointer"
-                aria-expanded={profileMenuOpen}
-                aria-haspopup="menu"
-              >
-                <div className="w-8 h-8 rounded-lg bg-blue-600 text-white font-display font-bold text-xs flex items-center justify-center shrink-0">
-                  {(activeUser?.displayName || 'A').slice(0, 2).toUpperCase()}
-                </div>
-                <div className="text-left leading-tight max-w-[120px]">
-                  <p className="font-semibold truncate">{activeUser?.displayName}</p>
-                  <p className="text-[11px] text-slate-500">{activeUser ? ROLE_LABELS[activeUser.role] : ''}</p>
-                </div>
-              </button>
-
-              <AnimatePresence>
-                {profileMenuOpen && (
-                  <motion.div
-                    variants={getDropdownVariants(prefersReducedMotion)}
-                    initial="initial"
-                    animate="animate"
-                    exit="exit"
-                    role="menu"
-                    className="absolute right-0 mt-2 w-52 bg-white border border-slate-200 rounded-xl shadow-lg py-1.5 z-40 origin-top-right"
-                  >
-                    <div className="px-3.5 py-2 border-b border-slate-100">
-                      <p className="text-xs font-semibold text-slate-900 truncate">{activeUser?.displayName}</p>
-                      <p className="text-[11px] text-slate-500 truncate">{activeUser?.email}</p>
-                    </div>
-                    <Link
-                      to={`${basePortalPath}/profile`}
-                      onClick={() => setProfileMenuOpen(false)}
-                      role="menuitem"
-                      className="flex items-center gap-2.5 px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
-                    >
-                      <UserCircle2 className="w-3.5 h-3.5 text-slate-500" />
-                      Profile & Security
-                    </Link>
-                    {activeUser?.role === 'principal' && (
-                      <Link
-                        to="/principal/settings"
-                        onClick={() => setProfileMenuOpen(false)}
-                        role="menuitem"
-                        className="flex items-center gap-2.5 px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
-                      >
-                        <Settings className="w-3.5 h-3.5 text-slate-500" />
-                        School Settings
-                      </Link>
-                    )}
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={async () => {
-                        setProfileMenuOpen(false);
-                        await logout();
-                        navigate('/login');
-                      }}
-                      className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                    >
-                      <LogOut className="w-3.5 h-3.5" />
-                      Sign Out
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </div>
-          </div>
+          )}
         </header>
 
         {/* Smooth Page Content Viewport (Persistent Sidebar & Topbar Stable) */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1440px] w-full mx-auto">
+        <main className="flex-1 p-3.5 sm:p-6 lg:p-8 pb-24 lg:pb-8 max-w-[1600px] w-full mx-auto safe-x">
           <motion.div
             key={location.pathname}
             variants={pageVariants}
@@ -402,6 +446,42 @@ export function DashboardShell({
             {children}
           </motion.div>
         </main>
+
+        {/* Mobile & Compact Tablet Bottom Navigation Bar */}
+        <nav
+          aria-label="Primary mobile navigation"
+          className="lg:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 safe-bottom safe-x"
+        >
+          <div className="grid grid-cols-5 h-14 items-center max-w-xl mx-auto">
+            {bottomNavItems.map((item) => {
+              const Icon = item.icon;
+              const active =
+                location.pathname === item.path ||
+                location.pathname.startsWith(item.path + '/');
+              return (
+                <Link
+                  key={item.id}
+                  to={item.path}
+                  className={`flex flex-col items-center justify-center gap-0.5 h-full px-1 transition-colors ${
+                    active ? 'text-blue-700 font-semibold' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <Icon className="w-5 h-5 shrink-0" />
+                  <span className="text-[10px] leading-tight truncate max-w-full">{item.label}</span>
+                </Link>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setMobileOpen(true)}
+              className="flex flex-col items-center justify-center gap-0.5 h-full px-1 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+              aria-label="Open full menu"
+            >
+              <Menu className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] leading-tight">More</span>
+            </button>
+          </div>
+        </nav>
       </div>
     </div>
   );

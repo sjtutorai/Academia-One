@@ -17,6 +17,8 @@ import JoinSchoolPage from './pages/JoinSchoolPage';
 import {
   SignInPage,
   SignUpPage,
+  EmailVerificationPage,
+  FirebaseAuthActionPage,
   ForgotPasswordPage,
   ResetPasswordPage,
   AccessDeniedPage,
@@ -28,11 +30,12 @@ import PrincipalPortal from './pages/principal/PrincipalPortal';
 import CoordinatorPortal from './pages/coordinator/CoordinatorPortal';
 import TeacherPortal from './pages/teacher/TeacherPortal';
 import StudentPortal from './pages/student/StudentPortal';
+import { OfflineIndicator } from './components/shared/PWAControls';
 import type { UserRole } from './types/models';
 
 function FullScreenLoader() {
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
+    <div className="min-h-[100dvh] bg-slate-50 flex flex-col items-center justify-center p-6">
       <div className="w-9 h-9 rounded-lg border-2 border-slate-200 border-t-[#2563EB] animate-spin" />
       <p className="text-xs font-medium text-slate-500 mt-4">Loading AcademiaOne workspace…</p>
     </div>
@@ -46,12 +49,16 @@ function ProtectedRoleRoute({
   requiredRole: UserRole;
   children: React.ReactNode;
 }) {
-  const { activeUser, activeSchool, loading, isPreviewMode } = useAuth();
+  const { activeUser, activeSchool, loading, isPreviewMode, needsEmailVerification } = useAuth();
 
   if (loading) return <FullScreenLoader />;
 
   if (!activeUser) {
     return <Navigate to="/login" replace />;
+  }
+
+  if (needsEmailVerification && !isPreviewMode) {
+    return <Navigate to="/verify-email" replace />;
   }
 
   if (activeUser.status !== 'active') {
@@ -85,6 +92,16 @@ function ProtectedRoleRoute({
   }
 
   return <>{children}</>;
+}
+
+function JoinSchoolRouteGuard() {
+  const { loading, needsEmailVerification } = useAuth();
+  const location = useLocation();
+  if (loading) return <FullScreenLoader />;
+  if (needsEmailVerification) {
+    return <Navigate to={`/verify-email${location.search || ''}`} replace />;
+  }
+  return <JoinSchoolPage />;
 }
 
 function AccessDeniedRoute() {
@@ -129,13 +146,15 @@ export default function App() {
                 <Route path="/" element={<LandingPage />} />
                 <Route path="/register-school" element={<SchoolRegistrationPage />} />
                 <Route path="/application-status" element={<ApplicationStatusPage />} />
-                <Route path="/join-school" element={<JoinSchoolPage />} />
+                <Route path="/join-school" element={<JoinSchoolRouteGuard />} />
                 <Route path="/privacy" element={<PrivacyPolicyPage />} />
                 <Route path="/terms" element={<TermsOfServicePage />} />
 
                 {/* Unified Authentication Routes */}
                 <Route path="/login" element={<SignInPage />} />
                 <Route path="/signup" element={<SignUpPage />} />
+                <Route path="/verify-email" element={<EmailVerificationPage />} />
+                <Route path="/auth/action" element={<FirebaseAuthActionPage />} />
                 <Route path="/forgot-password" element={<ForgotPasswordPage />} />
                 <Route path="/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/access-denied" element={<AccessDeniedRoute />} />
@@ -194,6 +213,7 @@ export default function App() {
                 {/* Fallback */}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
+              <OfflineIndicator />
             </NotificationProvider>
           </AuthProvider>
         </ToastProvider>

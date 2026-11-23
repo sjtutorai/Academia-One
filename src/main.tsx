@@ -15,4 +15,11 @@ console.error = (...args: unknown[]) => {
   }
 };
 
+// Register service worker for cross-device PWA installability
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+  });
+}
+
 createRoot(document.getElementById('root')!).render(<App />);

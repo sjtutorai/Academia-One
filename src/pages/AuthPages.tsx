@@ -1,7 +1,24 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { Eye, EyeOff, Lock, ArrowLeft, ShieldAlert, CheckCircle2 } from 'lucide-react';
+import {
+  Eye,
+  EyeOff,
+  Lock,
+  ArrowLeft,
+  ShieldAlert,
+  CheckCircle2,
+  Mail,
+  RefreshCw,
+  LogOut,
+  AlertTriangle,
+} from 'lucide-react';
+import {
+  applyActionCode,
+  confirmPasswordReset,
+  verifyPasswordResetCode,
+} from 'firebase/auth';
+import { auth } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { ROLE_HOME_ROUTES } from '../lib/permissions';
 import { MOTION_EASE } from '../lib/motion';
@@ -43,6 +60,11 @@ export function SignInPage() {
         return;
       }
       if (res.profile) {
+        if (res.needsEmailVerification) {
+          pushToast('info', 'Please verify your email address before entering your portal.');
+          navigate('/verify-email');
+          return;
+        }
         if (res.profile.status !== 'active') {
           navigate('/access-denied', {
             state: { reason: `Your account is currently ${res.profile.status}. Contact your school administrator or platform support.` },
@@ -94,7 +116,7 @@ export function SignInPage() {
   const busy = submitting || googleSubmitting;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex flex-col justify-center py-12 px-4 sm:px-6">
+    <div className="min-h-[100dvh] bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 safe-top safe-bottom">
       <div className="max-w-md w-full mx-auto">
         <Link
           to="/"
@@ -110,7 +132,7 @@ export function SignInPage() {
           transition={{ duration: 0.28, ease: MOTION_EASE.out }}
           className="bg-white border border-slate-200/90 rounded-xl overflow-hidden shadow-sm"
         >
-          <div className="p-8">
+          <div className="p-6 sm:p-8">
           <div className="mb-6">
             <BrandLogo size="md" />
             <h1 className="text-xl font-bold font-display text-[#0F295C] mt-4">Sign in to your account</h1>
@@ -132,7 +154,7 @@ export function SignInPage() {
                 disabled={busy}
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
-                placeholder="name@school.edu or username"
+                placeholder="Enter username or email"
                 className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15 disabled:bg-slate-50"
               />
             </div>
@@ -315,8 +337,18 @@ export function SignUpPage() {
         return;
       }
       if (res.profile) {
+        const cleanCode = schoolCode.trim().toUpperCase().replace(/\s+/g, '');
+        if (res.needsEmailVerification) {
+          pushToast(
+            'success',
+            res.verificationEmailSent
+              ? 'Account created! We sent a verification link to your email.'
+              : 'Account created! Verify your email to continue.',
+          );
+          navigate(cleanCode ? `/verify-email?code=${encodeURIComponent(cleanCode)}` : '/verify-email');
+          return;
+        }
         if (res.profile.role !== 'main_head' && (!res.profile.schoolId || res.profile.schoolId === 'unassigned')) {
-          const cleanCode = schoolCode.trim().toUpperCase().replace(/\s+/g, '');
           pushToast(
             'success',
             cleanCode
@@ -335,7 +367,7 @@ export function SignUpPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex flex-col justify-center py-12 px-4 sm:px-6">
+    <div className="min-h-[100dvh] bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 safe-top safe-bottom">
       <div className="max-w-md w-full mx-auto">
         <Link
           to="/"
@@ -351,7 +383,7 @@ export function SignUpPage() {
           transition={{ duration: 0.28, ease: MOTION_EASE.out }}
           className="bg-white border border-slate-200/90 rounded-xl overflow-hidden shadow-sm"
         >
-          <div className="p-8">
+          <div className="p-6 sm:p-8">
           <div className="mb-6">
             <BrandLogo size="md" />
             <h1 className="text-xl font-bold font-display text-[#0F295C] mt-4">Create your account</h1>
@@ -368,7 +400,7 @@ export function SignUpPage() {
                 required
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Jordan Taylor"
+                placeholder="Enter your full name"
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
               />
             </div>
@@ -380,7 +412,7 @@ export function SignUpPage() {
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="jordan.taylor"
+                placeholder="Choose a username"
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
               />
             </div>
@@ -392,7 +424,7 @@ export function SignUpPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="jordan@school.edu"
+                placeholder="Enter your email address"
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
               />
             </div>
@@ -507,76 +539,272 @@ export function SignUpPage() {
 }
 
 // ============================================================================
-// Non-Revealing Forgot Password Page
+// Email Verification Gate Page (/verify-email)
 // ============================================================================
-export function ForgotPasswordPage() {
-  const { requestPasswordRecovery } = useAuth();
+export function EmailVerificationPage() {
+  const {
+    firebaseUser,
+    activeUser,
+    emailVerified,
+    needsEmailVerification,
+    loading,
+    checkEmailVerification,
+    resendVerificationEmail,
+    logout,
+  } = useAuth();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { pushToast } = useToast();
   const prefersReducedMotion = useReducedMotion();
-  const [identifier, setIdentifier] = useState('');
-  const [sent, setSent] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!identifier.trim()) return;
-    setSubmitting(true);
+  const pendingCode = (searchParams.get('code') || '').trim().toUpperCase();
+  const oobCode = searchParams.get('oobCode') || '';
+
+  const [checking, setChecking] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [error, setError] = useState('');
+  const [oobApplied, setOobApplied] = useState(false);
+
+  const navigateAfterVerification = React.useCallback(
+    (profileOverride?: typeof activeUser) => {
+      const targetProfile = profileOverride || activeUser;
+      if (!targetProfile) {
+        navigate('/login', { replace: true });
+        return;
+      }
+      if (targetProfile.role !== 'main_head' && (!targetProfile.schoolId || targetProfile.schoolId === 'unassigned')) {
+        navigate(pendingCode ? `/join-school?code=${encodeURIComponent(pendingCode)}` : '/join-school', {
+          replace: true,
+        });
+        return;
+      }
+      navigate(ROLE_HOME_ROUTES[targetProfile.role], { replace: true });
+    },
+    [activeUser, navigate, pendingCode],
+  );
+
+  // If opened directly from a Firebase verifyEmail link with ?oobCode=...
+  useEffect(() => {
+    if (!oobCode || oobApplied) return;
+    let cancelled = false;
+    setChecking(true);
+    setError('');
+    applyActionCode(auth, oobCode)
+      .then(async () => {
+        if (cancelled) return;
+        setOobApplied(true);
+        const verified = await checkEmailVerification();
+        if (cancelled) return;
+        setStatusMessage('Your email address has been verified.');
+        pushToast('success', 'Email verified! Opening your workspace…');
+        if (verified || auth.currentUser) {
+          navigateAfterVerification();
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const code = (err as { code?: string })?.code || '';
+        if (code === 'auth/expired-action-code' || code === 'auth/invalid-action-code') {
+          setError('This verification link has expired or was already used. Request a fresh link below.');
+        } else {
+          setError(err instanceof Error ? err.message : 'Unable to apply verification code.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setChecking(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [oobCode, oobApplied, checkEmailVerification, navigateAfterVerification, pushToast]);
+
+  // Cooldown countdown timer
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = window.setInterval(() => setCooldown((c) => Math.max(0, c - 1)), 1000);
+    return () => window.clearInterval(t);
+  }, [cooldown]);
+
+  // Auto-redirect once verified
+  useEffect(() => {
+    if (!loading && firebaseUser && emailVerified && !needsEmailVerification) {
+      navigateAfterVerification();
+    }
+  }, [loading, firebaseUser, emailVerified, needsEmailVerification, navigateAfterVerification]);
+
+  // Auto-check when user returns to this browser tab after clicking the link in their inbox
+  useEffect(() => {
+    if (!firebaseUser || emailVerified) return;
+    const handleResume = () => {
+      if (document.visibilityState === 'visible') {
+        checkEmailVerification().then((verified) => {
+          if (verified) {
+            pushToast('success', 'Email verified successfully!');
+            navigateAfterVerification();
+          }
+        });
+      }
+    };
+    window.addEventListener('focus', handleResume);
+    document.addEventListener('visibilitychange', handleResume);
+    return () => {
+      window.removeEventListener('focus', handleResume);
+      document.removeEventListener('visibilitychange', handleResume);
+    };
+  }, [firebaseUser, emailVerified, checkEmailVerification, navigateAfterVerification, pushToast]);
+
+  const handleManualCheck = async () => {
+    setError('');
+    setStatusMessage('');
+    setChecking(true);
     try {
-      await requestPasswordRecovery(identifier);
-      setSent(true);
+      const verified = await checkEmailVerification();
+      if (verified) {
+        pushToast('success', 'Email verified! Redirecting now…');
+        navigateAfterVerification();
+      } else {
+        setStatusMessage('Not verified yet. Open the verification email in your inbox or spam folder and click the link.');
+      }
     } finally {
-      setSubmitting(false);
+      setChecking(false);
     }
   };
 
+  const handleResend = async () => {
+    if (cooldown > 0) return;
+    setError('');
+    setStatusMessage('');
+    setResending(true);
+    try {
+      const res = await resendVerificationEmail();
+      if (!res.ok) {
+        setError(res.error || 'Unable to resend verification email right now.');
+        return;
+      }
+      setCooldown(60);
+      setStatusMessage('A fresh verification email has been sent. Check your inbox and spam/junk folder.');
+      pushToast('success', 'Verification email sent.');
+    } finally {
+      setResending(false);
+    }
+  };
+
+  if (!loading && !firebaseUser && !oobCode) {
+    return (
+      <div className="min-h-[100dvh] bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex items-center justify-center p-4 safe-top safe-bottom">
+        <div className="max-w-md w-full bg-white border border-slate-200 rounded-xl p-6 sm:p-8 shadow-sm text-center space-y-4">
+          <div className="flex justify-center">
+            <BrandLogo size="sm" />
+          </div>
+          <h1 className="text-lg font-bold font-display text-[#0F295C]">Sign in to verify your email</h1>
+          <p className="text-sm text-slate-500">
+            Sign in with your Email &amp; Password credentials to check or resend your verification email.
+          </p>
+          <div className="flex justify-center gap-3 pt-2">
+            <Button variant="navy" onClick={() => navigate('/login')}>
+              Go to Sign In
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex flex-col justify-center py-12 px-4">
+    <div className="min-h-[100dvh] bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex flex-col justify-center py-8 sm:py-12 px-4 safe-top safe-bottom">
       <motion.div
         initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.26, ease: MOTION_EASE.out }}
         className="max-w-md w-full mx-auto bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm"
       >
-        <div className="p-8">
-        <div className="flex items-center justify-between gap-3 mb-5">
-          <BrandLogo size="sm" />
-          <Link to="/login" className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors">
-            <ArrowLeft className="w-3.5 h-3.5" />
-            Back to Sign In
-          </Link>
-        </div>
-        <h1 className="text-xl font-bold font-display text-[#0F295C]">Account Recovery</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Enter your registered email or username. For security, we never confirm whether an account exists.
-        </p>
-
-        {sent ? (
-          <div className="mt-6 p-4 rounded-lg bg-green-50 border border-green-200 text-sm text-green-900 flex items-start gap-3">
-            <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">Recovery request processed</p>
-              <p className="text-xs text-green-800 mt-1">
-                If an active account matches that email, password reset instructions have been sent. If your account uses an administrator-issued login, contact your Principal or Main Head for a password update.
-              </p>
-            </div>
+        <div className="p-6 sm:p-8 space-y-5">
+          <div className="flex items-center justify-between gap-3">
+            <BrandLogo size="sm" />
+            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700">
+              <Mail className="w-4 h-4" />
+              Email Verification
+            </span>
           </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1.5">Username or Email</label>
-              <input
-                type="text"
-                required
-                value={identifier}
-                onChange={(e) => setIdentifier(e.target.value)}
-                placeholder="name@school.edu"
-                className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
-              />
+
+          <div>
+            <h1 className="text-xl font-bold font-display text-[#0F295C]">Verify your email address</h1>
+            <p className="text-sm text-slate-500 mt-1.5 leading-relaxed">
+              We sent a verification link to{' '}
+              <span className="font-semibold text-slate-900">{firebaseUser?.email || activeUser?.email || 'your email'}</span>.
+              Verify your email to unlock your AcademiaOne workspace.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 space-y-2 leading-relaxed">
+            <p className="font-semibold text-slate-800">Next steps:</p>
+            <ol className="list-decimal list-inside space-y-1">
+              <li>Open your email inbox and click the AcademiaOne verification link.</li>
+              <li>Check your Spam or Promotions folder if you do not see it within a minute.</li>
+              <li>Return here and click <span className="font-semibold text-slate-800">I&apos;ve Verified My Email</span>.</li>
+            </ol>
+            {pendingCode && (
+              <p className="pt-1 text-teal-800 font-medium">
+                Saved School Access Code: <span className="font-mono font-bold">{pendingCode}</span> (will be applied automatically after verification).
+              </p>
+            )}
+          </div>
+
+          {statusMessage && (
+            <div className="p-3 rounded-lg bg-teal-50 border border-teal-200 text-xs text-teal-900 flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+              <span>{statusMessage}</span>
             </div>
-            <Button type="submit" variant="navy" className="w-full" loading={submitting}>
-              {submitting ? 'Sending…' : 'Send Recovery Link'}
+          )}
+
+          {error && (
+            <div role="alert" className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <div className="space-y-2.5 pt-1">
+            <Button
+              type="button"
+              variant="navy"
+              className="w-full"
+              loading={checking}
+              onClick={handleManualCheck}
+            >
+              {!checking && <RefreshCw className="w-4 h-4" />}
+              {checking ? 'Checking verification status…' : "I've Verified My Email"}
             </Button>
-          </form>
-        )}
+
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full"
+              loading={resending}
+              disabled={cooldown > 0}
+              onClick={handleResend}
+            >
+              <Mail className="w-4 h-4" />
+              {cooldown > 0 ? `Resend available in ${cooldown}s` : 'Resend Verification Email'}
+            </Button>
+          </div>
+
+          <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Entered the wrong email?</span>
+            <button
+              type="button"
+              onClick={async () => {
+                await logout();
+                navigate('/signup', { replace: true });
+              }}
+              className="inline-flex items-center gap-1 font-semibold text-slate-700 hover:text-red-600 transition-colors cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign Out
+            </button>
+          </div>
         </div>
       </motion.div>
     </div>
@@ -584,17 +812,236 @@ export function ForgotPasswordPage() {
 }
 
 // ============================================================================
-// Forced Temporary Password Replacement Screen (/reset-password)
+// Firebase Auth Email Action Handler (/auth/action)
+// ============================================================================
+export function FirebaseAuthActionPage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const mode = searchParams.get('mode') || '';
+  const oobCode = searchParams.get('oobCode') || '';
+
+  useEffect(() => {
+    if (mode === 'resetPassword' && oobCode) {
+      navigate(`/reset-password?mode=resetPassword&oobCode=${encodeURIComponent(oobCode)}`, { replace: true });
+      return;
+    }
+    if (mode === 'verifyEmail' && oobCode) {
+      navigate(`/verify-email?mode=verifyEmail&oobCode=${encodeURIComponent(oobCode)}`, { replace: true });
+      return;
+    }
+    navigate('/login', { replace: true });
+  }, [mode, oobCode, navigate]);
+
+  return (
+    <div className="min-h-[100dvh] bg-slate-50 flex flex-col items-center justify-center p-6">
+      <div className="w-9 h-9 rounded-lg border-2 border-slate-200 border-t-[#0F295C] animate-spin" />
+      <p className="text-xs font-medium text-slate-500 mt-4">Processing your secure link…</p>
+    </div>
+  );
+}
+
+// ============================================================================
+// Forgot Password Page (Real Email Delivery + Error Feedback + Resend Cooldown)
+// ============================================================================
+export function ForgotPasswordPage() {
+  const { requestPasswordRecovery } = useAuth();
+  const prefersReducedMotion = useReducedMotion();
+  const { pushToast } = useToast();
+
+  const [email, setEmail] = useState('');
+  const [sentTo, setSentTo] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = window.setInterval(() => setCooldown((c) => Math.max(0, c - 1)), 1000);
+    return () => window.clearInterval(t);
+  }, [cooldown]);
+
+  const sendReset = async (targetEmail: string) => {
+    setError('');
+    setSubmitting(true);
+    try {
+      const res = await requestPasswordRecovery(targetEmail);
+      if (!res.ok) {
+        setError(res.error || 'Could not send password reset email.');
+        return;
+      }
+      setSentTo(res.email || targetEmail.trim().toLowerCase());
+      setCooldown(60);
+      pushToast('success', 'Password reset email dispatched.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) {
+      setError('Enter your registered email address.');
+      return;
+    }
+    await sendReset(email);
+  };
+
+  return (
+    <div className="min-h-[100dvh] bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex flex-col justify-center py-8 sm:py-12 px-4 safe-top safe-bottom">
+      <motion.div
+        initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.26, ease: MOTION_EASE.out }}
+        className="max-w-md w-full mx-auto bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm"
+      >
+        <div className="p-6 sm:p-8">
+          <div className="flex items-center justify-between gap-3 mb-5">
+            <BrandLogo size="sm" />
+            <Link to="/login" className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors">
+              <ArrowLeft className="w-3.5 h-3.5" />
+              Back to Sign In
+            </Link>
+          </div>
+          <h1 className="text-xl font-bold font-display text-[#0F295C]">Reset your password</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Enter your registered email address and we will send you a secure password reset link.
+          </p>
+
+          {sentTo ? (
+            <div className="mt-6 space-y-4">
+              <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-950 flex items-start gap-3">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold">Reset link sent</p>
+                  <p className="text-xs text-emerald-800 mt-1 leading-relaxed">
+                    If an Email &amp; Password account exists for <span className="font-semibold">{sentTo}</span>, a password reset link has been sent. Check your inbox and Spam/Junk folder.
+                  </p>
+                  <p className="text-xs text-emerald-800 mt-2 leading-relaxed">
+                    Note: If you originally signed up with <span className="font-semibold">Continue with Google</span>, return to Sign In and use Google Sign-In instead.
+                  </p>
+                </div>
+              </div>
+
+              {error && (
+                <div role="alert" className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
+                  {error}
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="flex-1"
+                  loading={submitting}
+                  disabled={cooldown > 0}
+                  onClick={() => sendReset(sentTo)}
+                >
+                  {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend Email'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="navy"
+                  className="flex-1"
+                  onClick={() => {
+                    setSentTo('');
+                    setError('');
+                  }}
+                >
+                  Use Another Email
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="mt-6 space-y-4" noValidate>
+              <div>
+                <label htmlFor="forgot-email" className="block text-xs font-medium text-slate-700 mb-1.5">
+                  Registered Email Address
+                </label>
+                <input
+                  id="forgot-email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (error) setError('');
+                  }}
+                  placeholder="Enter your registered email address"
+                  className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                />
+              </div>
+
+              {error && (
+                <div role="alert" className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed">
+                  {error}
+                </div>
+              )}
+
+              <Button type="submit" variant="navy" className="w-full" loading={submitting}>
+                {submitting ? 'Sending Reset Link…' : 'Send Password Reset Link'}
+              </Button>
+            </form>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Reset Password Screen (/reset-password)
+// Supports BOTH email reset links (?oobCode=...) AND logged-in temporary password replacement
 // ============================================================================
 export function ResetPasswordPage() {
   const { replaceTemporaryPassword, activeUser, logout } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { pushToast } = useToast();
   const prefersReducedMotion = useReducedMotion();
+
+  const oobCode = searchParams.get('oobCode') || '';
+  const isEmailResetFlow = Boolean(oobCode);
+
+  const [verifyingCode, setVerifyingCode] = useState(isEmailResetFlow);
+  const [resetEmail, setResetEmail] = useState('');
+  const [codeError, setCodeError] = useState('');
+  const [resetComplete, setResetComplete] = useState(false);
+
   const [newPw, setNewPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
+  const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!oobCode) return;
+    let cancelled = false;
+    setVerifyingCode(true);
+    setCodeError('');
+    verifyPasswordResetCode(auth, oobCode)
+      .then((verifiedEmail) => {
+        if (!cancelled) {
+          setResetEmail(verifiedEmail);
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const code = (err as { code?: string })?.code || '';
+        if (code === 'auth/expired-action-code' || code === 'auth/invalid-action-code') {
+          setCodeError('This password reset link is invalid or has expired. Please request a fresh link.');
+        } else {
+          setCodeError(err instanceof Error ? err.message : 'Unable to validate reset link.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setVerifyingCode(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [oobCode]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -609,6 +1056,13 @@ export function ResetPasswordPage() {
     }
     setSaving(true);
     try {
+      if (isEmailResetFlow) {
+        await confirmPasswordReset(auth, oobCode, newPw);
+        setResetComplete(true);
+        pushToast('success', 'Password reset successfully. Sign in with your new password.');
+        return;
+      }
+
       const res = await replaceTemporaryPassword(newPw);
       if (!res.ok) {
         setError(res.error || 'Could not update password.');
@@ -616,64 +1070,137 @@ export function ResetPasswordPage() {
       }
       pushToast('success', 'Password updated securely.');
       if (activeUser) navigate(ROLE_HOME_ROUTES[activeUser.role]);
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/expired-action-code' || code === 'auth/invalid-action-code') {
+        setError('This reset link has expired. Request a new password reset link.');
+      } else if (code === 'auth/weak-password') {
+        setError('Please choose a stronger password (at least 8 characters with letters and numbers).');
+      } else {
+        setError(err instanceof Error ? err.message : 'Could not reset password.');
+      }
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex items-center justify-center p-4">
+    <div className="min-h-[100dvh] bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex items-center justify-center p-4 safe-top safe-bottom">
       <motion.div
         initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.26, ease: MOTION_EASE.out }}
-        className="max-w-md w-full bg-white border border-slate-200 rounded-xl p-8 shadow-sm"
+        className="max-w-md w-full bg-white border border-slate-200 rounded-xl p-6 sm:p-8 shadow-sm"
       >
         <div className="flex items-center justify-between gap-3 mb-4">
           <BrandLogo size="sm" />
           <div className="flex items-center gap-1.5 text-teal-700">
             <Lock className="w-4 h-4" />
-            <span className="text-xs font-semibold">Security Requirement</span>
+            <span className="text-xs font-semibold">Password Security</span>
           </div>
         </div>
-        <h1 className="text-xl font-bold font-display text-slate-900">Set your permanent password</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Temporary administrator-issued credentials must be replaced before accessing your dashboard.
-        </p>
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">New Password</label>
-            <input
-              type="password"
-              required
-              value={newPw}
-              onChange={(e) => setNewPw(e.target.value)}
-              placeholder="Minimum 8 characters"
-              className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-            />
+        {verifyingCode ? (
+          <div className="py-8 text-center space-y-3">
+            <div className="w-8 h-8 rounded-lg border-2 border-slate-200 border-t-[#0F295C] animate-spin mx-auto" />
+            <p className="text-xs text-slate-500">Verifying your password reset link…</p>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Confirm New Password</label>
-            <input
-              type="password"
-              required
-              value={confirmPw}
-              onChange={(e) => setConfirmPw(e.target.value)}
-              placeholder="Re-enter password"
-              className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
-            />
+        ) : codeError ? (
+          <div className="space-y-4">
+            <h1 className="text-xl font-bold font-display text-slate-900">Reset link expired</h1>
+            <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed">
+              {codeError}
+            </div>
+            <div className="flex items-center gap-3">
+              <Button variant="navy" className="flex-1" onClick={() => navigate('/forgot-password')}>
+                Request New Reset Link
+              </Button>
+              <Button variant="secondary" onClick={() => navigate('/login')}>
+                Sign In
+              </Button>
+            </div>
           </div>
-          {error && <p className="text-xs text-red-600">{error}</p>}
-          <div className="flex items-center gap-3 pt-2">
-            <Button type="button" variant="secondary" onClick={logout}>
-              Sign Out
+        ) : resetComplete ? (
+          <div className="space-y-4">
+            <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-950 flex items-start gap-3">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold">Password updated</p>
+                <p className="text-xs text-emerald-800 mt-1">
+                  Your password for <span className="font-semibold">{resetEmail}</span> has been reset. You can now sign in with your new password.
+                </p>
+              </div>
+            </div>
+            <Button variant="navy" className="w-full" onClick={() => navigate('/login', { replace: true })}>
+              Continue to Sign In
             </Button>
-            <Button type="submit" variant="primary" className="flex-1" loading={saving}>
-              {saving ? 'Updating…' : 'Update Password'}
-            </Button>
           </div>
-        </form>
+        ) : (
+          <>
+            <h1 className="text-xl font-bold font-display text-[#0F295C]">
+              {isEmailResetFlow ? 'Choose a new password' : 'Set your permanent password'}
+            </h1>
+            <p className="text-sm text-slate-500 mt-1">
+              {isEmailResetFlow
+                ? `Enter a new password for ${resetEmail || 'your account'}.`
+                : 'Temporary administrator-issued credentials must be replaced before accessing your dashboard.'}
+            </p>
+
+            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">New Password</label>
+                <div className="relative">
+                  <input
+                    type={showPw ? 'text' : 'password'}
+                    required
+                    value={newPw}
+                    onChange={(e) => setNewPw(e.target.value)}
+                    placeholder="Minimum 8 characters"
+                    className="w-full pl-3.5 pr-10 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPw((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    aria-label={showPw ? 'Hide password' : 'Show password'}
+                  >
+                    {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Confirm New Password</label>
+                <input
+                  type={showPw ? 'text' : 'password'}
+                  required
+                  value={confirmPw}
+                  onChange={(e) => setConfirmPw(e.target.value)}
+                  placeholder="Re-enter password"
+                  className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+                />
+              </div>
+              {error && (
+                <div role="alert" className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
+                  {error}
+                </div>
+              )}
+              <div className="flex items-center gap-3 pt-2">
+                {!isEmailResetFlow ? (
+                  <Button type="button" variant="secondary" onClick={logout}>
+                    Sign Out
+                  </Button>
+                ) : (
+                  <Button type="button" variant="secondary" onClick={() => navigate('/login')}>
+                    Cancel
+                  </Button>
+                )}
+                <Button type="submit" variant="primary" className="flex-1" loading={saving}>
+                  {saving ? 'Updating…' : 'Update Password'}
+                </Button>
+              </div>
+            </form>
+          </>
+        )}
       </motion.div>
     </div>
   );
@@ -687,8 +1214,8 @@ export function AccessDeniedPage({ reason }: { reason?: string }) {
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center p-6">
-      <div className="max-w-lg w-full bg-white border border-slate-200 rounded-xl p-8 shadow-sm">
+    <div className="min-h-[100dvh] bg-[#F8FAFC] flex items-center justify-center p-4 sm:p-6 safe-top safe-bottom">
+      <div className="max-w-lg w-full bg-white border border-slate-200 rounded-xl p-6 sm:p-8 shadow-sm">
         <div className="mb-4">
           <BrandLogo size="sm" />
         </div>

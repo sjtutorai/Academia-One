@@ -907,8 +907,8 @@ export function PrincipalReportsView({ data }: { data: SchoolDataBundle }) {
             onClick={() =>
               exportToCsv(
                 'school_class_strength.csv',
-                ['Class Code', 'Name', 'Class Teacher', 'Enrolled', 'Capacity'],
-                data.classes.map((c) => [c.code, c.name, c.classTeacherName || '', data.students.filter((s) => s.classId === c.id).length, c.capacity]),
+                ['Class Code', 'Name', 'Class Teacher', 'Enrolled', 'Section Limit'],
+                data.classes.map((c) => [c.code, c.name, c.classTeacherName || '', data.students.filter((s) => s.classId === c.id).length, 'Unlimited']),
               )
             }
           >

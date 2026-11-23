@@ -220,7 +220,7 @@ export function PrincipalActivationGate({
   const validateCurrentStep = (target: number): string | null => {
     if (target === 1) {
       if (schoolName.trim().length < 2) return 'Enter the official school name.';
-      if (academicYear.trim().length < 4) return 'Enter the academic year (e.g., 2026-2027).';
+      if (academicYear.trim().length < 4) return 'Enter the academic year.';
     }
     if (target === 2) {
       if (address.trim().length < 4) return 'Enter your campus street address (or use Detect Location).';
@@ -693,7 +693,7 @@ export function PrincipalActivationGate({
                   required
                   value={activationInput}
                   onChange={(e) => setActivationInput(e.target.value.toUpperCase())}
-                  placeholder={`e.g. MH-${effectivePrefix}-8K4P2X`}
+                  placeholder="Enter Main Head activation code"
                   className="w-full px-4 py-3 text-base font-mono font-semibold tracking-wider uppercase border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
                 />
               </div>
@@ -965,8 +965,7 @@ export function PrincipalActivationGate({
                 <div>
                   <h2 className="text-base font-bold font-display text-slate-900">4. Classes & Section Codes</h2>
                   <p className="text-xs text-slate-500">
-                    Each class-section gets an automatic Class Code (e.g., <span className="font-mono">C1A</span>,{' '}
-                    <span className="font-mono">C1B</span>) used by students when joining.
+                    Each class-section receives an automatic Class Code used by students when joining.
                   </p>
                 </div>
                 <Button
@@ -1176,11 +1175,8 @@ export function PrincipalActivationGate({
                   6. Named Coordinators, Teachers & Students Roster
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Enter names below to automatically generate personalized codes using your 3-letter school prefix{' '}
-                  <span className="font-mono font-bold text-slate-900">{effectivePrefix}</span> (e.g.,{' '}
-                  <span className="font-mono font-semibold text-teal-700">{effectivePrefix}C01</span> for Coordinator,{' '}
-                  <span className="font-mono font-semibold text-blue-700">{effectivePrefix}T01</span> for Teacher,{' '}
-                  <span className="font-mono font-semibold text-slate-800">{effectivePrefix}S001</span> for Student).
+                  Enter names below to automatically generate personalized Coordinator, Teacher, and Student codes using
+                  your school prefix <span className="font-mono font-bold text-slate-900">{effectivePrefix}</span>.
                 </p>
               </div>
 
@@ -1219,7 +1215,7 @@ export function PrincipalActivationGate({
                       </div>
                       <input
                         type="text"
-                        placeholder="Coordinator Name (e.g. Shubhangi)"
+                        placeholder="Enter coordinator full name"
                         value={c.name}
                         onChange={(e) => {
                           const next = [...coordinators];

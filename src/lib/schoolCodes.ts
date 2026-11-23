@@ -3,8 +3,11 @@ import { db } from './firebase';
 import type {
   ClassSectionRange,
   MemberAccessCode,
+  SchoolClass,
   SchoolCodeClassSlot,
   SchoolCodeEntry,
+  StudentProfile,
+  TeacherProfile,
 } from '../types/models';
 
 export const STANDARD_CLASSES: string[] = [
@@ -92,29 +95,129 @@ export function countTotalClassSections(plan: ClassSectionRange[]): number {
 }
 
 /**
- * Expands a ClassSectionRange list into individual class-section records for Firestore creation.
+ * Normalizes user or spreadsheet grade strings into canonical labels:
+ * "10" / "Grade 10" / "Class 10" -> "Class 10", "lkg" -> "LKG", "pre-kg" -> "Pre-KG".
+ */
+export function normalizeGradeLevel(raw: string): string {
+  const cleaned = String(raw || '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  if (!cleaned) return '';
+  const compact = cleaned.toLowerCase().replace(/[\s._-]+/g, '');
+  if (compact === 'prekg' || compact === 'prek' || compact === 'playgroup' || compact === 'pg') return 'Pre-KG';
+  if (compact === 'nursery' || compact === 'nur') return 'Nursery';
+  if (compact === 'lkg' || compact === 'lowerkg' || compact === 'kg1' || compact === 'junior') return 'LKG';
+  if (compact === 'ukg' || compact === 'upperkg' || compact === 'kg2' || compact === 'senior') return 'UKG';
+  if (compact === 'kg' || compact === 'kindergarten') return 'UKG';
+
+  const romanMap: Record<string, number> = {
+    i: 1,
+    ii: 2,
+    iii: 3,
+    iv: 4,
+    v: 5,
+    vi: 6,
+    vii: 7,
+    viii: 8,
+    ix: 9,
+    x: 10,
+    xi: 11,
+    xii: 12,
+  };
+  const stripped = cleaned.replace(/^(class|grade|std|standard)\s*/i, '').trim();
+  const numMatch = /^(\d{1,2})(st|nd|rd|th)?$/i.exec(stripped);
+  if (numMatch) {
+    return `Class ${parseInt(numMatch[1], 10)}`;
+  }
+  const romanNum = romanMap[stripped.toLowerCase()];
+  if (romanNum) {
+    return `Class ${romanNum}`;
+  }
+  return cleaned;
+}
+
+/**
+ * Derives a compact uppercase class code from a grade level and section (e.g., Class 10 + A -> C10A).
+ */
+export function deriveClassSectionCode(gradeLevel: string, section: string): string {
+  const normalizedGrade = normalizeGradeLevel(gradeLevel) || gradeLevel.trim();
+  const shortGrade = normalizedGrade
+    .replace(/^Class\s+/i, '')
+    .replace(/^Grade\s+/i, '')
+    .replace(/^Std\.?\s+/i, '')
+    .replace(/[^A-Za-z0-9]/g, '')
+    .toUpperCase();
+  const cleanSec = (section || 'A').trim().replace(/[^A-Za-z0-9]/g, '').toUpperCase() || 'A';
+  return `C${shortGrade}${cleanSec}`.slice(0, 16);
+}
+
+/**
+ * Returns a deterministic numeric sort rank for grade levels so Pre-KG, Nursery, LKG, UKG,
+ * and Class 1 through Class 12 always appear in natural academic order.
+ */
+export function getGradeSortRank(gradeLevel: string): number {
+  const normalized = normalizeGradeLevel(gradeLevel).toLowerCase();
+  if (normalized === 'pre-kg') return 0;
+  if (normalized === 'nursery') return 1;
+  if (normalized === 'lkg') return 2;
+  if (normalized === 'ukg') return 3;
+  const numMatch = /(\d+)/.exec(normalized);
+  if (numMatch) {
+    return 10 + parseInt(numMatch[1], 10);
+  }
+  return 999;
+}
+
+/**
+ * Sorts classes & sections in natural academic order: grade level ascending, then section A-Z / numeric.
+ */
+export function sortClassesInOrder<
+  T extends { gradeLevel?: string; section?: string; code?: string; name?: string },
+>(list: T[]): T[] {
+  return [...list].sort((a, b) => {
+    const gradeA = a.gradeLevel || a.name || a.code || '';
+    const gradeB = b.gradeLevel || b.name || b.code || '';
+    const rankDiff = getGradeSortRank(gradeA) - getGradeSortRank(gradeB);
+    if (rankDiff !== 0) return rankDiff;
+
+    const normA = normalizeGradeLevel(gradeA);
+    const normB = normalizeGradeLevel(gradeB);
+    const gradeTextDiff = normA.localeCompare(normB, undefined, { numeric: true, sensitivity: 'base' });
+    if (gradeTextDiff !== 0) return gradeTextDiff;
+
+    const secA = (a.section || '').trim();
+    const secB = (b.section || '').trim();
+    const secDiff = secA.localeCompare(secB, undefined, { numeric: true, sensitivity: 'base' });
+    if (secDiff !== 0) return secDiff;
+
+    return (a.code || a.name || '').localeCompare(b.code || b.name || '', undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    });
+  });
+}
+
+/**
+ * Expands a ClassSectionRange list into individual class-section records for Firestore creation,
+ * ordered naturally by grade level and section.
  */
 export function expandClassSectionPlan(
   plan: ClassSectionRange[],
 ): { gradeLevel: string; section: string; name: string; code: string }[] {
   const rows: { gradeLevel: string; section: string; name: string; code: string }[] = [];
   for (const item of plan) {
+    const grade = normalizeGradeLevel(item.grade) || item.grade.trim();
     const sections = expandSectionRange(item.sectionFrom, item.sectionTo);
-    const shortGrade = item.grade
-      .replace(/^Class\s+/i, '')
-      .replace(/^Grade\s+/i, '')
-      .replace(/[^A-Za-z0-9]/g, '')
-      .toUpperCase();
     for (const sec of sections) {
       rows.push({
-        gradeLevel: item.grade,
+        gradeLevel: grade,
         section: sec,
-        name: `${item.grade} - Section ${sec}`,
-        code: `C${shortGrade}${sec}`.slice(0, 16),
+        name: `${grade} - Section ${sec}`,
+        code: deriveClassSectionCode(grade, sec),
       });
     }
   }
-  return rows;
+  return sortClassesInOrder(rows);
 }
 
 /**
@@ -286,16 +389,16 @@ export async function verifyStudentFourCodes(params: {
   const stCode = params.studentCode.trim().toUpperCase().replace(/\s+/g, '');
 
   if (sCode.length < 2) {
-    return { ok: false, error: 'Enter a valid School Code (e.g., JSS).' };
+    return { ok: false, error: 'Enter a valid School Code.' };
   }
   if (cCode.length < 2) {
-    return { ok: false, error: 'Enter your Class Code given by your school/teacher (e.g., C1A).' };
+    return { ok: false, error: 'Enter your Class Code given by your school or teacher.' };
   }
   if (tCode.length < 4) {
-    return { ok: false, error: 'Enter your Class Teacher Code (e.g., JSST01).' };
+    return { ok: false, error: 'Enter your Class Teacher Code.' };
   }
   if (stCode.length < 4) {
-    return { ok: false, error: 'Enter your personal Student Code obtained from your teacher (e.g., JSSS001).' };
+    return { ok: false, error: 'Enter your personal Student Code obtained from your teacher.' };
   }
 
   // 1. Verify School Code
@@ -367,7 +470,7 @@ export async function verifyStudentFourCodes(params: {
     if (!tMatch) {
       return {
         ok: false,
-        error: `Teacher Code "${tCode}" was not found for ${schoolEntry.schoolName}. Ask your class teacher for their exact code (e.g., ${schoolEntry.code}T01).`,
+        error: `Teacher Code "${tCode}" was not found for ${schoolEntry.schoolName}. Ask your class teacher for their exact Teacher Code.`,
       };
     }
   }
@@ -414,7 +517,7 @@ export async function verifyStudentFourCodes(params: {
     if (!sMatch || parseInt(sMatch[1], 10) < 1 || parseInt(sMatch[1], 10) > maxStudents) {
       return {
         ok: false,
-        error: `Student Code "${stCode}" was not found for ${schoolEntry.schoolName}. Obtain your personal Student Code from your class teacher (e.g., ${schoolEntry.code}S001).`,
+        error: `Student Code "${stCode}" was not found for ${schoolEntry.schoolName}. Obtain your personal Student Code from your class teacher.`,
       };
     }
   }
@@ -484,7 +587,7 @@ export async function resolveSchoolAccessCode(
   if (raw.length < 2) {
     return {
       ok: false,
-      error: 'Enter your School Access Code (e.g., JSS0001, JSSC01, JSST01, or JSSS001).',
+      error: 'Enter your School Access Code.',
     };
   }
 
@@ -547,7 +650,7 @@ export async function resolveSchoolAccessCode(
     const seqNum = parseInt(digitsStr, 10);
 
     if (!Number.isFinite(seqNum) || seqNum < 1) {
-      return { ok: false, error: 'Code sequence number must start at 1 (e.g., 01 or 0001).' };
+      return { ok: false, error: 'Code sequence number must start at 1.' };
     }
 
     // 1a. First check if `letters` directly matches a school prefix -> Principal login code (e.g., JSS0001)
@@ -690,6 +793,231 @@ export async function resolveSchoolAccessCode(
 
   return {
     ok: false,
-    error: `Code "${raw}" was not found. Confirm your exact role code from your school (e.g., JSS0001 for Principal, JSSC01 for Coordinator, JSST01 for Teacher, JSSS001 for Student).`,
+    error: `Code "${raw}" was not found. Confirm your exact role code with your school.`,
   };
 }
+
+export interface GradeClassGroup {
+  gradeLevel: string;
+  sections: SchoolClass[];
+}
+
+export interface GradeGroupSummary {
+  gradeLevel: string;
+  sections: SchoolClass[];
+  totalInSchool: number;
+  assignedCount: number;
+  isAllSections: boolean;
+  sectionsLabel: string;
+}
+
+/**
+ * Groups school classes by normalized grade level in natural academic order (Pre-KG..Class 12)
+ * with sections sorted A-Z inside each grade.
+ */
+export function groupClassesByGrade(classes: SchoolClass[]): GradeClassGroup[] {
+  const ordered = sortClassesInOrder(classes);
+  const map = new Map<string, SchoolClass[]>();
+  for (const cl of ordered) {
+    const rawGrade = cl.gradeLevel || cl.name?.split(' - ')[0] || cl.code || 'Other';
+    const grade = normalizeGradeLevel(rawGrade) || rawGrade.trim();
+    const list = map.get(grade) || [];
+    list.push(cl);
+    map.set(grade, list);
+  }
+  return Array.from(map.entries())
+    .sort(([gradeA], [gradeB]) => {
+      const rankDiff = getGradeSortRank(gradeA) - getGradeSortRank(gradeB);
+      if (rankDiff !== 0) return rankDiff;
+      return gradeA.localeCompare(gradeB, undefined, { numeric: true, sensitivity: 'base' });
+    })
+    .map(([gradeLevel, sections]) => ({
+      gradeLevel,
+      sections: sortClassesInOrder(sections),
+    }));
+}
+
+function formatOrderedSectionList(sections: SchoolClass[], isAllInSchool: boolean, totalInSchool: number): string {
+  const names = sections.map((s) => (s.section || '').trim().toUpperCase() || s.code).filter(Boolean);
+  if (names.length === 0) return 'No sections';
+
+  // Detect contiguous single-letter A-Z range (e.g. A..G)
+  const isContiguousAlpha =
+    names.length >= 3 &&
+    names.every((n) => /^[A-Z]$/.test(n)) &&
+    names.every((n, i) => i === 0 || n.charCodeAt(0) === names[i - 1].charCodeAt(0) + 1);
+
+  if (isAllInSchool && totalInSchool > 1) {
+    if (isContiguousAlpha) {
+      return `All Sections (${names[0]}–${names[names.length - 1]})`;
+    }
+    if (names.length <= 5) {
+      return `All Sections (${names.join(', ')})`;
+    }
+    return `All ${names.length} Sections`;
+  }
+
+  if (isAllInSchool && totalInSchool === 1) {
+    return `All (Section ${names[0]})`;
+  }
+
+  if (names.length === 1) {
+    return `Section ${names[0]}`;
+  }
+  if (isContiguousAlpha) {
+    return `Sections ${names[0]}–${names[names.length - 1]}`;
+  }
+  return `Sections ${names.join(', ')}`;
+}
+
+/**
+ * Summarizes assigned classes into compact grade-level groups, automatically identifying
+ * when all sections of a grade in the school are assigned.
+ */
+export function summarizeClassesByGrade(
+  assignedClasses: SchoolClass[],
+  allSchoolClasses?: SchoolClass[],
+): GradeGroupSummary[] {
+  const schoolGroups = groupClassesByGrade(
+    allSchoolClasses && allSchoolClasses.length > 0 ? allSchoolClasses : assignedClasses,
+  );
+  const schoolCountByGrade = new Map<string, number>();
+  for (const g of schoolGroups) {
+    schoolCountByGrade.set(g.gradeLevel, g.sections.length);
+  }
+
+  const assignedGroups = groupClassesByGrade(assignedClasses);
+  return assignedGroups.map((group) => {
+    const totalInSchool = schoolCountByGrade.get(group.gradeLevel) ?? group.sections.length;
+    const assignedCount = group.sections.length;
+    const isAllSections = totalInSchool > 0 && assignedCount >= totalInSchool;
+    return {
+      gradeLevel: group.gradeLevel,
+      sections: group.sections,
+      totalInSchool,
+      assignedCount,
+      isAllSections,
+      sectionsLabel: formatOrderedSectionList(group.sections, isAllSections, totalInSchool),
+    };
+  });
+}
+
+/**
+ * Concise single-line grade summary for staff tables, e.g. "Class 1 (All A–G) · Class 9 (D–G)".
+ */
+export function formatGradeSummaryCompact(
+  assignedClasses: SchoolClass[],
+  allSchoolClasses?: SchoolClass[],
+): string {
+  const summaries = summarizeClassesByGrade(assignedClasses, allSchoolClasses);
+  if (summaries.length === 0) return 'Unassigned';
+  return summaries
+    .map((s) => {
+      const compactSec = s.sectionsLabel
+        .replace(/^All Sections \((.+)\)$/, 'All $1')
+        .replace(/^All \(Section (.+)\)$/, 'Sec $1')
+        .replace(/^Sections /, '')
+        .replace(/^Section /, 'Sec ');
+      return `${s.gradeLevel} (${compactSec})`;
+    })
+    .join(' · ');
+}
+
+export interface StudentFourCodePack {
+  studentName: string;
+  rollNumber?: string;
+  schoolName: string;
+  schoolCode: string;
+  className: string;
+  classCode: string;
+  teacherName: string;
+  teacherCode: string;
+  studentCode: string;
+}
+
+/**
+ * Builds the complete 4-code student login bundle (School Code, Class Code,
+ * Class Teacher Code, and Student Access Code) from live school roster data.
+ */
+export function buildStudentFourCodePack(params: {
+  schoolCode: string;
+  schoolName: string;
+  student?: Partial<StudentProfile> | null;
+  namedCode?: Partial<MemberAccessCode> | null;
+  classes: SchoolClass[];
+  teachers: TeacherProfile[];
+}): StudentFourCodePack {
+  const { schoolCode, schoolName, student, namedCode, classes, teachers } = params;
+  const studentName = student?.name || namedCode?.memberName || 'Student';
+  const rollNumber = student?.rollNumber || namedCode?.rollNumber || '';
+  const studentCode = (student?.accessCode || namedCode?.code || '').trim().toUpperCase();
+
+  const matchedClass =
+    classes.find((c) => c.id === student?.classId || c.id === namedCode?.classId) ||
+    classes.find(
+      (c) =>
+        namedCode?.classCode &&
+        c.code.trim().toUpperCase() === namedCode.classCode.trim().toUpperCase(),
+    ) ||
+    null;
+
+  const classCode = (
+    matchedClass?.code ||
+    namedCode?.classCode ||
+    (student?.className && student?.section
+      ? deriveClassSectionCode(student.className.split(' - ')[0], student.section)
+      : '')
+  )
+    .trim()
+    .toUpperCase();
+
+  const className =
+    matchedClass?.name ||
+    student?.className ||
+    namedCode?.className ||
+    '';
+
+  const matchedTeacher =
+    teachers.find((t) => matchedClass?.classTeacherId && t.id === matchedClass.classTeacherId) ||
+    teachers.find((t) => namedCode?.teacherId && t.id === namedCode.teacherId) ||
+    teachers.find((t) => matchedClass?.id && t.classTeacherOfClassId === matchedClass.id) ||
+    teachers.find((t) => matchedClass?.id && (t.assignedClassIds || []).includes(matchedClass.id)) ||
+    null;
+
+  const teacherCode = (matchedTeacher?.accessCode || matchedTeacher?.staffId || namedCode?.teacherCode || '')
+    .trim()
+    .toUpperCase();
+  const teacherName = matchedTeacher?.name || matchedClass?.classTeacherName || namedCode?.teacherName || '';
+
+  return {
+    studentName,
+    rollNumber,
+    schoolName: schoolName || namedCode?.schoolName || 'School',
+    schoolCode: (schoolCode || namedCode?.schoolCode || '').trim().toUpperCase(),
+    className,
+    classCode,
+    teacherName,
+    teacherCode,
+    studentCode,
+  };
+}
+
+/**
+ * Formats the 4 student login codes into a clean, ready-to-share message for WhatsApp, SMS, or email.
+ */
+export function formatStudentFourCodeMessage(pack: StudentFourCodePack): string {
+  const lines = [
+    `${pack.schoolName} — Student Login Codes`,
+    `Student: ${pack.studentName}${pack.rollNumber ? ` (Roll #${pack.rollNumber})` : ''}`,
+    pack.className ? `Class: ${pack.className}` : null,
+    '',
+    `1. School Code: ${pack.schoolCode || 'Not set'}`,
+    `2. Class & Section Code: ${pack.classCode || 'Not assigned'}`,
+    `3. Class Teacher Code: ${pack.teacherCode || 'Not assigned'}${pack.teacherName ? ` (${pack.teacherName})` : ''}`,
+    `4. Student Access Code: ${pack.studentCode || 'Not assigned'}`,
+    '',
+    'Sign in and open Join School to enter these 4 codes.',
+  ].filter((line): line is string => line !== null);
+  return lines.join('\n');
+}
+

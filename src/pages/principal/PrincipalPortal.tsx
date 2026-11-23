@@ -21,6 +21,8 @@ import {
   KeyRound,
   Copy,
   Check,
+  RefreshCw,
+  AlertTriangle,
 } from 'lucide-react';
 import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
@@ -75,6 +77,8 @@ import {
   PrincipalReportsView,
   PrincipalSchoolSettingsView,
 } from './PrincipalAcademicsOps';
+import { ExcelImportModal } from '../../components/principal/ExcelImportModal';
+import type { ExcelImportKind } from '../../lib/excelImport';
 import type { CoordinatorPermissions, PlatformUser, School, TeacherProfile } from '../../types/models';
 
 const PRINCIPAL_NAV: NavItem[] = [
@@ -98,11 +102,22 @@ const PRINCIPAL_NAV: NavItem[] = [
 ];
 
 export default function PrincipalPortal() {
-  const { activeUser, activeSchool, isPreviewMode } = useAuth();
+  const { activeUser, activeSchool, schoolLoading, schoolLoadError, reloadSchool, refreshProfile, isPreviewMode } =
+    useAuth();
+  const navigate = useNavigate();
   const schoolId = activeUser?.schoolId || '';
   const data = useSchoolData(schoolId, true);
   const access = getSchoolAccessMode(activeSchool);
   const [globalSearch, setGlobalSearch] = useState('');
+  const [retrying, setRetrying] = useState(false);
+  const [excelImportState, setExcelImportState] = useState<{ open: boolean; tab: ExcelImportKind }>({
+    open: false,
+    tab: 'students',
+  });
+
+  const openExcelImport = (tab: ExcelImportKind = 'students') => {
+    setExcelImportState({ open: true, tab });
+  };
 
   if (!activeUser) return null;
 
@@ -117,18 +132,74 @@ export default function PrincipalPortal() {
   }
 
   const schoolPrefix = activeSchool?.code || deriveSchoolPrefix(activeSchool?.name || '');
+  const breadcrumbLabel = activeSchool?.code || activeSchool?.name || (schoolLoading ? 'Loading…' : 'Campus');
+
+  const handleRetrySchool = async () => {
+    setRetrying(true);
+    try {
+      await refreshProfile().catch(() => undefined);
+      reloadSchool();
+    } finally {
+      setTimeout(() => setRetrying(false), 600);
+    }
+  };
+
+  const schoolUnavailableView = schoolLoading ? (
+    <SkeletonTable rows={6} cols={4} />
+  ) : (
+    <div className="max-w-xl mx-auto mt-6 bg-white border border-slate-200 rounded-xl p-6 sm:p-8 text-center space-y-4 shadow-sm">
+      <div className="w-11 h-11 rounded-xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
+        <AlertTriangle className="w-5 h-5" />
+      </div>
+      <div className="space-y-1.5">
+        <h2 className="text-lg font-bold font-display text-slate-900">School Workspace Unavailable</h2>
+        <p className="text-sm text-slate-600 leading-relaxed">
+          {schoolLoadError ||
+            'Your assigned school record could not be loaded. It may still be syncing or may have been removed by the Main Head administrator.'}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
+        <Button variant="primary" size="sm" onClick={handleRetrySchool} disabled={retrying}>
+          <RefreshCw className={`w-4 h-4 ${retrying ? 'animate-spin' : ''}`} />
+          {retrying ? 'Refreshing…' : 'Retry Loading School'}
+        </Button>
+        <Button variant="secondary" size="sm" onClick={() => navigate('/register-school')}>
+          Register a School
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => navigate('/principal/profile')}>
+          Account &amp; Profile
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
     <DashboardShell
       title={activeSchool?.name || 'School Administration'}
-      breadcrumb={`AcademiaOne / Principal / ${activeSchool?.code || schoolId}`}
+      breadcrumb={`AcademiaOne / Principal / ${breadcrumbLabel}`}
       navItems={PRINCIPAL_NAV}
       onGlobalSearch={setGlobalSearch}
       globalSearchPlaceholder="Search students, teachers, classes…"
     >
       <Routes>
+        <Route path="notifications" element={<NotificationsAndPreferencesView />} />
+        <Route path="profile" element={<ProfileSecurityView />} />
+        {!activeSchool ? (
+          <Route path="*" element={schoolUnavailableView} />
+        ) : (
+          <>
         <Route index element={<Navigate to="dashboard" replace />} />
-        <Route path="dashboard" element={<PrincipalOverview school={activeSchool} data={data} />} />
+        <Route
+          path="dashboard"
+          element={
+            <PrincipalOverview
+              school={activeSchool}
+              data={data}
+              canWrite={access.canWrite}
+              onOpenExcelImport={() => openExcelImport('students')}
+            />
+          }
+        />
         <Route
           path="setup"
           element={
@@ -148,6 +219,8 @@ export default function PrincipalPortal() {
               school={activeSchool}
               classes={data.classes}
               teachers={data.teachers}
+              students={data.students}
+              coordinators={data.schoolUsers.filter((u) => u.role === 'coordinator')}
               actor={activeUser}
               canWrite={access.canWrite}
             />
@@ -192,6 +265,7 @@ export default function PrincipalPortal() {
               canWrite={access.canWrite}
               globalSearch={globalSearch}
               loading={data.loading}
+              onOpenExcelImport={() => openExcelImport('teachers')}
             />
           }
         />
@@ -205,11 +279,13 @@ export default function PrincipalPortal() {
               schoolId={schoolId}
               schoolCode={schoolPrefix}
               schoolName={activeSchool?.name || ''}
+              allocatedStudents={activeSchool?.allocatedStudents}
               academicYear={activeSchool?.academicYear || '2026-2027'}
               actor={activeUser}
               canWrite={access.canWrite}
               globalSearch={globalSearch}
               loading={data.loading}
+              onOpenExcelImport={() => openExcelImport('students')}
             />
           }
         />
@@ -223,9 +299,11 @@ export default function PrincipalPortal() {
               students={data.students}
               rooms={data.rooms}
               schoolId={schoolId}
+              schoolCode={schoolPrefix}
               academicYear={activeSchool?.academicYear || '2026-2027'}
               actor={activeUser}
               canWrite={access.canWrite}
+              onOpenExcelImport={() => openExcelImport('classes')}
             />
           }
         />
@@ -310,10 +388,23 @@ export default function PrincipalPortal() {
             />
           }
         />
-        <Route path="notifications" element={<NotificationsAndPreferencesView />} />
-        <Route path="profile" element={<ProfileSecurityView />} />
-        <Route path="*" element={<Navigate to="dashboard" replace />} />
+            <Route path="*" element={<Navigate to="dashboard" replace />} />
+          </>
+        )}
       </Routes>
+      {activeSchool && (
+        <ExcelImportModal
+          open={excelImportState.open}
+          onClose={() => setExcelImportState((prev) => ({ ...prev, open: false }))}
+          defaultTab={excelImportState.tab}
+          school={activeSchool}
+          classes={data.classes}
+          students={data.students}
+          teachers={data.teachers}
+          actor={activeUser}
+          canWrite={access.canWrite}
+        />
+      )}
     </DashboardShell>
   );
 }
@@ -324,9 +415,13 @@ export default function PrincipalPortal() {
 function PrincipalOverview({
   school,
   data,
+  canWrite,
+  onOpenExcelImport,
 }: {
   school: School | null;
   data: ReturnType<typeof useSchoolData>;
+  canWrite: boolean;
+  onOpenExcelImport: () => void;
 }) {
   const navigate = useNavigate();
   const [copiedCode, setCopiedCode] = useState(false);
@@ -396,6 +491,9 @@ function PrincipalOverview({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" size="sm" onClick={onOpenExcelImport} disabled={!canWrite}>
+              <FileSpreadsheet className="w-3.5 h-3.5" /> Import Excel
+            </Button>
             <Button variant="secondary" size="sm" onClick={() => navigate('/principal/access-codes')}>
               <KeyRound className="w-3.5 h-3.5" /> Access Codes
             </Button>
@@ -693,9 +791,8 @@ function PrincipalCoordinatorsView({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {coordinators.map((c) => {
-                const classNames = (c.assignedClassIds || [])
-                  .map((id) => classes.find((cl) => cl.id === id)?.code || id)
-                  .join(', ');
+                const assignedCls = classes.filter((cl) => (c.assignedClassIds || []).includes(cl.id));
+                const classSummary = formatGradeSummaryCompact(assignedCls, classes);
                 const granted = Object.entries(c.coordinatorPermissions || {})
                   .filter(([, v]) => Boolean(v))
                   .map(([k]) => k.replace(/^can/, ''));
@@ -712,7 +809,7 @@ function PrincipalCoordinatorsView({
                       </p>
                       <p className="text-xs text-slate-500">{c.email} · @{c.username}</p>
                     </td>
-                    <td className="py-3 px-4 text-xs font-mono text-slate-700">{classNames || 'None'}</td>
+                    <td className="py-3 px-4 text-xs font-medium text-slate-700 max-w-xs">{classSummary}</td>
                     <td className="py-3 px-4 text-xs text-slate-600">{granted.join(' · ') || 'Read-Only'}</td>
                     <td className="py-3 px-4"><StatusText status={c.status} /></td>
                     <td className="py-3 px-4 text-right">
@@ -771,33 +868,13 @@ function PrincipalCoordinatorsView({
             </div>
           )}
 
-          <div>
-            <p className="text-xs font-semibold text-slate-700 mb-2">Assigned Classes Scope</p>
-            <div className="flex flex-wrap gap-2">
-              {classes.map((cl) => {
-                const selected = form.assignedClassIds.includes(cl.id);
-                return (
-                  <button
-                    key={cl.id}
-                    type="button"
-                    onClick={() =>
-                      setForm({
-                        ...form,
-                        assignedClassIds: selected
-                          ? form.assignedClassIds.filter((x) => x !== cl.id)
-                          : [...form.assignedClassIds, cl.id],
-                      })
-                    }
-                    className={`px-3 py-1.5 text-xs rounded-lg border cursor-pointer ${
-                      selected ? 'bg-[#0B1528] text-white border-[#0B1528]' : 'bg-white text-slate-700 border-slate-300'
-                    }`}
-                  >
-                    {cl.code} · {cl.name}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <GradeDropdownClassPicker
+            classes={classes}
+            selectedClassIds={form.assignedClassIds}
+            onChange={(nextIds) => setForm({ ...form, assignedClassIds: nextIds })}
+            label="Assigned Classes Scope"
+            helperText="Pick a Grade to select all of its sections or toggle individual sections in A–Z order."
+          />
 
           <div className="pt-3 border-t border-slate-200 space-y-2">
             <p className="text-xs font-semibold text-slate-700">Explicit Permission Grants</p>
@@ -845,6 +922,7 @@ function PrincipalTeachersView({
   canWrite,
   globalSearch,
   loading,
+  onOpenExcelImport,
 }: {
   teachers: TeacherProfile[];
   classes: ReturnType<typeof useSchoolData>['classes'];
@@ -855,6 +933,7 @@ function PrincipalTeachersView({
   canWrite: boolean;
   globalSearch: string;
   loading: boolean;
+  onOpenExcelImport?: () => void;
 }) {
   const { pushToast } = useToast();
   const [modalOpen, setModalOpen] = useState(false);
@@ -935,6 +1014,20 @@ function PrincipalTeachersView({
           status: form.status,
           updatedAt: serverTimestamp(),
         });
+        if (editing.classTeacherOfClassId && editing.classTeacherOfClassId !== form.classTeacherOfClassId) {
+          await updateDoc(doc(db, 'classes', editing.classTeacherOfClassId), {
+            classTeacherId: '',
+            classTeacherName: '',
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+        }
+        if (form.classTeacherOfClassId) {
+          await updateDoc(doc(db, 'classes', form.classTeacherOfClassId), {
+            classTeacherId: editing.id,
+            classTeacherName: form.name.trim().slice(0, 120),
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+        }
         await upsertEmailDirectoryEntry({
           email: form.email.trim().toLowerCase(),
           schoolId,
@@ -1031,6 +1124,13 @@ function PrincipalTeachersView({
           linkedUid: prov.uid,
           createdBy: actor.uid,
         }).catch(() => undefined);
+        if (form.classTeacherOfClassId) {
+          await updateDoc(doc(db, 'classes', form.classTeacherOfClassId), {
+            classTeacherId: id,
+            classTeacherName: form.name.trim().slice(0, 120),
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+        }
         await updateDoc(doc(db, 'schools', schoolId), {
           teacherCount: teachers.length + 1,
           updatedAt: serverTimestamp(),
@@ -1059,12 +1159,20 @@ function PrincipalTeachersView({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <p className="text-xs text-slate-500">Manage faculty profiles, subject assignments, class-teacher duties, and secure login resets.</p>
-        <Button variant="primary" size="sm" onClick={openNew} disabled={!canWrite}>
-          <Plus className="w-4 h-4" />
-          Add Teacher
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {onOpenExcelImport && (
+            <Button variant="secondary" size="sm" onClick={onOpenExcelImport} disabled={!canWrite}>
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              Import Excel
+            </Button>
+          )}
+          <Button variant="primary" size="sm" onClick={openNew} disabled={!canWrite}>
+            <Plus className="w-4 h-4" />
+            Add Teacher
+          </Button>
+        </div>
       </div>
 
       {filtered.length === 0 ? (
@@ -1090,8 +1198,18 @@ function PrincipalTeachersView({
                     <p className="text-xs text-slate-500 font-mono">{t.staffId} · {t.email}</p>
                   </td>
                   <td className="py-3 px-4 text-xs text-slate-700">{(t.subjects || []).join(', ') || '—'}</td>
-                  <td className="py-3 px-4 text-xs font-mono text-slate-600">
-                    {(t.assignedClassIds || []).map((id) => classes.find((c) => c.id === id)?.code || id).join(', ') || 'Unassigned'}
+                  <td className="py-3 px-4 text-xs text-slate-700 max-w-xs">
+                    <p className="font-medium">
+                      {formatGradeSummaryCompact(
+                        classes.filter((c) => (t.assignedClassIds || []).includes(c.id)),
+                        classes,
+                      )}
+                    </p>
+                    {t.classTeacherOfClassId && (
+                      <p className="text-[11px] text-teal-700 mt-0.5">
+                        Class Teacher: {classes.find((c) => c.id === t.classTeacherOfClassId)?.name || t.classTeacherOfClassId}
+                      </p>
+                    )}
                   </td>
                   <td className="py-3 px-4 text-xs text-slate-500 tabular-nums">{t.joiningDate || '—'}</td>
                   <td className="py-3 px-4"><StatusText status={t.status} /></td>
@@ -1158,28 +1276,41 @@ function PrincipalTeachersView({
             </div>
           </div>
           <div>
-            <p className="text-xs font-medium text-slate-700 mb-1.5">Assigned Classes</p>
-            <div className="flex flex-wrap gap-2">
-              {classes.map((cl) => {
-                const sel = form.assignedClassIds.includes(cl.id);
-                return (
-                  <button
-                    key={cl.id}
-                    type="button"
-                    onClick={() =>
-                      setForm({
-                        ...form,
-                        assignedClassIds: sel ? form.assignedClassIds.filter((x) => x !== cl.id) : [...form.assignedClassIds, cl.id],
-                      })
-                    }
-                    className={`px-2.5 py-1 text-xs rounded-lg border cursor-pointer ${sel ? 'bg-[#0B1528] text-white border-[#0B1528]' : 'bg-white text-slate-700 border-slate-300'}`}
-                  >
-                    {cl.code}
-                  </button>
-                );
-              })}
-            </div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              Class Teacher Of <span className="font-normal text-slate-400">(Optional — links this teacher&apos;s code to student login packs)</span>
+            </label>
+            <select
+              value={form.classTeacherOfClassId}
+              onChange={(e) => {
+                const nextClassId = e.target.value;
+                const nextAssigned =
+                  nextClassId && !form.assignedClassIds.includes(nextClassId)
+                    ? [...form.assignedClassIds, nextClassId]
+                    : form.assignedClassIds;
+                setForm({ ...form, classTeacherOfClassId: nextClassId, assignedClassIds: nextAssigned });
+              }}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-teal-600"
+            >
+              <option value="">None (Subject Teacher Only)</option>
+              {groupClassesByGrade(classes).map((grp) => (
+                <optgroup key={grp.gradeLevel} label={grp.gradeLevel}>
+                  {grp.sections.map((cl) => (
+                    <option key={cl.id} value={cl.id}>
+                      {cl.name} ({cl.code})
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
           </div>
+
+          <GradeDropdownClassPicker
+            classes={classes}
+            selectedClassIds={form.assignedClassIds}
+            onChange={(nextIds) => setForm({ ...form, assignedClassIds: nextIds })}
+            label="Assigned Teaching Classes"
+            helperText="Select a Grade from the dropdown, then select all sections or pick specific A–Z sections."
+          />
           {!editing && (
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Temporary Password (optional)</label>

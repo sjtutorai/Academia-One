@@ -30,7 +30,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { Button, StatusText, useToast } from '../components/ui/Primitives';
 import { BrandLogo } from '../components/ui/BrandLogo';
-import type { SchoolJoinRequest } from '../types/models';
+import type { SchoolApplication, SchoolJoinRequest } from '../types/models';
 
 const STAFF_JOIN_ROLES = [
   {
@@ -90,13 +90,14 @@ export default function JoinSchoolPage() {
   const [copiedRef, setCopiedRef] = useState(false);
   const [rechecking, setRechecking] = useState(false);
   const [myRequests, setMyRequests] = useState<SchoolJoinRequest[]>([]);
+  const [mySchoolApps, setMySchoolApps] = useState<SchoolApplication[]>([]);
 
   const verifyCodeValue = useCallback(async (rawCode: string) => {
     setCodeError('');
     setResolved(null);
     const trimmed = rawCode.trim().toUpperCase().replace(/\s+/g, '');
     if (trimmed.length < 2) {
-      setCodeError('Enter your School Access Code (e.g., JSS0001, JSSC01, or JSST01).');
+      setCodeError('Enter your School Access Code.');
       return;
     }
     setVerifyingCode(true);
@@ -160,7 +161,18 @@ export default function JoinSchoolPage() {
       },
       () => undefined,
     );
-    return () => unsub();
+    const appQ = query(collection(db, 'schoolApplications'), where('applicantUid', '==', activeUser.uid));
+    const unsubApps = onSnapshot(
+      appQ,
+      (snap) => {
+        setMySchoolApps(snap.docs.map((d) => d.data() as SchoolApplication));
+      },
+      () => undefined,
+    );
+    return () => {
+      unsub();
+      unsubApps();
+    };
   }, [activeUser, navigate]);
 
   useEffect(() => {
@@ -456,8 +468,7 @@ export default function JoinSchoolPage() {
             <p className="text-xs text-slate-500 mt-1 max-w-xl">
               Signed in as <span className="font-mono text-slate-800">{activeUser.email}</span>. Students verify using
               all 4 codes (School, Class, Teacher, and personal Student Code obtained from their class teacher). Staff
-              enter their role code (e.g., <span className="font-mono">JSSC01</span> or{' '}
-              <span className="font-mono">JSST01</span>).
+              enter their assigned Coordinator or Teacher role code.
             </p>
           </div>
           <Button variant="secondary" size="sm" disabled={rechecking} onClick={handleRecheckEmail}>
@@ -465,6 +476,58 @@ export default function JoinSchoolPage() {
             {rechecking ? 'Checking…' : 'Re-check My Email'}
           </Button>
         </div>
+
+        {/* School Registration Application Status Banner (for Principals awaiting Main Head approval) */}
+        {mySchoolApps.length > 0 && (
+          <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold text-[#0F295C] uppercase tracking-wide">
+                  Your School Registration Application
+                </p>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Once the Main Head approves your school registration, click <strong>Activate Principal Portal</strong>{' '}
+                  below to open your Principal dashboard immediately.
+                </p>
+              </div>
+              <Button variant="primary" size="sm" disabled={rechecking} onClick={handleRecheckEmail}>
+                <RefreshCw className={`w-3.5 h-3.5 ${rechecking ? 'animate-spin' : ''}`} />
+                Activate Principal Portal
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {mySchoolApps.map((app) => (
+                <div
+                  key={app.id}
+                  className="bg-white border border-blue-200/80 rounded-lg p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs"
+                >
+                  <div>
+                    <p className="font-bold text-slate-900">{app.schoolName}</p>
+                    <p className="text-slate-500 mt-0.5">
+                      Ref: <span className="font-mono font-semibold text-slate-800">{app.applicationNumber}</span> ·
+                      Principal: {app.principalEmail}
+                      {app.approvedSchoolCode ? (
+                        <>
+                          {' '}
+                          · School Code:{' '}
+                          <span className="font-mono font-bold text-teal-700">{app.approvedSchoolCode}</span>
+                        </>
+                      ) : null}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <StatusText status={app.status} />
+                    <Link to={`/application-status?ref=${encodeURIComponent(app.applicationNumber)}`}>
+                      <Button variant="secondary" size="sm">
+                        Track Status
+                      </Button>
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Success Receipt */}
         {submittedRef ? (
@@ -605,7 +668,7 @@ export default function JoinSchoolPage() {
                           setStSchoolCode(e.target.value.toUpperCase().replace(/\s+/g, ''));
                           setVerifiedStudent(null);
                         }}
-                        placeholder="e.g., JSS"
+                        placeholder="Enter school code"
                         className="w-full font-mono text-sm uppercase border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600"
                       />
                     </div>
@@ -621,7 +684,7 @@ export default function JoinSchoolPage() {
                           setStClassCode(e.target.value.toUpperCase().replace(/\s+/g, ''));
                           setVerifiedStudent(null);
                         }}
-                        placeholder="e.g., C1A"
+                        placeholder="Enter class code"
                         className="w-full font-mono text-sm uppercase border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600"
                       />
                     </div>
@@ -637,7 +700,7 @@ export default function JoinSchoolPage() {
                           setStTeacherCode(e.target.value.toUpperCase().replace(/\s+/g, ''));
                           setVerifiedStudent(null);
                         }}
-                        placeholder="e.g., JSST01"
+                        placeholder="Enter class teacher code"
                         className="w-full font-mono text-sm uppercase border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600"
                       />
                     </div>
@@ -653,7 +716,7 @@ export default function JoinSchoolPage() {
                           setStStudentCode(e.target.value.toUpperCase().replace(/\s+/g, ''));
                           setVerifiedStudent(null);
                         }}
-                        placeholder="e.g., JSSS001"
+                        placeholder="Enter personal student code"
                         className="w-full font-mono text-sm uppercase border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600"
                       />
                     </div>
@@ -780,7 +843,7 @@ export default function JoinSchoolPage() {
                       id="school-code"
                       value={schoolCodeInput}
                       onChange={(e) => setSchoolCodeInput(e.target.value.toUpperCase().replace(/\s+/g, ''))}
-                      placeholder="e.g., JSSC01 (Coordinator) or JSST01 (Teacher)"
+                      placeholder="Enter Coordinator or Teacher code"
                       className="flex-1 font-mono text-sm uppercase border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600"
                     />
                     <Button type="submit" variant="navy" disabled={verifyingCode}>
@@ -934,7 +997,7 @@ export default function JoinSchoolPage() {
                           value={classOrDeptInfo}
                           onChange={(e) => setClassOrDeptInfo(e.target.value)}
                           placeholder={
-                            effectiveStaffRole === 'teacher' ? 'e.g., Physics & Mathematics' : 'e.g., Classes 1–4'
+                            effectiveStaffRole === 'teacher' ? 'Enter subjects or department' : 'Enter assigned grades or wing'
                           }
                           className="w-full text-sm border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:border-teal-600"
                         />

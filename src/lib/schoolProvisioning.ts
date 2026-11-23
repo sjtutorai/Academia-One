@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -7,6 +8,7 @@ import {
   where,
   writeBatch,
   setDoc,
+  updateDoc,
   serverTimestamp,
   type DocumentReference,
 } from 'firebase/firestore';
@@ -30,6 +32,7 @@ import type {
   School,
   SchoolApplication,
   SchoolCodeClassSlot,
+  StudentProfile,
   SubscriptionPlan,
 } from '../types/models';
 
@@ -130,7 +133,7 @@ export async function upsertEmailDirectoryEntry(params: {
 }): Promise<string> {
   const cleanEmail = params.email.trim().toLowerCase();
   const emailKey = emailToKey(cleanEmail);
-  const payload: Record<string, unknown> = {
+  const basePayload: Record<string, unknown> = {
     emailKey,
     email: cleanEmail,
     schoolId: params.schoolId,
@@ -144,15 +147,20 @@ export async function upsertEmailDirectoryEntry(params: {
     assignedClassIds: params.assignedClassIds || [],
     status: params.status || 'active',
     createdBy: params.createdBy,
-    createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
   if (params.coordinatorPermissions) {
-    payload.coordinatorPermissions = params.coordinatorPermissions;
+    basePayload.coordinatorPermissions = params.coordinatorPermissions;
   }
 
+  const ref = doc(db, 'emailDirectory', emailKey);
   try {
-    await setDoc(doc(db, 'emailDirectory', emailKey), payload);
+    const existing = await getDoc(ref);
+    if (existing.exists()) {
+      await updateDoc(ref, basePayload);
+    } else {
+      await setDoc(ref, { ...basePayload, createdAt: serverTimestamp() });
+    }
     return emailKey;
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `emailDirectory/${emailKey}`);
@@ -201,12 +209,21 @@ export async function upsertMemberAccessCode(params: {
     createdBy: params.createdBy,
   };
 
+  const ref = doc(db, 'memberAccessCodes', normalizedCode);
   try {
-    await setDoc(doc(db, 'memberAccessCodes', normalizedCode), {
-      ...record,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    const existing = await getDoc(ref);
+    if (existing.exists()) {
+      await updateDoc(ref, {
+        ...record,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(ref, {
+        ...record,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
     return record;
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `memberAccessCodes/${normalizedCode}`);
@@ -496,6 +513,38 @@ export async function provisionSchoolTenant(params: ProvisionSchoolParams): Prom
     handleFirestoreError(err, OperationType.WRITE, `schools/${schoolId}`);
   }
 
+  // 5b. Immediately promote applicant's user profile to Principal if they submitted the application as Principal
+  if (
+    params.application?.applicantUid &&
+    (params.application.applicantIsPrincipal ||
+      params.application.applicantEmail?.trim().toLowerCase() === cleanPrincipalEmail)
+  ) {
+    try {
+      const applicantUid = params.application.applicantUid;
+      const userSnap = await getDoc(doc(db, 'users', applicantUid));
+      if (userSnap.exists()) {
+        const u = userSnap.data() as PlatformUser;
+        if (u.role !== 'main_head') {
+          const promoteBatch = writeBatch(db);
+          promoteBatch.update(doc(db, 'users', applicantUid), {
+            role: 'principal',
+            schoolId,
+            status: 'active',
+            accessCode: principalCode,
+            updatedAt: serverTimestamp(),
+          });
+          promoteBatch.update(doc(db, 'schools', schoolId), {
+            principalUid: applicantUid,
+            updatedAt: serverTimestamp(),
+          });
+          await promoteBatch.commit();
+        }
+      }
+    } catch {
+      // Non-blocking: emailDirectory binding will also promote automatically on next sign-in
+    }
+  }
+
   // 6. Auto-provision selected Classes & Sections from classSectionPlan in chunks (<= 350 ops per batch)
   if (plannedClassRecords.length > 0) {
     const CHUNK_SIZE = 350;
@@ -653,8 +702,16 @@ export async function permanentlyDeleteSchoolCascade(params: {
   if (school.code) {
     refs.push(doc(db, 'schoolCodes', school.code.trim().toUpperCase()));
   }
+  if (school.principalEmail && school.principalEmail.trim().toLowerCase() !== 'sjtutorai@gmail.com') {
+    refs.push(doc(db, 'emailDirectory', emailToKey(school.principalEmail)));
+  }
+  if (school.principalUid) {
+    refs.push(doc(db, 'users', school.principalUid));
+    refs.push(doc(db, 'notificationPreferences', school.principalUid));
+  }
 
   const tenantCollections = [
+    'schoolCodes',
     'schoolSubscriptions',
     'memberAccessCodes',
     'classes',
@@ -671,6 +728,7 @@ export async function permanentlyDeleteSchoolCascade(params: {
     'learningMaterials',
     'announcements',
     'schoolJoinRequests',
+    'applicationStatuses',
     'emailDirectory',
     'notifications',
   ];
@@ -724,4 +782,154 @@ export async function permanentlyDeleteSchoolCascade(params: {
 
   return { deletedDocs };
 }
+
+/**
+ * Lets a Principal either Withdraw a student (keeps academic history, revokes access code)
+ * or Permanently Delete a student (removes student record, frees access code & email binding).
+ */
+export async function removeOrWithdrawStudent(params: {
+  mode: 'withdraw' | 'delete';
+  student: StudentProfile;
+  schoolId: string;
+  totalStudentsCount: number;
+  actorUid: string;
+  actorName: string;
+  actorRole: 'principal' | 'main_head' | 'coordinator';
+  academicYear: string;
+  reason?: string;
+}): Promise<void> {
+  const { mode, student, schoolId, totalStudentsCount, actorUid, actorName, actorRole, academicYear, reason } = params;
+  const studentCode = (student.accessCode || '').trim().toUpperCase();
+  const studentEmail = (student.email || '').trim().toLowerCase();
+
+  if (mode === 'withdraw') {
+    const note = (reason || 'Withdrawn by Principal').trim().slice(0, 240);
+    const nextHistory = [
+      ...(student.history || []),
+      {
+        date: new Date().toISOString().slice(0, 10),
+        event: `Withdrawn from ${student.className || 'school'}: ${note}`,
+        fromClass: student.className || '',
+        academicYear: academicYear || student.academicYear || 'Current',
+      },
+    ].slice(-40);
+    try {
+      await updateDoc(doc(db, 'students', student.id), {
+        status: 'withdrawn',
+        history: nextHistory,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `students/${student.id}`);
+    }
+
+    if (studentCode) {
+      try {
+        const codeRef = doc(db, 'memberAccessCodes', studentCode);
+        const codeSnap = await getDoc(codeRef);
+        if (codeSnap.exists()) {
+          const data = codeSnap.data() as MemberAccessCode;
+          if (data.schoolId === schoolId) {
+            await updateDoc(codeRef, {
+              status: 'revoked',
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+      } catch {
+        // Non-blocking if code doc does not exist
+      }
+    }
+
+    if (studentEmail) {
+      try {
+        const emailRef = doc(db, 'emailDirectory', emailToKey(studentEmail));
+        const emailSnap = await getDoc(emailRef);
+        if (emailSnap.exists()) {
+          const data = emailSnap.data() as EmailDirectoryEntry;
+          if (data.schoolId === schoolId && data.role === 'student') {
+            await updateDoc(emailRef, {
+              status: 'inactive',
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+      } catch {
+        // Non-blocking
+      }
+    }
+
+    await recordAuditLog({
+      schoolId,
+      actorUid,
+      actorName,
+      actorRole,
+      action: 'WITHDRAW_STUDENT',
+      targetType: 'student',
+      targetId: student.id,
+      targetLabel: student.name,
+      details: `Withdrew student ${student.name} (${student.admissionNumber || student.rollNumber}). ${note}`,
+    }).catch(() => undefined);
+    return;
+  }
+
+  // Permanent deletion
+  try {
+    await deleteDoc(doc(db, 'students', student.id));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `students/${student.id}`);
+  }
+
+  if (studentCode) {
+    try {
+      const codeRef = doc(db, 'memberAccessCodes', studentCode);
+      const codeSnap = await getDoc(codeRef);
+      if (codeSnap.exists()) {
+        const data = codeSnap.data() as MemberAccessCode;
+        if (data.schoolId === schoolId && (!data.linkedProfileId || data.linkedProfileId === student.id)) {
+          await deleteDoc(codeRef);
+        }
+      }
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  if (studentEmail) {
+    try {
+      const emailRef = doc(db, 'emailDirectory', emailToKey(studentEmail));
+      const emailSnap = await getDoc(emailRef);
+      if (emailSnap.exists()) {
+        const data = emailSnap.data() as EmailDirectoryEntry;
+        if (data.schoolId === schoolId && data.role === 'student') {
+          await deleteDoc(emailRef);
+        }
+      }
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  try {
+    await updateDoc(doc(db, 'schools', schoolId), {
+      studentCount: Math.max(0, totalStudentsCount - 1),
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-blocking
+  }
+
+  await recordAuditLog({
+    schoolId,
+    actorUid,
+    actorName,
+    actorRole,
+    action: 'DELETE_STUDENT',
+    targetType: 'student',
+    targetId: student.id,
+    targetLabel: student.name,
+    details: `Permanently deleted student record ${student.name} (${student.admissionNumber || student.rollNumber})${studentCode ? ` and released access code ${studentCode}` : ''}.`,
+  }).catch(() => undefined);
+}
+
 

@@ -45,6 +45,7 @@ import {
   StatusText,
   useToast,
 } from '../../components/ui/Primitives';
+import { AnimatedAssignedClassesPanel } from '../../components/shared/GradeClassControls';
 import { NotificationsAndPreferencesView } from '../../components/shared/NotificationsAndPreferencesView';
 import { ProfileSecurityView } from '../../components/shared/ProfileSecurityView';
 import type {
@@ -150,7 +151,15 @@ export default function CoordinatorPortal() {
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route
           path="dashboard"
-          element={<CoordinatorOverview user={activeUser} data={scopedData} perms={perms} search={globalSearch} />}
+          element={
+            <CoordinatorOverview
+              user={activeUser}
+              data={scopedData}
+              allSchoolClasses={data.classes}
+              perms={perms}
+              search={globalSearch}
+            />
+          }
         />
         <Route
           path="classes"
@@ -218,11 +227,13 @@ export default function CoordinatorPortal() {
 function CoordinatorOverview({
   user,
   data,
+  allSchoolClasses,
   perms,
   search,
 }: {
   user: PlatformUser;
   data: SchoolDataBundle;
+  allSchoolClasses: SchoolDataBundle['classes'];
   perms: NonNullable<PlatformUser['coordinatorPermissions']>;
   search: string;
 }) {
@@ -258,7 +269,7 @@ function CoordinatorOverview({
 
   return (
     <div className="space-y-6">
-      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
         <div>
           <p className="text-xs font-medium text-teal-700">Assigned Academic Scope</p>
           <h2 className="text-lg font-bold font-display text-slate-900 mt-0.5">
@@ -274,12 +285,12 @@ function CoordinatorOverview({
             ].join(' · ')}
           </p>
         </div>
-        <div className="text-right">
-          <p className="text-xs text-slate-500">Assigned Classes</p>
-          <p className="text-sm font-semibold text-slate-900 mt-0.5">
-            {data.classes.length > 0 ? data.classes.map((c) => c.name).join(' · ') : 'No classes assigned yet'}
-          </p>
-        </div>
+        <AnimatedAssignedClassesPanel
+          assignedClasses={data.classes}
+          allSchoolClasses={allSchoolClasses}
+          title="Assigned Classes by Grade"
+          emptyLabel="No classes assigned yet"
+        />
       </div>
 
       {data.classes.length === 0 ? (
@@ -719,7 +730,7 @@ function CoordinatorAttendanceView({
               type="text"
               value={editReason}
               onChange={(e) => setEditReason(e.target.value)}
-              placeholder="e.g., Medical excuse verified by guardian call"
+              placeholder="Enter reason for attendance adjustment"
               className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
             />
           </div>
@@ -1020,7 +1031,7 @@ function CoordinatorScheduleExamsView({
                 required
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="e.g., Unit Test 2"
+                placeholder="Enter exam title"
                 className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
               />
             </div>
@@ -1045,7 +1056,7 @@ function CoordinatorScheduleExamsView({
                 required
                 value={form.subjectName}
                 onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
-                placeholder="e.g., Mathematics"
+                placeholder="Enter subject name"
                 className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
               />
             </div>
@@ -1321,7 +1332,7 @@ function CoordinatorNoticesView({
               minLength={3}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder={mode === 'flag' ? 'e.g., Persistent absence trend in Grade 10-A' : 'e.g., Science Lab Submission Reminder'}
+              placeholder={mode === 'flag' ? 'Enter alert subject' : 'Enter announcement title'}
               className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"
             />
           </div>
