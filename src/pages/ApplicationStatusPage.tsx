@@ -129,7 +129,7 @@ export default function ApplicationStatusPage() {
 
       <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-10">
         <Link to="/" className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-900">
-          <ArrowLeft className="w-3.5 h-3.5" /> Back to AcademiaOne
+          <ArrowLeft className="w-3.5 h-3.5" /> Back to SJ Academia One
         </Link>
         <h1 className="text-2xl font-bold font-display text-slate-900 mt-2">Track Application Status</h1>
         <p className="text-sm text-slate-500 mt-1">

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'academiaone-shell-v1';
+const CACHE_NAME = 'sj-academia-one-shell-v2';
 const STATIC_ASSETS = [
   '/',
   '/manifest.webmanifest',
@@ -39,6 +39,8 @@ self.addEventListener('fetch', (event) => {
   // Never intercept cross-origin APIs (Firebase Auth, Firestore, Google Maps, fonts)
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/')) return;
+  // Never intercept Google site verification HTML files
+  if (/^\/google[a-z0-9]+\.html$/i.test(url.pathname)) return;
 
   // Network-first for HTML navigation so users always get fresh app state, with cached SPA fallback
   if (request.mode === 'navigate') {

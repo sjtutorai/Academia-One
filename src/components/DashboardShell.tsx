@@ -102,7 +102,7 @@ export function DashboardShell({
             <BrandLogo size="xs" tone="dark" />
           </Link>
         ) : (
-          <Link to="/" className="mx-auto hover:opacity-90 transition-opacity" title="AcademiaOne">
+          <Link to="/" className="mx-auto hover:opacity-90 transition-opacity" title="SJ Academia One">
             <BrandLogo size="xs" tone="dark" showWordmark={false} />
           </Link>
         )}

@@ -23,6 +23,7 @@ import {
   Check,
   RefreshCw,
   AlertTriangle,
+  Lock,
 } from 'lucide-react';
 import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
@@ -54,10 +55,16 @@ import { ProfileSecurityView } from '../../components/shared/ProfileSecurityView
 import { upsertEmailDirectoryEntry, upsertMemberAccessCode } from '../../lib/schoolProvisioning';
 import {
   deriveSchoolPrefix,
+  formatGradeSummaryCompact,
   formatMemberRoleCode,
   formatPrincipalCode,
+  groupClassesByGrade,
   sanitizePhoneDigits,
 } from '../../lib/schoolCodes';
+import {
+  CoordinatorGradeOnlyPicker,
+  TeacherSubjectClassPicker,
+} from '../../components/shared/GradeClassControls';
 import { PrincipalActivationGate } from './PrincipalActivationGate';
 import {
   PrincipalSetupWizardView,
@@ -79,7 +86,7 @@ import {
 } from './PrincipalAcademicsOps';
 import { ExcelImportModal } from '../../components/principal/ExcelImportModal';
 import type { ExcelImportKind } from '../../lib/excelImport';
-import type { CoordinatorPermissions, PlatformUser, School, TeacherProfile } from '../../types/models';
+import type { CoordinatorPermissions, PlatformUser, School, Subject, TeacherProfile } from '../../types/models';
 
 const PRINCIPAL_NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', path: '/principal/dashboard', icon: LayoutDashboard },
@@ -176,7 +183,7 @@ export default function PrincipalPortal() {
   return (
     <DashboardShell
       title={activeSchool?.name || 'School Administration'}
-      breadcrumb={`AcademiaOne / Principal / ${breadcrumbLabel}`}
+      breadcrumb={`SJ Academia One / Principal / ${breadcrumbLabel}`}
       navItems={PRINCIPAL_NAV}
       onGlobalSearch={setGlobalSearch}
       globalSearchPlaceholder="Search students, teachers, classes…"
@@ -232,6 +239,7 @@ export default function PrincipalPortal() {
             <PrincipalJoinRequestsView
               school={activeSchool}
               classes={data.classes}
+              subjects={data.subjects}
               actor={activeUser}
               canWrite={access.canWrite}
             />
@@ -258,6 +266,7 @@ export default function PrincipalPortal() {
             <PrincipalTeachersView
               teachers={data.teachers}
               classes={data.classes}
+              subjects={data.subjects}
               schoolId={schoolId}
               schoolCode={schoolPrefix}
               schoolName={activeSchool?.name || ''}
@@ -300,6 +309,7 @@ export default function PrincipalPortal() {
               rooms={data.rooms}
               schoolId={schoolId}
               schoolCode={schoolPrefix}
+              schoolName={activeSchool?.name || ''}
               academicYear={activeSchool?.academicYear || '2026-2027'}
               actor={activeUser}
               canWrite={access.canWrite}
@@ -609,13 +619,14 @@ function PrincipalCoordinatorsView({
 
   const openNew = () => {
     setEditing(null);
+    const firstGradeIds = groupClassesByGrade(classes)[0]?.sections.map((c) => c.id) || [];
     setForm({
       displayName: '',
       username: '',
       email: '',
       phone: '',
       tempPassword: '',
-      assignedClassIds: classes.slice(0, 2).map((c) => c.id),
+      assignedClassIds: firstGradeIds,
       perms: {
         canEditAttendance: false,
         canEditMarks: false,
@@ -868,12 +879,12 @@ function PrincipalCoordinatorsView({
             </div>
           )}
 
-          <GradeDropdownClassPicker
+          <CoordinatorGradeOnlyPicker
             classes={classes}
             selectedClassIds={form.assignedClassIds}
             onChange={(nextIds) => setForm({ ...form, assignedClassIds: nextIds })}
-            label="Assigned Classes Scope"
-            helperText="Pick a Grade to select all of its sections or toggle individual sections in A–Z order."
+            label="Assigned Classes (Whole Grades)"
+            helperText="Coordinators supervise whole grades. Selecting a class automatically includes every section in that grade."
           />
 
           <div className="pt-3 border-t border-slate-200 space-y-2">
@@ -915,6 +926,7 @@ function PrincipalCoordinatorsView({
 function PrincipalTeachersView({
   teachers,
   classes,
+  subjects,
   schoolId,
   schoolCode,
   schoolName,
@@ -926,6 +938,7 @@ function PrincipalTeachersView({
 }: {
   teachers: TeacherProfile[];
   classes: ReturnType<typeof useSchoolData>['classes'];
+  subjects: Subject[];
   schoolId: string;
   schoolCode: string;
   schoolName: string;
@@ -939,6 +952,7 @@ function PrincipalTeachersView({
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<TeacherProfile | null>(null);
   const [saving, setSaving] = useState(false);
+  const [selectedSubjectIds, setSelectedSubjectIds] = useState<string[]>([]);
   const [form, setForm] = useState({
     staffId: '',
     name: '',
@@ -958,10 +972,24 @@ function PrincipalTeachersView({
     return !q || `${t.name} ${t.staffId} ${t.email} ${(t.subjects || []).join(' ')}`.toLowerCase().includes(q);
   });
 
+  const computeNextTeacherCode = () => {
+    const used = new Set(
+      teachers.flatMap((t) => [t.staffId, t.accessCode || '']).map((v) => v.trim().toUpperCase()).filter(Boolean),
+    );
+    let seq = teachers.length + 1;
+    let candidate = formatMemberRoleCode(schoolCode, 'teacher', seq, Math.max(seq, 10));
+    while (used.has(candidate.toUpperCase()) && seq < teachers.length + 500) {
+      seq += 1;
+      candidate = formatMemberRoleCode(schoolCode, 'teacher', seq, Math.max(seq, 10));
+    }
+    return candidate;
+  };
+
   const openNew = () => {
     setEditing(null);
+    setSelectedSubjectIds([]);
     setForm({
-      staffId: `STF-${Math.floor(100 + Math.random() * 900)}`,
+      staffId: computeNextTeacherCode(),
       name: '',
       email: '',
       phone: '',
@@ -978,6 +1006,8 @@ function PrincipalTeachersView({
 
   const openEdit = (t: TeacherProfile) => {
     setEditing(t);
+    const mappedSubjectIds = subjects.filter((s) => s.teacherId === t.id).map((s) => s.id);
+    setSelectedSubjectIds(mappedSubjectIds);
     setForm({
       staffId: t.staffId,
       name: t.name,
@@ -999,21 +1029,64 @@ function PrincipalTeachersView({
     if (!canWrite) return;
     setSaving(true);
     try {
-      const subjectsList = form.subjectsCsv.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 20);
+      const cleanName = form.name.trim().slice(0, 120);
+      const selectedSubjectsObjs = subjects.filter((s) => selectedSubjectIds.includes(s.id));
+      const manualSubjects = form.subjectsCsv
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const subjectsList = Array.from(
+        new Set([...selectedSubjectsObjs.map((s) => s.name), ...manualSubjects]),
+      ).slice(0, 20);
+      const finalAssignedClassIds = Array.from(
+        new Set([
+          ...form.assignedClassIds,
+          ...selectedSubjectsObjs.map((s) => s.classId),
+          ...(form.classTeacherOfClassId ? [form.classTeacherOfClassId] : []),
+        ]),
+      ).filter(Boolean);
+
       if (editing) {
+        const immutableStaffId = editing.staffId || form.staffId.trim().slice(0, 32);
         await updateDoc(doc(db, 'teachers', editing.id), {
-          staffId: form.staffId.trim().slice(0, 32),
-          name: form.name.trim().slice(0, 120),
+          staffId: immutableStaffId,
+          name: cleanName,
           email: form.email.trim().toLowerCase().slice(0, 160),
           phone: form.phone.trim().slice(0, 32),
           subjects: subjectsList,
           qualifications: form.qualifications.trim().slice(0, 160),
           joiningDate: form.joiningDate.slice(0, 32),
-          assignedClassIds: form.assignedClassIds,
+          assignedClassIds: finalAssignedClassIds,
           classTeacherOfClassId: form.classTeacherOfClassId,
           status: form.status,
           updatedAt: serverTimestamp(),
         });
+
+        // Sync subject-level assignments in Firestore
+        const previouslyAssignedSubIds = new Set(
+          subjects.filter((s) => s.teacherId === editing.id).map((s) => s.id),
+        );
+        const nextSubSet = new Set(selectedSubjectIds);
+        for (const subId of selectedSubjectIds) {
+          const existingSub = subjects.find((s) => s.id === subId);
+          if (existingSub && (existingSub.teacherId !== editing.id || existingSub.teacherName !== cleanName)) {
+            await updateDoc(doc(db, 'subjects', subId), {
+              teacherId: editing.id,
+              teacherName: cleanName,
+              updatedAt: serverTimestamp(),
+            }).catch(() => undefined);
+          }
+        }
+        for (const prevSubId of previouslyAssignedSubIds) {
+          if (!nextSubSet.has(prevSubId)) {
+            await updateDoc(doc(db, 'subjects', prevSubId), {
+              teacherId: '',
+              teacherName: '',
+              updatedAt: serverTimestamp(),
+            }).catch(() => undefined);
+          }
+        }
+
         if (editing.classTeacherOfClassId && editing.classTeacherOfClassId !== form.classTeacherOfClassId) {
           await updateDoc(doc(db, 'classes', editing.classTeacherOfClassId), {
             classTeacherId: '',
@@ -1024,7 +1097,20 @@ function PrincipalTeachersView({
         if (form.classTeacherOfClassId) {
           await updateDoc(doc(db, 'classes', form.classTeacherOfClassId), {
             classTeacherId: editing.id,
-            classTeacherName: form.name.trim().slice(0, 120),
+            classTeacherName: cleanName,
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+        }
+        if (editing.userId) {
+          const primaryCls =
+            classes.find((c) => c.id === form.classTeacherOfClassId) ||
+            classes.find((c) => finalAssignedClassIds.includes(c.id));
+          await updateDoc(doc(db, 'users', editing.userId), {
+            displayName: cleanName,
+            classId: primaryCls?.id || '',
+            section: primaryCls?.section || '',
+            assignedClassIds: finalAssignedClassIds,
+            assignedSubjectIds: selectedSubjectIds.slice(0, 50),
             updatedAt: serverTimestamp(),
           }).catch(() => undefined);
         }
@@ -1033,24 +1119,19 @@ function PrincipalTeachersView({
           schoolId,
           schoolName,
           role: 'teacher',
-          displayName: form.name.trim(),
+          displayName: cleanName,
           linkedProfileId: editing.id,
-          assignedClassIds: form.assignedClassIds,
+          assignedClassIds: finalAssignedClassIds,
           createdBy: actor.uid,
         }).catch(() => undefined);
-        pushToast('success', `Updated ${form.name.trim()}.`);
+        pushToast('success', `Updated ${cleanName}.`);
       } else {
         const id = generateId('tch');
         const cleanEmail = form.email.trim().toLowerCase();
-        const teacherCode = formatMemberRoleCode(
-          schoolCode,
-          'teacher',
-          teachers.length + 1,
-          Math.max(teachers.length + 1, 10),
-        );
+        const teacherCode = (form.staffId.trim() || computeNextTeacherCode()).slice(0, 32);
         const primaryCls =
           classes.find((c) => c.id === form.classTeacherOfClassId) ||
-          classes.find((c) => form.assignedClassIds.includes(c.id));
+          classes.find((c) => finalAssignedClassIds.includes(c.id));
         const prov = await provisionAuthAccountSecondary(
           cleanEmail,
           form.tempPassword.trim() || `Teach#${Math.random().toString(36).slice(2, 9)}`,
@@ -1059,7 +1140,7 @@ function PrincipalTeachersView({
           uid: prov.uid,
           username: cleanEmail.split('@')[0].slice(0, 64),
           email: cleanEmail,
-          displayName: form.name.trim().slice(0, 120),
+          displayName: cleanName,
           role: 'teacher',
           schoolId,
           status: 'active',
@@ -1068,8 +1149,8 @@ function PrincipalTeachersView({
           accessCode: teacherCode,
           classId: primaryCls?.id || '',
           section: primaryCls?.section || '',
-          assignedClassIds: form.assignedClassIds,
-          assignedSubjectIds: [],
+          assignedClassIds: finalAssignedClassIds,
+          assignedSubjectIds: selectedSubjectIds.slice(0, 50),
           coordinatorPermissions: {},
           isDemo: false,
           createdAt: serverTimestamp(),
@@ -1079,14 +1160,14 @@ function PrincipalTeachersView({
           id,
           schoolId,
           userId: prov.uid,
-          staffId: (form.staffId.trim() || teacherCode).slice(0, 32),
-          name: form.name.trim().slice(0, 120),
+          staffId: teacherCode,
+          name: cleanName,
           email: cleanEmail,
           phone: form.phone.trim().slice(0, 32),
           subjects: subjectsList,
           qualifications: form.qualifications.trim().slice(0, 160),
           joiningDate: form.joiningDate.slice(0, 32),
-          assignedClassIds: form.assignedClassIds,
+          assignedClassIds: finalAssignedClassIds,
           classTeacherOfClassId: form.classTeacherOfClassId,
           accessCode: teacherCode,
           status: form.status,
@@ -1094,15 +1175,22 @@ function PrincipalTeachersView({
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+        for (const subId of selectedSubjectIds) {
+          await updateDoc(doc(db, 'subjects', subId), {
+            teacherId: id,
+            teacherName: cleanName,
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+        }
         await upsertEmailDirectoryEntry({
           email: cleanEmail,
           schoolId,
           schoolName,
           role: 'teacher',
-          displayName: form.name.trim(),
+          displayName: cleanName,
           accessCode: teacherCode,
           linkedProfileId: id,
-          assignedClassIds: form.assignedClassIds,
+          assignedClassIds: finalAssignedClassIds,
           createdBy: actor.uid,
         }).catch(() => undefined);
         await upsertMemberAccessCode({
@@ -1111,14 +1199,14 @@ function PrincipalTeachersView({
           schoolCode,
           schoolName,
           role: 'teacher',
-          memberName: form.name.trim(),
+          memberName: cleanName,
           email: cleanEmail,
           classId: primaryCls?.id || '',
           classCode: primaryCls?.code || '',
           className: primaryCls?.name || '',
           teacherId: id,
           teacherCode,
-          teacherName: form.name.trim(),
+          teacherName: cleanName,
           status: 'active',
           linkedProfileId: id,
           linkedUid: prov.uid,
@@ -1127,7 +1215,7 @@ function PrincipalTeachersView({
         if (form.classTeacherOfClassId) {
           await updateDoc(doc(db, 'classes', form.classTeacherOfClassId), {
             classTeacherId: id,
-            classTeacherName: form.name.trim().slice(0, 120),
+            classTeacherName: cleanName,
             updatedAt: serverTimestamp(),
           }).catch(() => undefined);
         }
@@ -1143,9 +1231,9 @@ function PrincipalTeachersView({
           action: 'CREATE_TEACHER',
           targetType: 'teacher',
           targetId: id,
-          targetLabel: `${form.name.trim()} (${teacherCode})`,
+          targetLabel: `${cleanName} (${teacherCode})`,
         }).catch(() => undefined);
-        pushToast('success', `Teacher ${form.name.trim()} added with Code ${teacherCode}. ${prov.warning || ''}`);
+        pushToast('success', `Teacher ${cleanName} added with Code ${teacherCode}. ${prov.warning || ''}`);
       }
       setModalOpen(false);
     } catch (err) {
@@ -1182,7 +1270,7 @@ function PrincipalTeachersView({
           <table className="w-full text-left border-collapse text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
-                <th className="py-3 px-4 font-semibold">Staff ID & Name</th>
+                <th className="py-3 px-4 font-semibold">Staff ID &amp; Name</th>
                 <th className="py-3 px-4 font-semibold">Subjects</th>
                 <th className="py-3 px-4 font-semibold">Assigned Classes</th>
                 <th className="py-3 px-4 font-semibold">Joining Date</th>
@@ -1191,45 +1279,56 @@ function PrincipalTeachersView({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((t) => (
-                <tr key={t.id} className="hover:bg-slate-50/70">
-                  <td className="py-3 px-4">
-                    <p className="font-semibold text-slate-900">{t.name}</p>
-                    <p className="text-xs text-slate-500 font-mono">{t.staffId} · {t.email}</p>
-                  </td>
-                  <td className="py-3 px-4 text-xs text-slate-700">{(t.subjects || []).join(', ') || '—'}</td>
-                  <td className="py-3 px-4 text-xs text-slate-700 max-w-xs">
-                    <p className="font-medium">
-                      {formatGradeSummaryCompact(
-                        classes.filter((c) => (t.assignedClassIds || []).includes(c.id)),
-                        classes,
-                      )}
-                    </p>
-                    {t.classTeacherOfClassId && (
-                      <p className="text-[11px] text-teal-700 mt-0.5">
-                        Class Teacher: {classes.find((c) => c.id === t.classTeacherOfClassId)?.name || t.classTeacherOfClassId}
+              {filtered.map((t) => {
+                const teacherSubjects = subjects.filter((s) => s.teacherId === t.id);
+                const subjectSummary = Array.from(
+                  new Set([...teacherSubjects.map((s) => s.name), ...(t.subjects || [])]),
+                );
+                const assignedIds = new Set([
+                  ...(t.assignedClassIds || []),
+                  ...teacherSubjects.map((s) => s.classId),
+                  ...(t.classTeacherOfClassId ? [t.classTeacherOfClassId] : []),
+                ]);
+                return (
+                  <tr key={t.id} className="hover:bg-slate-50/70">
+                    <td className="py-3 px-4">
+                      <p className="font-semibold text-slate-900">{t.name}</p>
+                      <p className="text-xs text-slate-500 font-mono">{t.staffId} · {t.email}</p>
+                    </td>
+                    <td className="py-3 px-4 text-xs text-slate-700">{subjectSummary.join(', ') || '—'}</td>
+                    <td className="py-3 px-4 text-xs text-slate-700 max-w-xs">
+                      <p className="font-medium">
+                        {formatGradeSummaryCompact(
+                          classes.filter((c) => assignedIds.has(c.id)),
+                          classes,
+                        )}
                       </p>
-                    )}
-                  </td>
-                  <td className="py-3 px-4 text-xs text-slate-500 tabular-nums">{t.joiningDate || '—'}</td>
-                  <td className="py-3 px-4"><StatusText status={t.status} /></td>
-                  <td className="py-3 px-4 text-right">
-                    <div className="inline-flex items-center gap-1.5">
-                      <Button variant="secondary" size="sm" onClick={() => openEdit(t)} disabled={!canWrite}>Edit</Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={async () => {
-                          await sendPasswordResetEmail(auth, t.email).catch(() => undefined);
-                          pushToast('success', `Password reset link sent to ${t.email}.`);
-                        }}
-                      >
-                        <KeyRound className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                      {t.classTeacherOfClassId && (
+                        <p className="text-[11px] text-teal-700 mt-0.5">
+                          Class Teacher: {classes.find((c) => c.id === t.classTeacherOfClassId)?.name || t.classTeacherOfClassId}
+                        </p>
+                      )}
+                    </td>
+                    <td className="py-3 px-4 text-xs text-slate-500 tabular-nums">{t.joiningDate || '—'}</td>
+                    <td className="py-3 px-4"><StatusText status={t.status} /></td>
+                    <td className="py-3 px-4 text-right">
+                      <div className="inline-flex items-center gap-1.5">
+                        <Button variant="secondary" size="sm" onClick={() => openEdit(t)} disabled={!canWrite}>Edit</Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={async () => {
+                            await sendPasswordResetEmail(auth, t.email).catch(() => undefined);
+                            pushToast('success', `Password reset link sent to ${t.email}.`);
+                          }}
+                        >
+                          <KeyRound className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1239,8 +1338,19 @@ function PrincipalTeachersView({
         <form onSubmit={handleSave} className="space-y-4">
           <div className="grid sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Staff ID *</label>
-              <input type="text" required value={form.staffId} onChange={(e) => setForm({ ...form, staffId: e.target.value })} className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg" />
+              <label className="flex items-center justify-between text-xs font-medium text-slate-700 mb-1">
+                <span>Staff ID *</span>
+                <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-400">
+                  <Lock className="w-3 h-3" /> Locked
+                </span>
+              </label>
+              <input
+                type="text"
+                readOnly
+                value={form.staffId}
+                title="Staff ID is system-assigned and cannot be modified."
+                className="w-full px-3 py-2 text-sm font-mono bg-slate-100 text-slate-600 border border-slate-200 rounded-lg cursor-not-allowed select-all"
+              />
             </div>
             <div className="sm:col-span-2">
               <label className="block text-xs font-medium text-slate-700 mb-1">Full Name *</label>
@@ -1259,7 +1369,7 @@ function PrincipalTeachersView({
           </div>
           <div className="grid sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Subjects (comma-separated)</label>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Subject Specialties</label>
               <input type="text" value={form.subjectsCsv} onChange={(e) => setForm({ ...form, subjectsCsv: e.target.value })} placeholder="Mathematics, Physics" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
             </div>
             <div>
@@ -1304,12 +1414,14 @@ function PrincipalTeachersView({
             </select>
           </div>
 
-          <GradeDropdownClassPicker
+          <TeacherSubjectClassPicker
             classes={classes}
+            subjects={subjects}
+            editingTeacherId={editing?.id}
+            selectedSubjectIds={selectedSubjectIds}
+            onChangeSubjectIds={setSelectedSubjectIds}
             selectedClassIds={form.assignedClassIds}
-            onChange={(nextIds) => setForm({ ...form, assignedClassIds: nextIds })}
-            label="Assigned Teaching Classes"
-            helperText="Select a Grade from the dropdown, then select all sections or pick specific A–Z sections."
+            onChangeClassIds={(nextIds) => setForm({ ...form, assignedClassIds: nextIds })}
           />
           {!editing && (
             <div>

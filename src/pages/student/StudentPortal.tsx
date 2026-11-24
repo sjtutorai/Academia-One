@@ -247,7 +247,7 @@ function UnassignedStudentView({ user }: { user: PlatformUser }) {
     <div className="bg-white border border-slate-200 rounded-xl p-8 max-w-2xl">
       <p className="text-xs font-semibold text-teal-700">Account Active · Awaiting School Link</p>
       <h2 className="text-xl font-bold font-display text-slate-900 mt-1">
-        Welcome to AcademiaOne, {user.displayName}
+        Welcome to SJ Academia One, {user.displayName}
       </h2>
       <p className="text-sm text-slate-600 mt-3 leading-relaxed">
         Your account ({user.email}) is verified and active, but it has not yet been enrolled in a school tenant or class section.
@@ -916,7 +916,7 @@ function StudentMaterialsView({ data, search }: { data: SchoolDataBundle; search
       '',
       mat.description || '',
       '',
-      mat.contentPreview || 'Study material metadata exported from AcademiaOne.',
+      mat.contentPreview || 'Study material metadata exported from SJ Academia One.',
     ].join('\n');
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
     const url = URL.createObjectURL(blob);

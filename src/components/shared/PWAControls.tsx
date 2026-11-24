@@ -40,7 +40,7 @@ export function PWAInstallButton({
         type="button"
         onClick={handleClick}
         className={`${buttonClasses} ${className}`}
-        aria-label="Install AcademiaOne app"
+        aria-label="Install SJ Academia One app"
       >
         {isIOS && !isInstallable ? (
           <Smartphone className="w-4 h-4 shrink-0" />
@@ -64,10 +64,10 @@ export function PWAInstallButton({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 id="ios-install-title" className="text-base font-bold font-display text-[#0F295C]">
-                  Install AcademiaOne on iPhone or iPad
+                  Install SJ Academia One on iPhone or iPad
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Add AcademiaOne to your home screen for full-screen access.
+                  Add SJ Academia One to your home screen for full-screen access.
                 </p>
               </div>
               <button

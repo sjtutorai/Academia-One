@@ -35,16 +35,16 @@ import type { PlatformSettings } from '../types/models';
 
 const FAQS = [
   {
-    q: 'Is AcademiaOne completely free for schools?',
+    q: 'Is SJ Academia One completely free for schools?',
     a: 'Yes. Every verified school receives 100% free unlimited access to all five role portals, attendance tracking, conflict-checked timetables, examinations, homework submissions, CSV imports, and analytics—with no paid tiers or hidden fees.',
   },
   {
-    q: 'How does AcademiaOne isolate data between independent schools?',
+    q: 'How does SJ Academia One isolate data between independent schools?',
     a: 'Every school-owned document—students, teachers, classes, timetables, exams, marks, homework, and announcements—carries an immutable schoolId tenant key. Firestore security rules validate the signed-in user profile against that schoolId on every read and write.',
   },
   {
     q: 'Why is there no role dropdown on the Sign In screen?',
-    a: 'AcademiaOne uses a single unified login page with Username/Email and Password or Google Sign-In. After authentication, the platform resolves your verified role and school assignment from Firestore and automatically directs you to the authorized portal.',
+    a: 'SJ Academia One uses a single unified login page with Username/Email and Password or Google Sign-In. After authentication, the platform resolves your verified role and school assignment from Firestore and automatically directs you to the authorized portal.',
   },
   {
     q: 'How do notifications and user preferences work?',
@@ -62,7 +62,7 @@ export default function LandingPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [settings, setSettings] = useState<Partial<PlatformSettings>>({
-    platformName: 'AcademiaOne',
+    platformName: 'SJ Academia One',
     supportEmail: 'support@academiaone.edu',
     supportPhone: '+1 (800) 555-0199',
     allowPublicRegistration: true,

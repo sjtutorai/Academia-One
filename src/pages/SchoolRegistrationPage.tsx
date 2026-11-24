@@ -901,7 +901,7 @@ export default function SchoolRegistrationPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
           <div>
             <Link to="/" className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-900 transition-colors">
-              <ArrowLeft className="w-3.5 h-3.5" /> Back to AcademiaOne
+              <ArrowLeft className="w-3.5 h-3.5" /> Back to SJ Academia One
             </Link>
             <h1 className="text-2xl font-bold font-display text-slate-900 mt-1">Register Your School</h1>
             <p className="text-sm text-slate-500 mt-0.5">
@@ -1349,7 +1349,7 @@ export default function SchoolRegistrationPage() {
                             className="mt-0.5 rounded border-slate-300 text-teal-600"
                           />
                           <span>
-                            I consent to AcademiaOne contacting me at <strong>{effectiveApplicantEmail}</strong> regarding
+                            I consent to SJ Academia One contacting me at <strong>{effectiveApplicantEmail}</strong> regarding
                             this school registration and accept the{' '}
                             <Link to="/privacy" target="_blank" className="text-teal-700 underline">
                               Privacy Policy
@@ -2064,7 +2064,7 @@ export default function SchoolRegistrationPage() {
                       </div>
                       <p className="text-[11px] text-teal-800 leading-relaxed">
                         Every role gets separate sequential codes upon approval. When students or staff enter their code
-                        during Sign Up, AcademiaOne automatically identifies their school, role, and assigned class.
+                        during Sign Up, SJ Academia One automatically identifies their school, role, and assigned class.
                       </p>
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 pt-1 text-xs">
                         <div className="bg-white border border-teal-200/80 rounded-lg p-2.5">
@@ -2203,7 +2203,7 @@ export default function SchoolRegistrationPage() {
                       className="mt-0.5 rounded border-slate-300 text-teal-600"
                     />
                     <span>
-                      I confirm all submitted institutional details are accurate, accept the AcademiaOne{' '}
+                      I confirm all submitted institutional details are accurate, accept the SJ Academia One{' '}
                       <Link to="/terms" target="_blank" className="text-teal-700 underline">
                         Terms of Service
                       </Link>{' '}

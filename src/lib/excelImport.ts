@@ -187,7 +187,7 @@ export function downloadPrincipalExcelTemplate(kind: ExcelImportKind, sampleClas
       { wch: 24 },
     ];
     XLSX.utils.book_append_sheet(wb, ws, 'Students');
-    XLSX.writeFile(wb, 'AcademiaOne_Students_Template.xlsx');
+    XLSX.writeFile(wb, 'SJ_Academia_One_Students_Template.xlsx');
     return;
   }
 
@@ -226,7 +226,7 @@ export function downloadPrincipalExcelTemplate(kind: ExcelImportKind, sampleClas
       { wch: 18 },
     ];
     XLSX.utils.book_append_sheet(wb, ws, 'Teachers');
-    XLSX.writeFile(wb, 'AcademiaOne_Teachers_Template.xlsx');
+    XLSX.writeFile(wb, 'SJ_Academia_One_Teachers_Template.xlsx');
     return;
   }
 
@@ -238,7 +238,7 @@ export function downloadPrincipalExcelTemplate(kind: ExcelImportKind, sampleClas
   const ws = XLSX.utils.json_to_sheet(rows);
   ws['!cols'] = [{ wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 24 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Classes');
-  XLSX.writeFile(wb, 'AcademiaOne_Classes_Template.xlsx');
+  XLSX.writeFile(wb, 'SJ_Academia_One_Classes_Template.xlsx');
 }
 
 /**

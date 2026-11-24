@@ -21,6 +21,9 @@ import {
   Check,
   Download,
   XCircle,
+  Eye,
+  FileSpreadsheet,
+  FileText,
 } from 'lucide-react';
 import {
   collection,
@@ -37,10 +40,23 @@ import { db, generateId, handleFirestoreError, OperationType, formatFirestoreDat
 import { getSchoolAccessMode, computeLetterGrade } from '../../lib/permissions';
 import { recordAuditLog } from '../../lib/audit';
 import { exportToCsv } from '../../lib/csv';
+import {
+  sortClassesInOrder,
+  buildStudentFourCodePack,
+  formatStudentFourCodeMessage,
+  type StudentFourCodePack,
+} from '../../lib/schoolCodes';
+import {
+  downloadStudentCodesExcel,
+  downloadStudentCodesPdf,
+  downloadStudentCodesCsv,
+  exportStudentCodeRowsExcel,
+  exportStudentCodeRowsPdf,
+} from '../../lib/studentCodeExport';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSchoolData, type SchoolDataBundle } from '../../hooks/useSchoolData';
 import { DashboardShell, type NavItem } from '../../components/DashboardShell';
-import { AnimatedAssignedClassesPanel } from '../../components/shared/GradeClassControls';
+import { AnimatedAssignedClassesPanel, StudentFourCodesModal } from '../../components/shared/GradeClassControls';
 import {
   Button,
   EmptyState,
@@ -62,6 +78,7 @@ import type {
   MemberAccessCode,
   PlatformUser,
   SchoolJoinRequest,
+  Subject,
   TeacherProfile,
 } from '../../types/models';
 
@@ -176,7 +193,19 @@ export default function TeacherPortal() {
           }
         />
         <Route path="timetable" element={<TeacherTimetableView data={scopedData} />} />
-        <Route path="classes" element={<TeacherClassesView data={scopedData} search={globalSearch} />} />
+        <Route
+          path="classes"
+          element={
+            <TeacherClassesView
+              data={scopedData}
+              allSubjects={data.subjects}
+              allTeachers={data.teachers}
+              schoolCode={activeSchool?.schoolPrefix || activeSchool?.code || ''}
+              schoolName={activeSchool?.name || 'SJ Academia One'}
+              search={globalSearch}
+            />
+          }
+        />
         <Route
           path="student-codes"
           element={
@@ -435,18 +464,96 @@ function TeacherTimetableView({ data }: { data: SchoolDataBundle }) {
 // ============================================================================
 // 3. Assigned Classes & Roster
 // ============================================================================
-function TeacherClassesView({ data, search }: { data: SchoolDataBundle; search: string }) {
-  const [selectedClassId, setSelectedClassId] = useState(data.classes[0]?.id || '');
-  const activeClassId = selectedClassId || data.classes[0]?.id || '';
+function TeacherClassesView({
+  data,
+  allSubjects,
+  allTeachers,
+  schoolCode,
+  schoolName,
+  search,
+}: {
+  data: SchoolDataBundle;
+  allSubjects: Subject[];
+  allTeachers: TeacherProfile[];
+  schoolCode: string;
+  schoolName: string;
+  search: string;
+}) {
+  const { pushToast } = useToast();
+  const sortedClasses = useMemo(() => sortClassesInOrder(data.classes), [data.classes]);
+  const [selectedClassId, setSelectedClassId] = useState(sortedClasses[0]?.id || '');
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [fourCodesPack, setFourCodesPack] = useState<StudentFourCodePack | null>(null);
+
+  const activeClassId =
+    selectedClassId && sortedClasses.some((c) => c.id === selectedClassId)
+      ? selectedClassId
+      : sortedClasses[0]?.id || '';
+  const activeClass = sortedClasses.find((c) => c.id === activeClassId);
   const q = search.trim().toLowerCase();
 
-  const roster = data.students.filter(
-    (s) =>
-      s.classId === activeClassId &&
-      (!q || s.name.toLowerCase().includes(q) || s.rollNumber.toLowerCase().includes(q)),
+  const classTeacher = useMemo(() => {
+    if (!activeClass) return undefined;
+    return allTeachers.find(
+      (t) =>
+        (activeClass.classTeacherId && t.id === activeClass.classTeacherId) ||
+        t.classTeacherOfClassId === activeClass.id,
+    );
+  }, [activeClass, allTeachers]);
+
+  const classSubjects = useMemo(
+    () =>
+      allSubjects
+        .filter((s) => s.classId === activeClassId)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [allSubjects, activeClassId],
   );
 
-  if (data.classes.length === 0) {
+  const roster = useMemo(
+    () =>
+      data.students
+        .filter(
+          (s) =>
+            s.classId === activeClassId &&
+            (!q ||
+              s.name.toLowerCase().includes(q) ||
+              s.rollNumber.toLowerCase().includes(q) ||
+              (s.accessCode || '').toLowerCase().includes(q)),
+        )
+        .sort((a, b) => a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true })),
+    [data.students, activeClassId, q],
+  );
+
+  const handleCopyFourCodes = (pack: StudentFourCodePack) => {
+    const key = pack.studentCode || pack.studentName;
+    navigator.clipboard?.writeText(formatStudentFourCodeMessage(pack));
+    setCopiedCode(key);
+    pushToast('success', `All 4 login codes copied for ${pack.studentName}.`);
+    setTimeout(() => setCopiedCode((prev) => (prev === key ? null : prev)), 2000);
+  };
+
+  const handleDownload = (format: 'excel' | 'pdf' | 'csv') => {
+    if (!activeClass) return;
+    const params = {
+      cls: activeClass,
+      students: data.students,
+      teachers: allTeachers,
+      schoolCode,
+      schoolName,
+    };
+    if (format === 'excel') {
+      const count = downloadStudentCodesExcel(params);
+      pushToast('success', `Downloaded Excel sheet with ${count} student codes for ${activeClass.name}.`);
+    } else if (format === 'pdf') {
+      const count = downloadStudentCodesPdf(params);
+      pushToast('success', `Prepared printable PDF for ${activeClass.name} (${count} students).`);
+    } else {
+      const count = downloadStudentCodesCsv(params);
+      pushToast('success', `Downloaded CSV with ${count} student codes for ${activeClass.name}.`);
+    }
+  };
+
+  if (sortedClasses.length === 0) {
     return (
       <EmptyState
         title="No Assigned Classes Yet"
@@ -458,12 +565,12 @@ function TeacherClassesView({ data, search }: { data: SchoolDataBundle; search: 
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap gap-2">
-        {data.classes.map((cls) => (
+        {sortedClasses.map((cls) => (
           <button
             key={cls.id}
             type="button"
             onClick={() => setSelectedClassId(cls.id)}
-            className={`px-3.5 py-2 rounded-lg text-xs font-semibold border cursor-pointer ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-semibold border cursor-pointer transition-colors ${
               activeClassId === cls.id
                 ? 'bg-[#0B1528] text-white border-[#0B1528]'
                 : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
@@ -474,9 +581,82 @@ function TeacherClassesView({ data, search }: { data: SchoolDataBundle; search: 
         ))}
       </div>
 
+      {/* Assigned Faculty Card: Class Teacher + Subject Teachers */}
+      {activeClass && (
+        <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold text-teal-700">
+                {activeClass.name} · Code <span className="font-mono">{activeClass.code}</span>
+                {activeClass.roomName ? ` · Room ${activeClass.roomName}` : ''}
+              </p>
+              <h3 className="text-base font-bold font-display text-slate-900 mt-0.5">
+                Assigned Class & Subject Teachers
+              </h3>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => handleDownload('excel')}>
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
+                Excel (.xlsx)
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => handleDownload('pdf')}>
+                <FileText className="w-3.5 h-3.5 text-rose-700" />
+                PDF
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => handleDownload('csv')}>
+                <Download className="w-3.5 h-3.5 text-slate-700" />
+                CSV
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="rounded-lg border border-blue-200 bg-blue-50/60 px-3.5 py-2.5">
+              <p className="text-[11px] font-semibold text-blue-700 uppercase tracking-wide">Class Teacher</p>
+              <p className="text-sm font-bold text-slate-900 mt-0.5">
+                {classTeacher?.name || activeClass.classTeacherName || 'Not Assigned'}
+              </p>
+              {classTeacher?.accessCode && (
+                <p className="text-[11px] font-mono text-blue-800 mt-0.5">Code: {classTeacher.accessCode}</p>
+              )}
+            </div>
+
+            {classSubjects.length === 0 ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 sm:col-span-1 lg:col-span-2 flex items-center">
+                <p className="text-xs text-slate-500">
+                  No subject teachers assigned to this section yet.
+                </p>
+              </div>
+            ) : (
+              classSubjects.map((sub) => {
+                const subTeacher = allTeachers.find((t) => t.id === sub.teacherId);
+                return (
+                  <div key={sub.id} className="rounded-lg border border-slate-200 bg-slate-50/70 px-3.5 py-2.5">
+                    <p className="text-[11px] font-semibold text-slate-500">
+                      {sub.name} Teacher
+                    </p>
+                    <p className="text-sm font-semibold text-slate-900 mt-0.5">
+                      {subTeacher?.name || sub.teacherName || 'Unassigned'}
+                    </p>
+                    <p className="text-[11px] font-mono text-slate-500 mt-0.5">{sub.code}</p>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <h3 className="text-sm font-bold font-display text-slate-900">Class Roster ({roster.length} students)</h3>
+        <div className="px-5 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-bold font-display text-slate-900">
+              Class Roster & Student Access Codes ({roster.length} students)
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Download student login codes in Excel, PDF, or CSV format, or copy individual 4-code packs.
+            </p>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -485,28 +665,73 @@ function TeacherClassesView({ data, search }: { data: SchoolDataBundle; search: 
                 <th className="py-2.5 px-4 font-semibold">Roll</th>
                 <th className="py-2.5 px-4 font-semibold">Student Name</th>
                 <th className="py-2.5 px-4 font-semibold">Admission #</th>
+                <th className="py-2.5 px-4 font-semibold">Student Code</th>
                 <th className="py-2.5 px-4 font-semibold">Guardian Contact</th>
                 <th className="py-2.5 px-4 font-semibold">Status</th>
+                <th className="py-2.5 px-4 font-semibold text-right">4-Code Pack</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {roster.map((st) => (
-                <tr key={st.id} className="hover:bg-slate-50/70">
-                  <td className="py-3 px-4 font-mono text-xs tabular-nums text-slate-600">{st.rollNumber}</td>
-                  <td className="py-3 px-4 font-medium text-slate-900">{st.name}</td>
-                  <td className="py-3 px-4 font-mono text-xs text-slate-600">{st.admissionNumber}</td>
-                  <td className="py-3 px-4 text-xs text-slate-600">
-                    {st.guardianName || '—'} {st.guardianPhone ? `· ${st.guardianPhone}` : ''}
-                  </td>
-                  <td className="py-3 px-4">
-                    <StatusText status={st.status} />
-                  </td>
-                </tr>
-              ))}
+              {roster.map((st) => {
+                const pack = activeClass
+                  ? buildStudentFourCodePack({
+                      schoolCode,
+                      schoolName,
+                      student: st,
+                      classes: [activeClass],
+                      teachers: allTeachers,
+                    })
+                  : null;
+                const copyKey = pack?.studentCode || st.name;
+                return (
+                  <tr key={st.id} className="hover:bg-slate-50/70">
+                    <td className="py-3 px-4 font-mono text-xs tabular-nums text-slate-600">{st.rollNumber}</td>
+                    <td className="py-3 px-4 font-medium text-slate-900">{st.name}</td>
+                    <td className="py-3 px-4 font-mono text-xs text-slate-600">{st.admissionNumber}</td>
+                    <td className="py-3 px-4 font-mono text-xs font-bold text-[#0F295C]">
+                      {st.accessCode || '—'}
+                    </td>
+                    <td className="py-3 px-4 text-xs text-slate-600">
+                      {st.guardianName || '—'} {st.guardianPhone ? `· ${st.guardianPhone}` : ''}
+                    </td>
+                    <td className="py-3 px-4">
+                      <StatusText status={st.status} />
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      {pack && (
+                        <div className="inline-flex items-center gap-1.5">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleCopyFourCodes(pack)}
+                          >
+                            {copiedCode === copyKey ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                            {copiedCode === copyKey ? 'Copied' : 'Copy 4 Codes'}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setFourCodesPack(pack)}
+                            title="View 4-code bundle"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </div>
+
+      <StudentFourCodesModal pack={fourCodesPack} onClose={() => setFourCodesPack(null)} />
     </div>
   );
 }
@@ -1864,9 +2089,34 @@ function TeacherStudentCodesView({
     setTimeout(() => setCopiedKey((prev) => (prev === key ? null : prev)), 2000);
   };
 
+  const sortedAssignedClasses = useMemo(() => sortClassesInOrder(data.classes), [data.classes]);
+  const selectedClassObj = sortedAssignedClasses.find((c) => c.id === classFilter);
+
+  const handleExportExcel = () => {
+    const count = exportStudentCodeRowsExcel({
+      titleSlug: selectedClassObj ? selectedClassObj.code : schoolCode || 'assigned_classes',
+      sheetName: selectedClassObj ? selectedClassObj.code : 'StudentCodes',
+      rows: rows.map((r) => ({ ...r, schoolCode })),
+    });
+    pushToast('success', `Downloaded Excel file with ${count} student codes.`);
+  };
+
+  const handleExportPdf = () => {
+    const count = exportStudentCodeRowsPdf({
+      schoolName,
+      schoolCode,
+      heading: selectedClassObj ? `${selectedClassObj.name} Student Codes` : 'Assigned Class Student Codes',
+      subtitle: selectedClassObj
+        ? `Class ${selectedClassObj.name} (${selectedClassObj.code})`
+        : `All Assigned Classes (${sortedAssignedClasses.length} sections)`,
+      rows,
+    });
+    pushToast('success', `Prepared printable PDF with ${count} student codes.`);
+  };
+
   const handleExportCsv = () => {
     exportToCsv(
-      `${(schoolCode || 'school').toLowerCase()}_class_student_codes.csv`,
+      `SJ_Academia_One_${(selectedClassObj?.code || schoolCode || 'school').toLowerCase()}_student_codes.csv`,
       ['StudentName', 'RollNo', 'SchoolCode', 'ClassName', 'ClassCode', 'TeacherCode', 'StudentCode', 'Status'],
       rows.map((r) => [
         r.studentName,
@@ -1898,7 +2148,7 @@ function TeacherStudentCodesView({
             Student Code). When they join, their request arrives in your Student Approvals queue first.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
           <div className="bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2 text-xs">
             <p className="text-[10px] text-slate-500">School Code</p>
             <p className="font-mono font-bold text-slate-900">{schoolCode || '—'}</p>
@@ -1907,15 +2157,23 @@ function TeacherStudentCodesView({
             <p className="text-[10px] text-teal-800">Your Teacher Code</p>
             <p className="font-mono font-bold text-teal-900">{myTeacherCode || 'Not issued yet'}</p>
           </div>
+          <Button variant="secondary" size="sm" disabled={rows.length === 0} onClick={handleExportExcel}>
+            <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
+            Excel
+          </Button>
+          <Button variant="secondary" size="sm" disabled={rows.length === 0} onClick={handleExportPdf}>
+            <FileText className="w-4 h-4 text-rose-700" />
+            PDF
+          </Button>
           <Button variant="secondary" size="sm" disabled={rows.length === 0} onClick={handleExportCsv}>
             <Download className="w-4 h-4" />
-            Export CSV
+            CSV
           </Button>
         </div>
       </div>
 
       {/* Filter Bar */}
-      {data.classes.length > 0 && (
+      {sortedAssignedClasses.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -1928,7 +2186,7 @@ function TeacherStudentCodesView({
           >
             All Assigned Classes ({rows.length})
           </button>
-          {data.classes.map((cls) => (
+          {sortedAssignedClasses.map((cls) => (
             <button
               key={cls.id}
               type="button"

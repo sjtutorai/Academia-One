@@ -6,9 +6,11 @@ import {
   Copy,
   DoorOpen,
   Download,
+  Eye,
   GraduationCap,
   KeyRound,
   Layers,
+  Lock,
   Plus,
   RefreshCw,
   Search,
@@ -35,17 +37,21 @@ import { exportToCsv } from '../../lib/csv';
 import {
   SECTION_LETTERS,
   STANDARD_CLASSES,
+  buildStudentFourCodePack,
   deriveClassSectionCode,
   expandSectionRange,
   formatMemberRoleCode,
   formatPrincipalCode,
   formatRoleCodeRange,
   formatSectionRangeLabel,
+  formatStudentFourCodeMessage,
+  groupClassesByGrade,
   normalizeGradeLevel,
   resolveCoordinatorClassesForIndex,
   resolveStudentClassForIndex,
   sanitizePhoneDigits,
   sortClassesInOrder,
+  type StudentFourCodePack,
 } from '../../lib/schoolCodes';
 import { recordAuditLog } from '../../lib/audit';
 import {
@@ -58,6 +64,12 @@ import {
   useToast,
 } from '../../components/ui/Primitives';
 import { DetectLocationAddressPicker } from '../../components/shared/DetectLocationAddressPicker';
+import {
+  CoordinatorGradeOnlyPicker,
+  SeparateSchoolCodeCard,
+  StudentFourCodesModal,
+  TeacherSubjectClassPicker,
+} from '../../components/shared/GradeClassControls';
 import type {
   CoordinatorPermissions,
   MemberAccessCode,
@@ -69,6 +81,7 @@ import type {
   SchoolCodeEntry,
   SchoolJoinRequest,
   StudentProfile,
+  Subject,
   TeacherProfile,
 } from '../../types/models';
 
@@ -1061,11 +1074,13 @@ export function PrincipalSetupWizardView({
 export function PrincipalJoinRequestsView({
   school,
   classes,
+  subjects = [],
   actor,
   canWrite,
 }: {
   school: School | null;
   classes: SchoolClass[];
+  subjects?: Subject[];
   actor: PlatformUser;
   canWrite: boolean;
 }) {
@@ -1083,6 +1098,7 @@ export function PrincipalJoinRequestsView({
   const [staffId, setStaffId] = useState('');
   const [subjectsCsv, setSubjectsCsv] = useState('');
   const [selectedClassIds, setSelectedClassIds] = useState<string[]>([]);
+  const [selectedSubjectIds, setSelectedSubjectIds] = useState<string[]>([]);
   const [coordPerms, setCoordPerms] = useState<CoordinatorPermissions>({
     canEditAttendance: true,
     canEditMarks: false,
@@ -1091,6 +1107,8 @@ export function PrincipalJoinRequestsView({
     canCoordinateExams: true,
   });
   const [decisionNote, setDecisionNote] = useState('');
+
+  const gradeGroups = useMemo(() => groupClassesByGrade(classes), [classes]);
 
   useEffect(() => {
     if (!school?.id) return;
@@ -1111,10 +1129,22 @@ export function PrincipalJoinRequestsView({
     return () => unsub();
   }, [school?.id]);
 
+  // Student applications are ONLY displayed to Principal AFTER Coordinator approves them
+  const visibleRequests = useMemo(() => {
+    return requests.filter(
+      (r) =>
+        !(
+          r.requestedRole === 'student' &&
+          r.status === 'pending' &&
+          (r.approvalStage === 'teacher_pending' || r.approvalStage === 'coordinator_pending')
+        ),
+    );
+  }, [requests]);
+
   const filtered = useMemo(() => {
-    if (filter === 'all') return requests;
-    return requests.filter((r) => r.status === filter);
-  }, [requests, filter]);
+    if (filter === 'all') return visibleRequests;
+    return visibleRequests.filter((r) => r.status === filter);
+  }, [visibleRequests, filter]);
 
   const openApproveModal = (req: SchoolJoinRequest) => {
     setApprovingReq(req);
@@ -1127,9 +1157,17 @@ export function PrincipalJoinRequestsView({
     );
     const rollMatch = /Roll\s*#(\d+)/i.exec(req.requestedClassInfo || '');
     setRollNo(rollMatch ? rollMatch[1] : String(Math.floor(1 + Math.random() * 40)).padStart(2, '0'));
-    setStaffId(req.accessCode || `STF-${Math.floor(100 + Math.random() * 899)}`);
+    setStaffId(
+      req.accessCode ||
+        formatMemberRoleCode(school?.code || 'SCH', 'teacher', Math.floor(1 + Math.random() * 99), 100),
+    );
     setSubjectsCsv(req.requestedClassInfo || '');
-    setSelectedClassIds(classes.slice(0, 2).map((c) => c.id));
+    setSelectedSubjectIds([]);
+    if (req.requestedRole === 'coordinator') {
+      setSelectedClassIds(gradeGroups[0]?.sections.map((c) => c.id) || []);
+    } else {
+      setSelectedClassIds([]);
+    }
     setDecisionNote('');
   };
 
@@ -1144,6 +1182,14 @@ export function PrincipalJoinRequestsView({
       let linkedProfileId = '';
       let finalClassId = '';
       let finalSection = '';
+
+      const selectedSubObjs = subjects.filter((s) => selectedSubjectIds.includes(s.id));
+      const finalAssignedClassIds =
+        approvingReq.requestedRole === 'teacher'
+          ? Array.from(new Set([...selectedClassIds, ...selectedSubObjs.map((s) => s.classId)]))
+          : approvingReq.requestedRole === 'coordinator'
+            ? selectedClassIds
+            : [];
 
       if (approvingReq.requestedRole === 'student') {
         const cls = classes.find((c) => c.id === assignClassId) || classes[0];
@@ -1180,6 +1226,12 @@ export function PrincipalJoinRequestsView({
         });
       } else if (approvingReq.requestedRole === 'teacher') {
         linkedProfileId = generateId('tch');
+        const mergedSubjects = Array.from(
+          new Set([
+            ...selectedSubObjs.map((s) => s.name),
+            ...subjectsCsv.split(',').map((s) => s.trim()).filter(Boolean),
+          ]),
+        ).slice(0, 20);
         batch.set(doc(db, 'teachers', linkedProfileId), {
           id: linkedProfileId,
           schoolId: school.id,
@@ -1188,10 +1240,10 @@ export function PrincipalJoinRequestsView({
           name: approvingReq.applicantName.slice(0, 120),
           email: approvingReq.applicantEmail.toLowerCase(),
           phone: approvingReq.phone || '',
-          subjects: subjectsCsv.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 12),
+          subjects: mergedSubjects,
           qualifications: '',
           joiningDate: new Date().toISOString().slice(0, 10),
-          assignedClassIds: selectedClassIds,
+          assignedClassIds: finalAssignedClassIds,
           classTeacherOfClassId: '',
           accessCode: (approvingReq.accessCode || staffId).trim().toUpperCase().slice(0, 24),
           status: 'active',
@@ -1214,7 +1266,7 @@ export function PrincipalJoinRequestsView({
         linkedProfileId,
         classId: finalClassId,
         section: finalSection,
-        assignedClassIds: approvingReq.requestedRole === 'student' ? [] : selectedClassIds,
+        assignedClassIds: finalAssignedClassIds,
         status: 'active',
         createdBy: actor.uid,
         createdAt: now,
@@ -1248,6 +1300,16 @@ export function PrincipalJoinRequestsView({
       });
 
       await batch.commit();
+
+      if (approvingReq.requestedRole === 'teacher' && selectedSubjectIds.length > 0 && linkedProfileId) {
+        for (const subId of selectedSubjectIds) {
+          await updateDoc(doc(db, 'subjects', subId), {
+            teacherId: linkedProfileId,
+            teacherName: approvingReq.applicantName.slice(0, 120),
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+        }
+      }
 
       // Mark named memberAccessCode as claimed if one exists
       if (issuedCode) {
@@ -1323,7 +1385,10 @@ export function PrincipalJoinRequestsView({
       <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-1.5">
           {(['pending', 'approved', 'rejected', 'all'] as const).map((tab) => {
-            const count = tab === 'all' ? requests.length : requests.filter((r) => r.status === tab).length;
+            const count =
+              tab === 'all'
+                ? visibleRequests.length
+                : visibleRequests.filter((r) => r.status === tab).length;
             return (
               <button
                 key={tab}
@@ -1345,8 +1410,8 @@ export function PrincipalJoinRequestsView({
 
       {filtered.length === 0 ? (
         <EmptyState
-          title="No join requests in this view"
-          description="Unregistered Coordinators, Teachers, and Students who submit your School Code on /join-school will appear here for Principal approval."
+          title="No join requests ready for review"
+          description="Coordinator and Teacher applications appear immediately. Student applications appear here automatically once verified by their Class Teacher and approved by their Academic Coordinator."
         />
       ) : (
         <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100">
@@ -1460,16 +1525,20 @@ export function PrincipalJoinRequestsView({
             {approvingReq.requestedRole === 'student' && (
               <div className="grid sm:grid-cols-3 gap-3">
                 <div className="sm:col-span-3">
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Assign Class & Section</label>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Assign Class &amp; Section</label>
                   <select
                     value={assignClassId}
                     onChange={(e) => setAssignClassId(e.target.value)}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
                   >
-                    {classes.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.code})
-                      </option>
+                    {gradeGroups.map((grp) => (
+                      <optgroup key={grp.gradeLevel} label={grp.gradeLevel}>
+                        {grp.sections.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} ({c.code})
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </div>
@@ -1498,16 +1567,21 @@ export function PrincipalJoinRequestsView({
               <div className="space-y-3">
                 <div className="grid sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">Staff ID *</label>
+                    <label className="flex items-center justify-between text-xs font-medium text-slate-700 mb-1">
+                      <span>Staff ID *</span>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-400">
+                        <Lock className="w-3 h-3" /> Locked
+                      </span>
+                    </label>
                     <input
-                      required
+                      readOnly
                       value={staffId}
-                      onChange={(e) => setStaffId(e.target.value)}
-                      className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
+                      title="Staff ID is system-assigned and cannot be modified."
+                      className="w-full px-3 py-2 text-sm font-mono bg-slate-100 text-slate-600 border border-slate-200 rounded-lg cursor-not-allowed select-all"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">Subjects (comma-separated)</label>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">Subject Specialties</label>
                     <input
                       value={subjectsCsv}
                       onChange={(e) => setSubjectsCsv(e.target.value)}
@@ -1516,59 +1590,26 @@ export function PrincipalJoinRequestsView({
                     />
                   </div>
                 </div>
-                <div>
-                  <p className="text-xs font-medium text-slate-700 mb-1.5">Assigned Classes</p>
-                  <div className="flex flex-wrap gap-2">
-                    {classes.map((cl) => {
-                      const sel = selectedClassIds.includes(cl.id);
-                      return (
-                        <button
-                          key={cl.id}
-                          type="button"
-                          onClick={() =>
-                            setSelectedClassIds((prev) =>
-                              sel ? prev.filter((x) => x !== cl.id) : [...prev, cl.id],
-                            )
-                          }
-                          className={`px-2.5 py-1 text-xs rounded-lg border cursor-pointer ${
-                            sel ? 'bg-[#0B1528] text-white border-[#0B1528]' : 'bg-white text-slate-700 border-slate-300'
-                          }`}
-                        >
-                          {cl.code}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+                <TeacherSubjectClassPicker
+                  classes={classes}
+                  subjects={subjects}
+                  selectedSubjectIds={selectedSubjectIds}
+                  onChangeSubjectIds={setSelectedSubjectIds}
+                  selectedClassIds={selectedClassIds}
+                  onChangeClassIds={setSelectedClassIds}
+                />
               </div>
             )}
 
             {approvingReq.requestedRole === 'coordinator' && (
               <div className="space-y-3">
-                <div>
-                  <p className="text-xs font-medium text-slate-700 mb-1.5">Coordinator Class Scope</p>
-                  <div className="flex flex-wrap gap-2">
-                    {classes.map((cl) => {
-                      const sel = selectedClassIds.includes(cl.id);
-                      return (
-                        <button
-                          key={cl.id}
-                          type="button"
-                          onClick={() =>
-                            setSelectedClassIds((prev) =>
-                              sel ? prev.filter((x) => x !== cl.id) : [...prev, cl.id],
-                            )
-                          }
-                          className={`px-2.5 py-1 text-xs rounded-lg border cursor-pointer ${
-                            sel ? 'bg-[#0B1528] text-white border-[#0B1528]' : 'bg-white text-slate-700 border-slate-300'
-                          }`}
-                        >
-                          {cl.code}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+                <CoordinatorGradeOnlyPicker
+                  classes={classes}
+                  selectedClassIds={selectedClassIds}
+                  onChange={setSelectedClassIds}
+                  label="Coordinator Class Scope (Whole Grades)"
+                  helperText="Select whole grades. All sections inside each selected grade are included automatically."
+                />
                 <div className="space-y-1.5 pt-2 border-t border-slate-200">
                   <p className="text-xs font-semibold text-slate-700">Granted Coordinator Permissions</p>
                   {(
@@ -1704,6 +1745,8 @@ export function PrincipalAccessCodesView({
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [fourCodesPack, setFourCodesPack] = useState<StudentFourCodePack | null>(null);
+  const gradeGroups = useMemo(() => groupClassesByGrade(classes), [classes]);
 
   // Editable allocation counts
   const [coordInput, setCoordInput] = useState(String(school?.allocatedCoordinators ?? 6));
@@ -2158,8 +2201,62 @@ export function PrincipalAccessCodesView({
     );
   }
 
+  const buildPackForStudentRow = (row: {
+    code: string;
+    memberName: string;
+    classId?: string;
+    classCode?: string;
+    classLabel?: string;
+    teacherName?: string;
+    teacherCode?: string;
+    rollNumber?: string;
+  }): StudentFourCodePack => {
+    const matchedStudent = students.find(
+      (s) => (s.accessCode || '').trim().toUpperCase() === row.code.trim().toUpperCase(),
+    );
+    if (matchedStudent) {
+      return buildStudentFourCodePack({
+        schoolCode: prefix,
+        schoolName: school?.name || 'School',
+        student: matchedStudent,
+        classes,
+        teachers,
+      });
+    }
+    const cls = row.classId ? classes.find((c) => c.id === row.classId) : undefined;
+    const tch = cls
+      ? teachers.find((t) => t.id === cls.classTeacherId || t.classTeacherOfClassId === cls.id) ||
+        teachers.find((t) => (t.assignedClassIds || []).includes(cls.id))
+      : undefined;
+    return {
+      schoolCode: prefix,
+      schoolName: school?.name || 'School',
+      classCode: cls?.code || row.classCode || '',
+      className: cls?.name || row.classLabel || '',
+      teacherCode: row.teacherCode || tch?.accessCode || tch?.staffId || '',
+      teacherName: row.teacherName || tch?.name || cls?.classTeacherName || '',
+      studentCode: row.code,
+      studentName: row.memberName || 'Student',
+      rollNumber: (row.rollNumber || '').replace(/^#/, ''),
+    };
+  };
+
+  const copyFourCodesPack = (pack: StudentFourCodePack, key: string) => {
+    navigator.clipboard?.writeText(formatStudentFourCodeMessage(pack));
+    setCopiedCode(key);
+    pushToast('success', `Copied all 4 login codes for ${pack.studentName}.`);
+    setTimeout(() => setCopiedCode(null), 1600);
+  };
+
   return (
     <div className="space-y-6">
+      {/* Separate School Code Banner Card */}
+      <SeparateSchoolCodeCard
+        schoolCode={prefix}
+        schoolName={school.name}
+        subtitle="Share this School Code separately with students and staff alongside their personal role codes."
+      />
+
       {/* Top Role Code Summary Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Principal Login Code" value={formatPrincipalCode(prefix)} tone="teal" subtext={`Prefix: ${prefix}`} />
@@ -2269,29 +2366,64 @@ export function PrincipalAccessCodesView({
                     </td>
                     <td className="py-2.5 px-4"><StatusText status={m.status} /></td>
                     <td className="py-2.5 px-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const text =
-                            m.role === 'student'
-                              ? `School: ${m.schoolCode} | Class: ${m.classCode || '-'} | Teacher: ${m.teacherCode || '-'} | Student: ${m.code}`
-                              : m.code;
-                          navigator.clipboard?.writeText(text);
-                          setCopiedCode(m.code);
-                          setTimeout(() => setCopiedCode(null), 1600);
-                        }}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900 cursor-pointer"
-                      >
-                        {copiedCode === m.code ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-emerald-600" /> Copied
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" /> {m.role === 'student' ? 'Copy 4 Codes' : 'Copy'}
-                          </>
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (m.role === 'student') {
+                              const pack = buildPackForStudentRow({
+                                code: m.code,
+                                memberName: m.memberName,
+                                classId: m.classId,
+                                classCode: m.classCode,
+                                classLabel: m.className,
+                                teacherCode: m.teacherCode,
+                                teacherName: m.teacherName,
+                                rollNumber: m.rollNumber,
+                              });
+                              copyFourCodesPack(pack, m.code);
+                            } else {
+                              navigator.clipboard?.writeText(m.code);
+                              setCopiedCode(m.code);
+                              setTimeout(() => setCopiedCode(null), 1600);
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900 cursor-pointer"
+                        >
+                          {copiedCode === m.code ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-emerald-600" /> Copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5" /> {m.role === 'student' ? 'Copy 4 Codes' : 'Copy'}
+                            </>
+                          )}
+                        </button>
+                        {m.role === 'student' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFourCodesPack(
+                                buildPackForStudentRow({
+                                  code: m.code,
+                                  memberName: m.memberName,
+                                  classId: m.classId,
+                                  classCode: m.classCode,
+                                  classLabel: m.className,
+                                  teacherCode: m.teacherCode,
+                                  teacherName: m.teacherName,
+                                  rollNumber: m.rollNumber,
+                                }),
+                              )
+                            }
+                            className="p-1 text-slate-400 hover:text-[#0F295C] cursor-pointer"
+                            title="View all 4 student login codes"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
                         )}
-                      </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -2389,11 +2521,21 @@ export function PrincipalAccessCodesView({
               className="text-xs border border-slate-300 rounded-lg px-2.5 py-2 bg-white"
             >
               <option value="all">All Classes</option>
-              {classSlots.map((slot) => (
-                <option key={slot.classId} value={slot.classId}>
-                  {slot.className}
-                </option>
-              ))}
+              {gradeGroups.length > 0
+                ? gradeGroups.map((grp) => (
+                    <optgroup key={grp.gradeLevel} label={grp.gradeLevel}>
+                      {grp.sections.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} ({c.code})
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))
+                : classSlots.map((slot) => (
+                    <option key={slot.classId} value={slot.classId}>
+                      {slot.className}
+                    </option>
+                  ))}
             </select>
           )}
           <div className="relative">
@@ -2450,22 +2592,27 @@ export function PrincipalAccessCodesView({
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 pt-1 border-t border-slate-100">
-                  <span>
+                  <span className="truncate">
                     Roll {st.rollNumber}
                     {st.teacherName ? ` · Teacher: ${st.teacherName}` : ''}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(st.code);
-                      setCopiedCode(st.code);
-                      setTimeout(() => setCopiedCode(null), 1600);
-                    }}
-                    className="inline-flex items-center gap-1 font-semibold text-teal-700 hover:text-teal-900 cursor-pointer"
-                  >
-                    {copiedCode === st.code ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                    {copiedCode === st.code ? 'Copied' : 'Copy'}
-                  </button>
+                  <div className="inline-flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setFourCodesPack(buildPackForStudentRow(st))}
+                      className="inline-flex items-center gap-1 font-medium text-slate-600 hover:text-[#0F295C] cursor-pointer"
+                    >
+                      <Eye className="w-3 h-3" /> View
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => copyFourCodesPack(buildPackForStudentRow(st), `lookup-${st.code}`)}
+                      className="inline-flex items-center gap-1 font-semibold text-teal-700 hover:text-teal-900 cursor-pointer"
+                    >
+                      {copiedCode === `lookup-${st.code}` ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                      {copiedCode === `lookup-${st.code}` ? 'Copied' : 'Copy 4 Codes'}
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -2511,25 +2658,41 @@ export function PrincipalAccessCodesView({
                 </td>
                 <td className="py-2.5 px-4 text-xs font-mono text-slate-500 tabular-nums">{row.rollNumber}</td>
                 <td className="py-2.5 px-4 text-right">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(row.code);
-                      setCopiedCode(row.code);
-                      setTimeout(() => setCopiedCode(null), 1600);
-                    }}
-                    className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900 cursor-pointer"
-                  >
-                    {copiedCode === row.code ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-600" /> Copied
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" /> Copy
-                      </>
+                  <div className="inline-flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (row.role === 'student') {
+                          copyFourCodesPack(buildPackForStudentRow(row), row.code);
+                        } else {
+                          navigator.clipboard?.writeText(row.code);
+                          setCopiedCode(row.code);
+                          setTimeout(() => setCopiedCode(null), 1600);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900 cursor-pointer"
+                    >
+                      {copiedCode === row.code ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" /> Copied
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" /> {row.role === 'student' ? 'Copy 4 Codes' : 'Copy'}
+                        </>
+                      )}
+                    </button>
+                    {row.role === 'student' && (
+                      <button
+                        type="button"
+                        onClick={() => setFourCodesPack(buildPackForStudentRow(row))}
+                        className="p-1 text-slate-400 hover:text-[#0F295C] cursor-pointer"
+                        title="View all 4 student login codes"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </button>
                     )}
-                  </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -2600,10 +2763,14 @@ export function PrincipalAccessCodesView({
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
               >
                 <option value="">Select Class</option>
-                {classes.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.code} · {c.name}
-                  </option>
+                {gradeGroups.map((grp) => (
+                  <optgroup key={grp.gradeLevel} label={grp.gradeLevel}>
+                    {grp.sections.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.code} · {c.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </div>
@@ -2647,6 +2814,8 @@ export function PrincipalAccessCodesView({
           </div>
         </form>
       </Modal>
+
+      <StudentFourCodesModal pack={fourCodesPack} onClose={() => setFourCodesPack(null)} />
     </div>
   );
 }

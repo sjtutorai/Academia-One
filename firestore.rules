@@ -126,8 +126,8 @@ service cloud.firestore {
         && isOptString(data, 'classId', 128)
         && isOptString(data, 'section', 32)
         && isOptString(data, 'accessCode', 24)
-        && isBoundedList(data, 'assignedClassIds', 50)
-        && isBoundedList(data, 'assignedSubjectIds', 50);
+        && isBoundedList(data, 'assignedClassIds', 200)
+        && isBoundedList(data, 'assignedSubjectIds', 100);
     }
 
     function isValidSchool(data) {
@@ -278,8 +278,8 @@ service cloud.firestore {
         && isOptString(data, 'joiningDate', 32)
         && isOptString(data, 'classTeacherOfClassId', 128)
         && isOptString(data, 'accessCode', 24)
-        && isBoundedList(data, 'subjects', 30)
-        && isBoundedList(data, 'assignedClassIds', 30)
+        && isBoundedList(data, 'subjects', 50)
+        && isBoundedList(data, 'assignedClassIds', 100)
         && isShortString(data.createdBy, 1, 128);
     }
 
@@ -600,7 +600,7 @@ service cloud.firestore {
         && isOptString(data, 'linkedProfileId', 128)
         && isOptString(data, 'classId', 128)
         && isOptString(data, 'section', 32)
-        && isBoundedList(data, 'assignedClassIds', 50);
+        && isBoundedList(data, 'assignedClassIds', 200);
     }
 
     function isValidSchoolJoinRequest(data) {

@@ -13,16 +13,16 @@ export function PrivacyPolicyPage() {
           </Link>
           <Link to="/" className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900">
             <ArrowLeft className="w-3.5 h-3.5" />
-            Back to AcademiaOne
+            Back to SJ Academia One
           </Link>
         </div>
         <h1 className="text-2xl font-bold font-display text-slate-900">Privacy Policy</h1>
-        <p className="text-xs text-slate-500 mt-1">Effective Date: November 2026 · AcademiaOne Platform</p>
+        <p className="text-xs text-slate-500 mt-1">Effective Date: November 2026 · SJ Academia One Platform</p>
         <div className="mt-6 space-y-5 text-sm text-slate-600 leading-relaxed">
           <section>
             <h2 className="text-base font-semibold text-slate-900">1. Multi-Tenant Student Data Protection</h2>
             <p className="mt-1">
-              AcademiaOne collects only the educational records necessary to operate school attendance,
+              SJ Academia One collects only the educational records necessary to operate school attendance,
               timetables, homework, and examinations. Every school record is isolated by a mandatory{' '}
               <span className="font-mono text-xs">schoolId</span> tenant identifier enforced at the Firestore security rules layer.
             </p>
@@ -31,7 +31,7 @@ export function PrivacyPolicyPage() {
             <h2 className="text-base font-semibold text-slate-900">2. Credential Security</h2>
             <p className="mt-1">
               Authentication is processed by Firebase Authentication using industry-standard salted password hashing.
-              AcademiaOne never stores, logs, or displays plaintext user passwords. Administrators may issue
+              SJ Academia One never stores, logs, or displays plaintext user passwords. Administrators may issue
               temporary reset links or temporary credentials that require immediate replacement on sign-in.
             </p>
           </section>
@@ -59,16 +59,16 @@ export function TermsOfServicePage() {
           </Link>
           <Link to="/" className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900">
             <ArrowLeft className="w-3.5 h-3.5" />
-            Back to AcademiaOne
+            Back to SJ Academia One
           </Link>
         </div>
         <h1 className="text-2xl font-bold font-display text-slate-900">Terms of Service</h1>
-        <p className="text-xs text-slate-500 mt-1">Effective Date: November 2026 · AcademiaOne Platform</p>
+        <p className="text-xs text-slate-500 mt-1">Effective Date: November 2026 · SJ Academia One Platform</p>
         <div className="mt-6 space-y-5 text-sm text-slate-600 leading-relaxed">
           <section>
             <h2 className="text-base font-semibold text-slate-900">1. Free Access for All Schools</h2>
             <p className="mt-1">
-              AcademiaOne is provided completely free of charge for all verified schools, with full access to
+              SJ Academia One is provided completely free of charge for all verified schools, with full access to
               role-based portals, attendance tracking, timetables, homework, exams, and analytics without paid tiers.
             </p>
           </section>

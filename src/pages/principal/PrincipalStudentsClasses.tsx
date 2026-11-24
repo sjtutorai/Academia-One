@@ -16,9 +16,19 @@ import {
   Sparkles,
   UserX,
   AlertTriangle,
+  Pencil,
+  FileText,
+  UserCheck,
+  Users,
+  BookOpen,
 } from 'lucide-react';
 import { db, generateId, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { exportToCsv } from '../../lib/csv';
+import {
+  downloadStudentCodesCsv,
+  downloadStudentCodesExcel,
+  downloadStudentCodesPdf,
+} from '../../lib/studentCodeExport';
 import { recordAuditLog } from '../../lib/audit';
 import {
   removeOrWithdrawStudent,
@@ -30,6 +40,7 @@ import {
   deriveClassSectionCode,
   formatMemberRoleCode,
   formatStudentFourCodeMessage,
+  getGradeSortRank,
   groupClassesByGrade,
   normalizeGradeLevel,
   sanitizePhoneDigits,
@@ -103,8 +114,11 @@ export function PrincipalStudentsView({
   const [editing, setEditing] = useState<StudentProfile | null>(null);
   const [historyStudent, setHistoryStudent] = useState<StudentProfile | null>(null);
   const [transferStudent, setTransferStudent] = useState<StudentProfile | null>(null);
-  const [targetClassId, setTargetClassId] = useState('');
   const [transferType, setTransferType] = useState<'transfer' | 'promote'>('transfer');
+  const [transferGrade, setTransferGrade] = useState('');
+  const [targetClassId, setTargetClassId] = useState('');
+  const [transferTeacherId, setTransferTeacherId] = useState('');
+  const [movingStudent, setMovingStudent] = useState(false);
 
   // View 4 Codes modal
   const [fourCodesPack, setFourCodesPack] = useState<StudentFourCodePack | null>(null);
@@ -614,73 +628,198 @@ export function PrincipalStudentsView({
     }
   };
 
+  const resolveDefaultTeacherForClass = (cls?: SchoolClass) => {
+    if (!cls) return '';
+    if (cls.classTeacherId) return cls.classTeacherId;
+    const matched = teachers.find((t) => t.classTeacherOfClassId === cls.id);
+    return matched?.id || '';
+  };
+
+  const getStudentCurrentGrade = (st: StudentProfile) => {
+    const currentCls = classes.find((c) => c.id === st.classId);
+    return (
+      currentCls?.gradeLevel ||
+      normalizeGradeLevel(st.className.split(' - ')[0]) ||
+      st.className.split(' - ')[0] ||
+      ''
+    );
+  };
+
+  const initTransferModal = (st: StudentProfile, mode: 'transfer' | 'promote') => {
+    setTransferStudent(st);
+    setTransferType(mode);
+    const currentGrade = getStudentCurrentGrade(st);
+    const currentRank = getGradeSortRank(currentGrade);
+
+    if (mode === 'transfer') {
+      setTransferGrade(currentGrade);
+      const sameGradeGroup = gradeGroups.find((g) => g.gradeLevel === currentGrade);
+      const otherSections = (sameGradeGroup?.sections || []).filter((c) => c.id !== st.classId);
+      const firstTarget = otherSections[0];
+      setTargetClassId(firstTarget?.id || '');
+      setTransferTeacherId(resolveDefaultTeacherForClass(firstTarget));
+    } else {
+      const higherGrades = gradeGroups.filter((g) => getGradeSortRank(g.gradeLevel) > currentRank);
+      const nextGradeGroup = higherGrades[0];
+      setTransferGrade(nextGradeGroup?.gradeLevel || '');
+      const firstSection = nextGradeGroup?.sections[0];
+      setTargetClassId(firstSection?.id || '');
+      setTransferTeacherId(resolveDefaultTeacherForClass(firstSection));
+    }
+  };
+
+  const transferMeta = useMemo(() => {
+    if (!transferStudent) {
+      return {
+        currentGrade: '',
+        currentRank: 0,
+        availableGrades: [] as typeof gradeGroups,
+        availableSections: [] as SchoolClass[],
+      };
+    }
+    const currentGrade = getStudentCurrentGrade(transferStudent);
+    const currentRank = getGradeSortRank(currentGrade);
+
+    if (transferType === 'transfer') {
+      const sameGroup = gradeGroups.find((g) => g.gradeLevel === currentGrade);
+      const sections = (sameGroup?.sections || []).filter((c) => c.id !== transferStudent.classId);
+      return {
+        currentGrade,
+        currentRank,
+        availableGrades: sameGroup ? [sameGroup] : [],
+        availableSections: sections,
+      };
+    }
+
+    const higherGrades = gradeGroups.filter((g) => getGradeSortRank(g.gradeLevel) > currentRank);
+    const selectedGroup = higherGrades.find((g) => g.gradeLevel === transferGrade) || higherGrades[0];
+    return {
+      currentGrade,
+      currentRank,
+      availableGrades: higherGrades,
+      availableSections: selectedGroup?.sections || [],
+    };
+  }, [transferStudent, transferType, transferGrade, gradeGroups, classes]);
+
   const handleTransferOrPromote = async () => {
     if (!transferStudent || !targetClassId || !canWrite) return;
     const nextCls = classes.find((c) => c.id === targetClassId);
     if (!nextCls) return;
 
-    const eventText =
-      transferType === 'promote'
-        ? `Promoted from ${transferStudent.className} to ${nextCls.name}`
-        : `Transferred from ${transferStudent.className} to ${nextCls.name}`;
+    const currentGrade = getStudentCurrentGrade(transferStudent);
+    const currentRank = getGradeSortRank(currentGrade);
+    const nextRank = getGradeSortRank(nextCls.gradeLevel);
 
-    const nextHistory = [
-      ...(transferStudent.history || []),
-      {
-        date: new Date().toISOString().slice(0, 10),
-        event: eventText,
-        fromClass: transferStudent.className,
-        toClass: nextCls.name,
-        academicYear,
-      },
-    ].slice(-40);
-
-    await updateDoc(doc(db, 'students', transferStudent.id), {
-      classId: nextCls.id,
-      className: nextCls.name,
-      section: nextCls.section,
-      status: transferType === 'promote' ? 'promoted' : 'active',
-      history: nextHistory,
-      updatedAt: serverTimestamp(),
-    });
-    if (transferStudent.accessCode) {
-      const nextTeacher =
-        teachers.find((t) => t.id === nextCls.classTeacherId || t.classTeacherOfClassId === nextCls.id) ||
-        teachers.find((t) => (t.assignedClassIds || []).includes(nextCls.id));
-      await upsertMemberAccessCode({
-        code: transferStudent.accessCode,
-        schoolId,
-        schoolCode,
-        schoolName,
-        role: 'student',
-        memberName: transferStudent.name,
-        email: transferStudent.email || '',
-        classId: nextCls.id,
-        classCode: nextCls.code,
-        className: nextCls.name,
-        teacherId: nextTeacher?.id || '',
-        teacherCode: nextTeacher?.accessCode || nextTeacher?.staffId || '',
-        teacherName: nextTeacher?.name || nextCls.classTeacherName || '',
-        rollNumber: transferStudent.rollNumber,
-        status: 'active',
-        linkedProfileId: transferStudent.id,
-        linkedUid: transferStudent.userId || '',
-        createdBy: actor.uid,
-      }).catch(() => undefined);
+    if (transferType === 'promote' && nextRank <= currentRank) {
+      pushToast('error', 'Promotion must move the student to a higher class grade only.');
+      return;
     }
-    await recordAuditLog({
-      schoolId,
-      actorUid: actor.uid,
-      actorName: actor.displayName,
-      actorRole: actor.role,
-      action: transferType === 'promote' ? 'PROMOTE_STUDENT' : 'TRANSFER_STUDENT',
-      targetType: 'student',
-      targetId: transferStudent.id,
-      targetLabel: transferStudent.name,
-      details: eventText,
-    });
-    pushToast('success', eventText);
-    setTransferStudent(null);
+    if (transferType === 'transfer' && nextCls.id === transferStudent.classId) {
+      pushToast('error', 'Select a different section within the current class.');
+      return;
+    }
+
+    setMovingStudent(true);
+    try {
+      const chosenTeacher = transferTeacherId
+        ? teachers.find((t) => t.id === transferTeacherId)
+        : teachers.find((t) => t.id === nextCls.classTeacherId || t.classTeacherOfClassId === nextCls.id) ||
+          teachers.find((t) => (t.assignedClassIds || []).includes(nextCls.id));
+
+      const eventText =
+        transferType === 'promote'
+          ? `Promoted from ${transferStudent.className} to ${nextCls.name}${chosenTeacher ? ` (Class Teacher: ${chosenTeacher.name})` : ''}`
+          : `Transferred from ${transferStudent.className} to ${nextCls.name}${chosenTeacher ? ` (Class Teacher: ${chosenTeacher.name})` : ''}`;
+
+      const nextHistory = [
+        ...(transferStudent.history || []),
+        {
+          date: new Date().toISOString().slice(0, 10),
+          event: eventText,
+          fromClass: transferStudent.className,
+          toClass: nextCls.name,
+          academicYear,
+        },
+      ].slice(-40);
+
+      await updateDoc(doc(db, 'students', transferStudent.id), {
+        classId: nextCls.id,
+        className: nextCls.name,
+        section: nextCls.section,
+        status: transferType === 'promote' ? 'promoted' : 'active',
+        history: nextHistory,
+        updatedAt: serverTimestamp(),
+      });
+
+      // If Principal explicitly chose a class teacher for the destination section, update the class & teacher linkage
+      if (chosenTeacher && transferTeacherId && nextCls.classTeacherId !== chosenTeacher.id) {
+        await updateDoc(doc(db, 'classes', nextCls.id), {
+          classTeacherId: chosenTeacher.id,
+          classTeacherName: chosenTeacher.name,
+          updatedAt: serverTimestamp(),
+        }).catch(() => undefined);
+        const nextAssigned = Array.from(new Set([...(chosenTeacher.assignedClassIds || []), nextCls.id]));
+        await updateDoc(doc(db, 'teachers', chosenTeacher.id), {
+          assignedClassIds: nextAssigned,
+          classTeacherOfClassId: chosenTeacher.classTeacherOfClassId || nextCls.id,
+          updatedAt: serverTimestamp(),
+        }).catch(() => undefined);
+      }
+
+      if (transferStudent.accessCode) {
+        await upsertMemberAccessCode({
+          code: transferStudent.accessCode,
+          schoolId,
+          schoolCode,
+          schoolName,
+          role: 'student',
+          memberName: transferStudent.name,
+          email: transferStudent.email || '',
+          classId: nextCls.id,
+          classCode: nextCls.code,
+          className: nextCls.name,
+          teacherId: chosenTeacher?.id || '',
+          teacherCode: chosenTeacher?.accessCode || chosenTeacher?.staffId || '',
+          teacherName: chosenTeacher?.name || nextCls.classTeacherName || '',
+          rollNumber: transferStudent.rollNumber,
+          status: 'active',
+          linkedProfileId: transferStudent.id,
+          linkedUid: transferStudent.userId || '',
+          createdBy: actor.uid,
+        }).catch(() => undefined);
+      }
+      if (transferStudent.email) {
+        await upsertEmailDirectoryEntry({
+          email: transferStudent.email,
+          schoolId,
+          schoolName,
+          role: 'student',
+          displayName: transferStudent.name,
+          accessCode: transferStudent.accessCode || '',
+          linkedProfileId: transferStudent.id,
+          classId: nextCls.id,
+          section: nextCls.section,
+          createdBy: actor.uid,
+        }).catch(() => undefined);
+      }
+      await recordAuditLog({
+        schoolId,
+        actorUid: actor.uid,
+        actorName: actor.displayName,
+        actorRole: actor.role,
+        action: transferType === 'promote' ? 'PROMOTE_STUDENT' : 'TRANSFER_STUDENT',
+        targetType: 'student',
+        targetId: transferStudent.id,
+        targetLabel: transferStudent.name,
+        details: eventText,
+      });
+      pushToast('success', eventText);
+      setTransferStudent(null);
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to move student.');
+    } finally {
+      setMovingStudent(false);
+    }
   };
 
   if (loading) return <SkeletonTable rows={6} cols={6} />;
@@ -944,10 +1083,7 @@ export function PrincipalStudentsView({
                         variant="ghost"
                         size="sm"
                         disabled={!canWrite}
-                        onClick={() => {
-                          setTransferStudent(st);
-                          setTargetClassId(orderedClasses.find((c) => c.id !== st.classId)?.id || st.classId);
-                        }}
+                        onClick={() => initTransferModal(st, 'transfer')}
                         title="Transfer / Promote"
                       >
                         <ArrowRightLeft className="w-3.5 h-3.5" />
@@ -1285,36 +1421,153 @@ export function PrincipalStudentsView({
         </form>
       </Modal>
 
-      {/* Transfer / Promote Modal */}
-      <Modal open={Boolean(transferStudent)} onClose={() => setTransferStudent(null)} title={`Transfer / Promote · ${transferStudent?.name || ''}`} maxWidth="max-w-md">
+      {/* Transfer / Promote Modal (2-Box Class + Section + Teacher with Strict Grade Guard) */}
+      <Modal
+        open={Boolean(transferStudent)}
+        onClose={() => setTransferStudent(null)}
+        title={`Transfer / Promote · ${transferStudent?.name || ''}`}
+        subtitle="Move to another section in the same grade or promote strictly to a higher grade."
+        maxWidth="max-w-lg"
+      >
         {transferStudent && (
           <div className="space-y-4">
-            <p className="text-xs text-slate-600">
-              Current placement: <strong>{transferStudent.className}</strong>. Historical records are preserved automatically.
-            </p>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setTransferType('transfer')} className={`flex-1 py-2 text-xs font-medium rounded-lg border cursor-pointer ${transferType === 'transfer' ? 'bg-[#0B1528] text-white border-[#0B1528]' : 'border-slate-300'}`}>
-                Transfer Section
+            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-slate-500">Current Placement</p>
+                <p className="font-bold text-slate-900 mt-0.5">{transferStudent.className}</p>
+              </div>
+              <span className="font-mono text-[11px] font-semibold text-teal-800 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded">
+                Roll #{transferStudent.rollNumber}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => initTransferModal(transferStudent, 'transfer')}
+                className={`py-2.5 px-3 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                  transferType === 'transfer'
+                    ? 'bg-[#0F295C] text-white border-[#0F295C]'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                Transfer Section (Same Class)
               </button>
-              <button type="button" onClick={() => setTransferType('promote')} className={`flex-1 py-2 text-xs font-medium rounded-lg border cursor-pointer ${transferType === 'promote' ? 'bg-[#0B1528] text-white border-[#0B1528]' : 'border-slate-300'}`}>
-                Promote Next Grade
+              <button
+                type="button"
+                onClick={() => initTransferModal(transferStudent, 'promote')}
+                className={`py-2.5 px-3 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                  transferType === 'promote'
+                    ? 'bg-[#0F295C] text-white border-[#0F295C]'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                Promote to Next Class
               </button>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Destination Class</label>
-              <select value={targetClassId} onChange={(e) => setTargetClassId(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
-                {gradeGroups.map((grp) => (
-                  <optgroup key={grp.gradeLevel} label={grp.gradeLevel}>
-                    {grp.sections.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name} ({c.code})</option>
+
+            {/* 2 Side-by-Side Boxes: Class (Grade) + Section */}
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  1. Target Class / Grade
+                </label>
+                {transferType === 'transfer' ? (
+                  <div className="w-full px-3 py-2 text-sm font-semibold text-slate-700 bg-slate-100 border border-slate-200 rounded-lg">
+                    {transferMeta.currentGrade || 'Current Class'}
+                  </div>
+                ) : transferMeta.availableGrades.length === 0 ? (
+                  <div className="w-full px-3 py-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg">
+                    No higher grade available
+                  </div>
+                ) : (
+                  <select
+                    value={transferGrade}
+                    onChange={(e) => {
+                      const nextGrade = e.target.value;
+                      setTransferGrade(nextGrade);
+                      const grp = transferMeta.availableGrades.find((g) => g.gradeLevel === nextGrade);
+                      const firstSec = grp?.sections[0];
+                      setTargetClassId(firstSec?.id || '');
+                      setTransferTeacherId(resolveDefaultTeacherForClass(firstSec));
+                    }}
+                    className="w-full px-3 py-2 text-sm font-medium border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-teal-600"
+                  >
+                    {transferMeta.availableGrades.map((grp) => (
+                      <option key={grp.gradeLevel} value={grp.gradeLevel}>
+                        {grp.gradeLevel} ({grp.sections.length} section{grp.sections.length === 1 ? '' : 's'})
+                      </option>
                     ))}
-                  </optgroup>
+                  </select>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  2. Target Section
+                </label>
+                {transferMeta.availableSections.length === 0 ? (
+                  <div className="w-full px-3 py-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg">
+                    {transferType === 'transfer'
+                      ? `No other section in ${transferMeta.currentGrade}`
+                      : 'No sections configured'}
+                  </div>
+                ) : (
+                  <select
+                    value={targetClassId}
+                    onChange={(e) => {
+                      const cid = e.target.value;
+                      setTargetClassId(cid);
+                      const nextCls = classes.find((c) => c.id === cid);
+                      setTransferTeacherId(resolveDefaultTeacherForClass(nextCls));
+                    }}
+                    className="w-full px-3 py-2 text-sm font-medium border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-teal-600"
+                  >
+                    {transferMeta.availableSections.map((sec) => (
+                      <option key={sec.id} value={sec.id}>
+                        Section {sec.section} ({sec.code})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+
+            {/* 3. Choose / Confirm Class Teacher */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                3. Class Teacher for Target Section
+              </label>
+              <select
+                value={transferTeacherId}
+                disabled={transferMeta.availableSections.length === 0}
+                onChange={(e) => setTransferTeacherId(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-teal-600 disabled:bg-slate-100"
+              >
+                <option value="">Keep section&apos;s current class teacher</option>
+                {teachers.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.accessCode || t.staffId})
+                  </option>
                 ))}
               </select>
+              <p className="text-[11px] text-slate-500 mt-1">
+                {transferType === 'transfer'
+                  ? `Only other sections in ${transferMeta.currentGrade} are shown (excluding the student's current section).`
+                  : 'Only higher grades are listed so a promoted student can never be placed into a lower or same class.'}
+              </p>
             </div>
-            <div className="flex justify-end gap-3">
+
+            <div className="flex justify-end gap-3 pt-1">
               <Button variant="secondary" onClick={() => setTransferStudent(null)}>Cancel</Button>
-              <Button variant="primary" onClick={handleTransferOrPromote}>Confirm Move</Button>
+              <Button
+                variant="primary"
+                loading={movingStudent}
+                disabled={!targetClassId || transferMeta.availableSections.length === 0 || movingStudent}
+                onClick={handleTransferOrPromote}
+              >
+                {transferType === 'promote' ? 'Confirm Promotion' : 'Confirm Section Transfer'}
+              </Button>
             </div>
           </div>
         )}
@@ -1351,7 +1604,8 @@ export function PrincipalClassesSubjectsView({
   students,
   rooms,
   schoolId,
-  schoolCode,
+  schoolCode = 'SCH',
+  schoolName = '',
   academicYear,
   actor,
   canWrite,
@@ -1364,75 +1618,229 @@ export function PrincipalClassesSubjectsView({
   rooms: Room[];
   schoolId: string;
   schoolCode?: string;
+  schoolName?: string;
   academicYear: string;
   actor: PlatformUser;
   canWrite: boolean;
   onOpenExcelImport?: () => void;
 }) {
   const { pushToast } = useToast();
+  const [gradeFilter, setGradeFilter] = useState<string>('all');
+  const [sectionFilter, setSectionFilter] = useState<string>('all');
+  const [detailClassId, setDetailClassId] = useState<string | null>(null);
+  const [fourCodesPack, setFourCodesPack] = useState<StudentFourCodePack | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
   const [classModal, setClassModal] = useState(false);
   const [editingClass, setEditingClass] = useState<SchoolClass | null>(null);
   const [subModal, setSubModal] = useState(false);
+  const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
+  const [savingClass, setSavingClass] = useState(false);
+  const [savingSub, setSavingSub] = useState(false);
+
   const [classForm, setClassForm] = useState({
     gradeLevel: 'Class 1',
     section: 'A',
     code: 'C1A',
     classTeacherId: '',
     roomId: '',
+    customRoomName: '',
+    applySubjectsToAllSections: false,
   });
+  const [classSubjectDrafts, setClassSubjectDrafts] = useState<
+    { id?: string; name: string; code: string; teacherId: string }[]
+  >([]);
   const [subForm, setSubForm] = useState({
     name: '',
     code: '',
     classId: classes[0]?.id || '',
     teacherId: '',
+    applyToGrade: false,
   });
 
   const orderedClasses = useMemo(() => sortClassesInOrder(classes), [classes]);
+  const gradeGroups = useMemo(() => groupClassesByGrade(classes), [classes]);
+
+  const sectionsForSelectedGrade = useMemo(() => {
+    if (gradeFilter === 'all') return [];
+    return gradeGroups.find((g) => g.gradeLevel === gradeFilter)?.sections || [];
+  }, [gradeGroups, gradeFilter]);
+
+  const filteredClasses = useMemo(() => {
+    return orderedClasses.filter((c) => {
+      if (gradeFilter !== 'all' && c.gradeLevel !== gradeFilter) return false;
+      if (sectionFilter !== 'all' && c.id !== sectionFilter) return false;
+      return true;
+    });
+  }, [orderedClasses, gradeFilter, sectionFilter]);
+
+  const filteredClassIdSet = useMemo(() => new Set(filteredClasses.map((c) => c.id)), [filteredClasses]);
+  const classOrderIndex = useMemo(
+    () => new Map(orderedClasses.map((c, idx) => [c.id, idx])),
+    [orderedClasses],
+  );
+
+  const filteredSubjects = useMemo(() => {
+    return subjects
+      .filter((s) => filteredClassIdSet.has(s.classId))
+      .sort((a, b) => {
+        const idxA = classOrderIndex.get(a.classId) ?? 9999;
+        const idxB = classOrderIndex.get(b.classId) ?? 9999;
+        if (idxA !== idxB) return idxA - idxB;
+        return a.name.localeCompare(b.name);
+      });
+  }, [subjects, filteredClassIdSet, classOrderIndex]);
+
+  const detailClass = useMemo(
+    () => (detailClassId ? classes.find((c) => c.id === detailClassId) || null : null),
+    [detailClassId, classes],
+  );
+
+  const detailClassSubjects = useMemo(
+    () =>
+      detailClass
+        ? subjects.filter((s) => s.classId === detailClass.id).sort((a, b) => a.name.localeCompare(b.name))
+        : [],
+    [detailClass, subjects],
+  );
+
+  const detailClassStudents = useMemo(
+    () =>
+      detailClass
+        ? students
+            .filter((s) => s.classId === detailClass.id)
+            .sort((a, b) => a.rollNumber.localeCompare(b.rollNumber, undefined, { numeric: true }))
+        : [],
+    [detailClass, students],
+  );
+
+  const detailClassTeacher = useMemo(() => {
+    if (!detailClass) return undefined;
+    return (
+      teachers.find((t) => t.id === detailClass.classTeacherId || t.classTeacherOfClassId === detailClass.id) ||
+      undefined
+    );
+  }, [detailClass, teachers]);
+
+  const syncTeacherForSubject = async (teacherId: string, classId: string, subjectName: string) => {
+    if (!teacherId) return;
+    const teacher = teachers.find((t) => t.id === teacherId);
+    if (!teacher) return;
+    const nextAssigned = Array.from(new Set([...(teacher.assignedClassIds || []), classId]));
+    const nextSubjects = Array.from(new Set([...(teacher.subjects || []), subjectName])).slice(0, 20);
+    await updateDoc(doc(db, 'teachers', teacher.id), {
+      assignedClassIds: nextAssigned,
+      subjects: nextSubjects,
+      updatedAt: serverTimestamp(),
+    }).catch(() => undefined);
+    if (teacher.userId) {
+      await updateDoc(doc(db, 'users', teacher.userId), {
+        assignedClassIds: nextAssigned,
+        updatedAt: serverTimestamp(),
+      }).catch(() => undefined);
+    }
+  };
 
   const openNewClass = () => {
     setEditingClass(null);
     setClassForm({
-      gradeLevel: 'Class 1',
+      gradeLevel: gradeFilter !== 'all' ? gradeFilter : 'Class 1',
       section: 'A',
-      code: 'C1A',
+      code: deriveClassSectionCode(gradeFilter !== 'all' ? gradeFilter : 'Class 1', 'A'),
       classTeacherId: '',
       roomId: '',
+      customRoomName: '',
+      applySubjectsToAllSections: false,
     });
+    setClassSubjectDrafts([]);
     setClassModal(true);
   };
 
   const openEditClass = (cls: SchoolClass) => {
     setEditingClass(cls);
+    const existingRoom = rooms.find((r) => r.id === cls.roomId);
     setClassForm({
       gradeLevel: cls.gradeLevel,
       section: cls.section,
       code: cls.code,
       classTeacherId: cls.classTeacherId || '',
-      roomId: cls.roomId || '',
+      roomId: existingRoom ? existingRoom.id : cls.roomName ? '__custom__' : '',
+      customRoomName: existingRoom ? '' : cls.roomName || '',
+      applySubjectsToAllSections: false,
     });
+    setClassSubjectDrafts(
+      subjects
+        .filter((s) => s.classId === cls.id)
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((s) => ({
+          id: s.id,
+          name: s.name,
+          code: s.code,
+          teacherId: s.teacherId || '',
+        })),
+    );
     setClassModal(true);
   };
 
   const handleSaveClass = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canWrite) return;
-    const normalizedGrade = normalizeGradeLevel(classForm.gradeLevel) || classForm.gradeLevel.trim();
-    const cleanSection = classForm.section.trim().toUpperCase();
-    const cleanCode = (classForm.code.trim() || deriveClassSectionCode(normalizedGrade, cleanSection)).toUpperCase();
-    const teacher = teachers.find((t) => t.id === classForm.classTeacherId);
-    const room = rooms.find((r) => r.id === classForm.roomId);
+    setSavingClass(true);
+    try {
+      const normalizedGrade = normalizeGradeLevel(classForm.gradeLevel) || classForm.gradeLevel.trim();
+      const cleanSection = classForm.section.trim().toUpperCase();
+      const cleanCode = (classForm.code.trim() || deriveClassSectionCode(normalizedGrade, cleanSection)).toUpperCase();
+      const teacher = teachers.find((t) => t.id === classForm.classTeacherId);
 
-    if (editingClass) {
-      try {
+      // Resolve existing room or create/link custom room name
+      let resolvedRoomId = '';
+      let resolvedRoomName = '';
+      if (classForm.roomId === '__custom__') {
+        const customName = classForm.customRoomName.trim().slice(0, 80);
+        if (customName) {
+          const matchedRoom = rooms.find((r) => r.name.toLowerCase() === customName.toLowerCase());
+          if (matchedRoom) {
+            resolvedRoomId = matchedRoom.id;
+            resolvedRoomName = matchedRoom.name;
+          } else {
+            const newRoomId = generateId('rm');
+            await setDoc(doc(db, 'rooms', newRoomId), {
+              id: newRoomId,
+              schoolId,
+              roomNumber: customName.replace(/[^A-Za-z0-9-]/g, '').slice(0, 24) || `RM-${rooms.length + 1}`,
+              name: customName,
+              building: 'Main Block',
+              capacity: 40,
+              roomType: 'classroom',
+              available: true,
+              status: 'active',
+              createdBy: actor.uid,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+            resolvedRoomId = newRoomId;
+            resolvedRoomName = customName;
+          }
+        }
+      } else if (classForm.roomId) {
+        const room = rooms.find((r) => r.id === classForm.roomId);
+        resolvedRoomId = room?.id || '';
+        resolvedRoomName = room?.name || '';
+      }
+
+      const className = `${normalizedGrade} - Section ${cleanSection}`;
+      let savedClassId = editingClass?.id || '';
+
+      if (editingClass) {
         await updateDoc(doc(db, 'classes', editingClass.id), {
-          name: `${normalizedGrade} - Section ${cleanSection}`,
+          name: className,
           gradeLevel: normalizedGrade,
           section: cleanSection,
           code: cleanCode,
           classTeacherId: teacher?.id || '',
           classTeacherName: teacher?.name || '',
-          roomId: room?.id || '',
-          roomName: room?.name || '',
+          roomId: resolvedRoomId,
+          roomName: resolvedRoomName,
           updatedAt: serverTimestamp(),
         });
         if (teacher) {
@@ -1442,106 +1850,318 @@ export function PrincipalClassesSubjectsView({
             assignedClassIds: nextAssigned,
             updatedAt: serverTimestamp(),
           }).catch(() => undefined);
+          if (teacher.userId) {
+            await updateDoc(doc(db, 'users', teacher.userId), {
+              assignedClassIds: nextAssigned,
+              updatedAt: serverTimestamp(),
+            }).catch(() => undefined);
+          }
         }
-        pushToast('success', `Updated ${normalizedGrade} - Section ${cleanSection}.`);
-        setClassModal(false);
-        setEditingClass(null);
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, `classes/${editingClass.id}`);
+      } else {
+        const dup = classes.find((c) => c.code.toUpperCase() === cleanCode && c.academicYear === academicYear);
+        if (dup) {
+          pushToast('error', `Duplicate class code "${cleanCode}" already exists in ${academicYear}.`);
+          setSavingClass(false);
+          return;
+        }
+        savedClassId = generateId('cls');
+        await setDoc(doc(db, 'classes', savedClassId), {
+          id: savedClassId,
+          schoolId,
+          name: className,
+          gradeLevel: normalizedGrade,
+          section: cleanSection,
+          code: cleanCode,
+          academicYear,
+          capacity: 500,
+          classTeacherId: teacher?.id || '',
+          classTeacherName: teacher?.name || '',
+          roomId: resolvedRoomId,
+          roomName: resolvedRoomName,
+          status: 'active',
+          createdBy: actor.uid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        if (teacher) {
+          const nextAssigned = Array.from(new Set([...(teacher.assignedClassIds || []), savedClassId]));
+          await updateDoc(doc(db, 'teachers', teacher.id), {
+            classTeacherOfClassId: savedClassId,
+            assignedClassIds: nextAssigned,
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+        }
+        if (schoolCode) {
+          const mergedSlots = sortClassesInOrder([
+            ...classes.map((c) => ({
+              classId: c.id,
+              classCode: c.code,
+              className: c.name,
+              gradeLevel: c.gradeLevel,
+              section: c.section,
+            })),
+            {
+              classId: savedClassId,
+              classCode: cleanCode,
+              className,
+              gradeLevel: normalizedGrade,
+              section: cleanSection,
+            },
+          ]).slice(0, 200);
+          await updateDoc(doc(db, 'schoolCodes', schoolCode), {
+            classSections: mergedSlots,
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+        }
       }
-      return;
-    }
 
-    const dup = classes.find((c) => c.code.toUpperCase() === cleanCode && c.academicYear === academicYear);
-    if (dup) {
-      pushToast('error', `Duplicate class code "${cleanCode}" already exists in ${academicYear}.`);
-      return;
-    }
-    const id = generateId('cls');
-    const className = `${normalizedGrade} - Section ${cleanSection}`;
-    try {
-      await setDoc(doc(db, 'classes', id), {
-        id,
-        schoolId,
-        name: className,
-        gradeLevel: normalizedGrade,
-        section: cleanSection,
-        code: cleanCode,
-        academicYear,
-        capacity: 500,
-        classTeacherId: teacher?.id || '',
-        classTeacherName: teacher?.name || '',
-        roomId: room?.id || '',
-        roomName: room?.name || '',
-        status: 'active',
-        createdBy: actor.uid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      if (teacher) {
-        const nextAssigned = Array.from(new Set([...(teacher.assignedClassIds || []), id]));
-        await updateDoc(doc(db, 'teachers', teacher.id), {
-          classTeacherOfClassId: id,
-          assignedClassIds: nextAssigned,
-          updatedAt: serverTimestamp(),
-        }).catch(() => undefined);
-      }
-      if (schoolCode) {
-        const mergedSlots = sortClassesInOrder([
-          ...classes.map((c) => ({
-            classId: c.id,
-            classCode: c.code,
-            className: c.name,
-            gradeLevel: c.gradeLevel,
-            section: c.section,
-          })),
-          {
-            classId: id,
-            classCode: cleanCode,
+      // Persist inline Subjects added/updated in this class modal
+      const validDrafts = classSubjectDrafts.filter((d) => d.name.trim().length >= 2);
+      const targetSectionsForNewSubjects = classForm.applySubjectsToAllSections
+        ? classes.filter((c) => c.gradeLevel === normalizedGrade)
+        : [];
+
+      for (const draft of validDrafts) {
+        const subName = draft.name.trim().slice(0, 100);
+        const subCode = (
+          draft.code.trim() ||
+          `${subName.replace(/[^A-Za-z]/g, '').slice(0, 4).toUpperCase() || 'SUB'}-${cleanCode}`
+        )
+          .toUpperCase()
+          .slice(0, 24);
+        const subTeacher = teachers.find((t) => t.id === draft.teacherId);
+
+        if (draft.id) {
+          await updateDoc(doc(db, 'subjects', draft.id), {
+            name: subName,
+            code: subCode,
             className,
-            gradeLevel: normalizedGrade,
-            section: cleanSection,
-          },
-        ]).slice(0, 200);
-        await updateDoc(doc(db, 'schoolCodes', schoolCode), {
-          classSections: mergedSlots,
-          updatedAt: serverTimestamp(),
-        }).catch(() => undefined);
+            teacherId: subTeacher?.id || '',
+            teacherName: subTeacher?.name || '',
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+          if (subTeacher) {
+            await syncTeacherForSubject(subTeacher.id, savedClassId, subName);
+          }
+        } else {
+          const sectionsToCreate =
+            targetSectionsForNewSubjects.length > 0
+              ? Array.from(
+                  new Map([
+                    ...targetSectionsForNewSubjects.map((c) => [c.id, c] as const),
+                    [savedClassId, { id: savedClassId, name: className, code: cleanCode } as SchoolClass] as const,
+                  ]).values(),
+                )
+              : [{ id: savedClassId, name: className, code: cleanCode } as SchoolClass];
+
+          for (const secCls of sectionsToCreate) {
+            const existsInSec = subjects.some(
+              (s) => s.classId === secCls.id && s.name.trim().toLowerCase() === subName.toLowerCase(),
+            );
+            if (existsInSec) continue;
+            const newSubId = generateId('sub');
+            const secSubCode = (
+              draft.code.trim()
+                ? `${draft.code.trim().toUpperCase()}${sectionsToCreate.length > 1 ? `-${secCls.code}` : ''}`
+                : `${subName.replace(/[^A-Za-z]/g, '').slice(0, 4).toUpperCase() || 'SUB'}-${secCls.code}`
+            ).slice(0, 24);
+            const assignedTeacher = secCls.id === savedClassId ? subTeacher : undefined;
+            await setDoc(doc(db, 'subjects', newSubId), {
+              id: newSubId,
+              schoolId,
+              name: subName,
+              code: secSubCode,
+              classId: secCls.id,
+              className: secCls.name,
+              teacherId: assignedTeacher?.id || '',
+              teacherName: assignedTeacher?.name || '',
+              status: 'active',
+              createdBy: actor.uid,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+            if (assignedTeacher) {
+              await syncTeacherForSubject(assignedTeacher.id, secCls.id, subName);
+            }
+          }
+        }
       }
-      pushToast('success', `Created ${className} (${cleanCode}).`);
+
+      pushToast(
+        'success',
+        editingClass ? `Updated ${className}.` : `Created ${className} (${cleanCode}).`,
+      );
       setClassModal(false);
+      setEditingClass(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `classes/${id}`);
+      pushToast('error', err instanceof Error ? err.message : 'Unable to save class.');
+    } finally {
+      setSavingClass(false);
     }
   };
 
-  const handleCreateSubject = async (e: React.FormEvent) => {
+  const openNewSubjectModal = (defaultClassId?: string) => {
+    setEditingSubject(null);
+    setSubForm({
+      name: '',
+      code: '',
+      classId: defaultClassId || filteredClasses[0]?.id || orderedClasses[0]?.id || '',
+      teacherId: '',
+      applyToGrade: false,
+    });
+    setSubModal(true);
+  };
+
+  const openEditSubjectModal = (sub: Subject) => {
+    setEditingSubject(sub);
+    setSubForm({
+      name: sub.name,
+      code: sub.code,
+      classId: sub.classId,
+      teacherId: sub.teacherId || '',
+      applyToGrade: false,
+    });
+    setSubModal(true);
+  };
+
+  const handleSaveSubject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canWrite) return;
     const cls = classes.find((c) => c.id === subForm.classId);
     if (!cls) return;
-    const teacher = teachers.find((t) => t.id === subForm.teacherId);
-    const id = generateId('sub');
+    setSavingSub(true);
     try {
-      await setDoc(doc(db, 'subjects', id), {
-        id,
-        schoolId,
-        name: subForm.name.trim().slice(0, 100),
-        code: subForm.code.trim().toUpperCase().slice(0, 24),
-        classId: cls.id,
-        className: cls.name,
+      const teacher = teachers.find((t) => t.id === subForm.teacherId);
+      const cleanName = subForm.name.trim().slice(0, 100);
+      const cleanCode = (
+        subForm.code.trim() ||
+        `${cleanName.replace(/[^A-Za-z]/g, '').slice(0, 4).toUpperCase() || 'SUB'}-${cls.code}`
+      )
+        .toUpperCase()
+        .slice(0, 24);
+
+      if (editingSubject) {
+        await updateDoc(doc(db, 'subjects', editingSubject.id), {
+          name: cleanName,
+          code: cleanCode,
+          classId: cls.id,
+          className: cls.name,
+          teacherId: teacher?.id || '',
+          teacherName: teacher?.name || '',
+          updatedAt: serverTimestamp(),
+        });
+        if (teacher) {
+          await syncTeacherForSubject(teacher.id, cls.id, cleanName);
+        }
+        pushToast('success', `Updated subject ${cleanName}.`);
+      } else {
+        const targetClasses = subForm.applyToGrade
+          ? orderedClasses.filter((c) => c.gradeLevel === cls.gradeLevel)
+          : [cls];
+        let created = 0;
+        for (const targetCls of targetClasses) {
+          const exists = subjects.some(
+            (s) => s.classId === targetCls.id && s.name.trim().toLowerCase() === cleanName.toLowerCase(),
+          );
+          if (exists) continue;
+          const id = generateId('sub');
+          const codeForSec =
+            targetClasses.length > 1
+              ? `${(subForm.code.trim() || cleanName.replace(/[^A-Za-z]/g, '').slice(0, 4)).toUpperCase()}-${targetCls.code}`.slice(0, 24)
+              : cleanCode;
+          const assignedTeacher = targetCls.id === cls.id ? teacher : undefined;
+          await setDoc(doc(db, 'subjects', id), {
+            id,
+            schoolId,
+            name: cleanName,
+            code: codeForSec,
+            classId: targetCls.id,
+            className: targetCls.name,
+            teacherId: assignedTeacher?.id || '',
+            teacherName: assignedTeacher?.name || '',
+            status: 'active',
+            createdBy: actor.uid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          if (assignedTeacher) {
+            await syncTeacherForSubject(assignedTeacher.id, targetCls.id, cleanName);
+          }
+          created += 1;
+        }
+        pushToast(
+          'success',
+          created > 1
+            ? `Added ${cleanName} across ${created} sections of ${cls.gradeLevel}.`
+            : `Added subject ${cleanName} to ${cls.name}.`,
+        );
+      }
+      setSubModal(false);
+      setEditingSubject(null);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'subjects');
+    } finally {
+      setSavingSub(false);
+    }
+  };
+
+  const handleQuickAssignSubjectTeacher = async (sub: Subject, nextTeacherId: string) => {
+    if (!canWrite) return;
+    const teacher = teachers.find((t) => t.id === nextTeacherId);
+    try {
+      await updateDoc(doc(db, 'subjects', sub.id), {
         teacherId: teacher?.id || '',
         teacherName: teacher?.name || '',
-        status: 'active',
-        createdBy: actor.uid,
-        createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      pushToast('success', `Added subject ${subForm.name.trim()}.`);
-      setSubModal(false);
+      if (teacher) {
+        await syncTeacherForSubject(teacher.id, sub.classId, sub.name);
+      }
+      pushToast(
+        'success',
+        teacher
+          ? `Assigned ${teacher.name} as ${sub.name} Teacher.`
+          : `Unassigned teacher from ${sub.name}.`,
+      );
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `subjects/${id}`);
+      pushToast('error', err instanceof Error ? err.message : 'Unable to update subject teacher.');
     }
+  };
+
+  const handleCopyStudentFourCodes = (st: StudentProfile) => {
+    const pack = buildStudentFourCodePack({
+      schoolCode,
+      schoolName: schoolName || 'School',
+      student: st,
+      classes,
+      teachers,
+    });
+    navigator.clipboard?.writeText(formatStudentFourCodeMessage(pack));
+    setCopiedKey(`cls-four-${st.id}`);
+    pushToast('success', `Copied all 4 login codes for ${st.name}.`);
+    setTimeout(() => setCopiedKey(null), 1800);
+  };
+
+  const handleDownloadCodes = (format: 'excel' | 'pdf' | 'csv', cls: SchoolClass) => {
+    const params = {
+      cls,
+      students,
+      teachers,
+      schoolCode,
+      schoolName: schoolName || 'SJ Academia One',
+    };
+    const count =
+      format === 'excel'
+        ? downloadStudentCodesExcel(params)
+        : format === 'pdf'
+          ? downloadStudentCodesPdf(params)
+          : downloadStudentCodesCsv(params);
+    pushToast(
+      'success',
+      format === 'pdf'
+        ? `Prepared PDF print sheet for ${cls.name} (${count} student${count === 1 ? '' : 's'}).`
+        : `Downloaded ${format.toUpperCase()} student codes for ${cls.name} (${count} student${count === 1 ? '' : 's'}).`,
+    );
   };
 
   return (
@@ -1551,7 +2171,7 @@ export function PrincipalClassesSubjectsView({
           <div>
             <h2 className="text-base font-bold font-display text-slate-900">Classes &amp; Sections</h2>
             <p className="text-xs text-slate-500">
-              Organized in grade and section order with unlimited student capacity per section ({academicYear}).
+              Filter by Class and Section, click any class card to view assigned teachers, students, and download login codes ({academicYear}).
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1568,89 +2188,471 @@ export function PrincipalClassesSubjectsView({
           </div>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {orderedClasses.map((c) => {
-            const enrolled = students.filter((s) => s.classId === c.id && s.status === 'active').length;
-            const classSubjects = subjects.filter((s) => s.classId === c.id);
-            return (
-              <div key={c.id} className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-3">
-                <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-xs font-semibold text-teal-700">{c.code}</span>
-                    <span className="text-xs text-slate-500 tabular-nums">
-                      {enrolled} student{enrolled === 1 ? '' : 's'} · Unlimited
-                    </span>
-                  </div>
-                  <h3 className="text-base font-bold font-display text-slate-900 mt-1">{c.name}</h3>
-                  <p className="text-xs text-slate-600 mt-1">
-                    Class Teacher: <strong className="font-semibold text-slate-800">{c.classTeacherName || 'Unassigned'}</strong>
-                  </p>
-                  <p className="text-xs text-slate-500">Room: {c.roomName || 'Unassigned'}</p>
-                  <p className="text-xs text-slate-500 mt-3 pt-3 border-t border-slate-100">
-                    Subjects ({classSubjects.length}): {classSubjects.map((s) => s.name).join(', ') || 'None yet'}
-                  </p>
-                </div>
-                {canWrite && (
-                  <div className="flex justify-end pt-1">
-                    <Button variant="secondary" size="sm" onClick={() => openEditClass(c)}>
-                      <Pencil className="w-3.5 h-3.5" />
-                      Assign Teacher / Edit
-                    </Button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+        {/* Grade & Section Filter / Sort Bar */}
+        <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-end justify-between gap-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                Filter by Class / Grade
+              </label>
+              <select
+                value={gradeFilter}
+                onChange={(e) => {
+                  setGradeFilter(e.target.value);
+                  setSectionFilter('all');
+                }}
+                className="px-3 py-1.5 text-xs font-medium border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-teal-600 min-w-[180px]"
+              >
+                <option value="all">All Classes ({orderedClasses.length} sections)</option>
+                {gradeGroups.map((grp) => (
+                  <option key={grp.gradeLevel} value={grp.gradeLevel}>
+                    {grp.gradeLevel} ({grp.sections.length} section{grp.sections.length === 1 ? '' : 's'})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                Filter by Section
+              </label>
+              <select
+                value={sectionFilter}
+                disabled={gradeFilter === 'all'}
+                onChange={(e) => setSectionFilter(e.target.value)}
+                className="px-3 py-1.5 text-xs font-medium border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-teal-600 min-w-[180px] disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                <option value="all">
+                  {gradeFilter === 'all'
+                    ? 'Select a Class first'
+                    : `All Sections in ${gradeFilter} (${sectionsForSelectedGrade.length})`}
+                </option>
+                {sectionsForSelectedGrade.map((sec) => (
+                  <option key={sec.id} value={sec.id}>
+                    Section {sec.section} ({sec.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {(gradeFilter !== 'all' || sectionFilter !== 'all') && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setGradeFilter('all');
+                  setSectionFilter('all');
+                }}
+              >
+                Reset Filter
+              </Button>
+            )}
+          </div>
+
+          <p className="text-xs text-slate-500 tabular-nums">
+            Showing <strong className="text-slate-900">{filteredClasses.length}</strong> of {orderedClasses.length}{' '}
+            section{orderedClasses.length === 1 ? '' : 's'}
+          </p>
         </div>
+
+        {filteredClasses.length === 0 ? (
+          <EmptyState
+            title="No classes match this filter"
+            description="Adjust the Class or Section dropdown above, or create a new Class & Section."
+            actionLabel="Add Class / Section"
+            onAction={openNewClass}
+          />
+        ) : (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredClasses.map((c) => {
+              const enrolled = students.filter((s) => s.classId === c.id && s.status !== 'withdrawn').length;
+              const classSubjects = subjects.filter((s) => s.classId === c.id);
+              const assignedSubjectTeachers = classSubjects.filter((s) => Boolean(s.teacherName));
+              return (
+                <div
+                  key={c.id}
+                  onClick={() => setDetailClassId(c.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setDetailClassId(c.id);
+                    }
+                  }}
+                  className="bg-white border border-slate-200 hover:border-teal-400 hover:shadow-sm transition-all rounded-xl p-5 flex flex-col justify-between gap-3 cursor-pointer text-left"
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-xs font-semibold text-teal-700">{c.code}</span>
+                      <span className="text-xs text-slate-500 tabular-nums">
+                        {enrolled} student{enrolled === 1 ? '' : 's'} · Unlimited
+                      </span>
+                    </div>
+                    <h3 className="text-base font-bold font-display text-slate-900 mt-1">{c.name}</h3>
+                    <p className="text-xs text-slate-700 mt-1.5">
+                      Class Teacher:{' '}
+                      <strong className="font-semibold text-[#0F295C]">{c.classTeacherName || 'Unassigned'}</strong>
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">Room: {c.roomName || 'Unassigned'}</p>
+
+                    <div className="mt-3 pt-3 border-t border-slate-100 space-y-1">
+                      <p className="text-[11px] font-semibold text-slate-600">
+                        Subjects ({classSubjects.length})
+                      </p>
+                      {classSubjects.length === 0 ? (
+                        <p className="text-xs text-slate-400">No subjects added yet</p>
+                      ) : (
+                        <div className="space-y-0.5">
+                          {assignedSubjectTeachers.slice(0, 3).map((s) => (
+                            <p key={s.id} className="text-xs text-slate-600 truncate">
+                              <span className="font-medium text-slate-800">{s.name} Teacher:</span> {s.teacherName}
+                            </p>
+                          ))}
+                          {assignedSubjectTeachers.length === 0 && (
+                            <p className="text-xs text-slate-500 truncate">
+                              {classSubjects.map((s) => s.name).join(', ')}
+                            </p>
+                          )}
+                          {classSubjects.length > 3 && (
+                            <p className="text-[11px] text-teal-700 font-medium">
+                              +{classSubjects.length - 3} more subject{classSubjects.length - 3 === 1 ? '' : 's'}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700">
+                      <Users className="w-3.5 h-3.5" /> View Faculty &amp; Codes
+                    </span>
+                    {canWrite && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditClass(c);
+                        }}
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        Edit
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Subjects Table */}
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-bold font-display text-slate-900">Subjects &amp; Faculty Allocation</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold font-display text-slate-900">Subjects &amp; Faculty Allocation</h2>
+            <p className="text-xs text-slate-500">
+              Define subjects per class and assign subject teachers. Teachers inherit these classes automatically.
+            </p>
+          </div>
           <Button
             variant="secondary"
             size="sm"
             disabled={!canWrite || orderedClasses.length === 0}
-            onClick={() => {
-              setSubForm({ name: '', code: '', classId: orderedClasses[0]?.id || '', teacherId: teachers[0]?.id || '' });
-              setSubModal(true);
-            }}
+            onClick={() => openNewSubjectModal()}
           >
             <Plus className="w-4 h-4" />
             Add Subject
           </Button>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
-          <table className="w-full text-left border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
-                <th className="py-3 px-4 font-semibold">Code</th>
-                <th className="py-3 px-4 font-semibold">Subject</th>
-                <th className="py-3 px-4 font-semibold">Class</th>
-                <th className="py-3 px-4 font-semibold">Assigned Teacher</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {subjects.map((s) => (
-                <tr key={s.id} className="hover:bg-slate-50/70">
-                  <td className="py-3 px-4 font-mono text-xs text-slate-600">{s.code}</td>
-                  <td className="py-3 px-4 font-semibold text-slate-900">{s.name}</td>
-                  <td className="py-3 px-4 text-xs text-slate-700">{s.className}</td>
-                  <td className="py-3 px-4 text-xs text-slate-700">{s.teacherName || 'Unassigned'}</td>
+        {filteredSubjects.length === 0 ? (
+          <EmptyState
+            title="No subjects configured for this selection"
+            description="Add subjects to your classes so you can assign subject teachers cleanly."
+            actionLabel="Add Subject"
+            onAction={() => openNewSubjectModal()}
+          />
+        ) : (
+          <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
+                  <th className="py-3 px-4 font-semibold">Code</th>
+                  <th className="py-3 px-4 font-semibold">Subject</th>
+                  <th className="py-3 px-4 font-semibold">Class &amp; Section</th>
+                  <th className="py-3 px-4 font-semibold">Assigned Subject Teacher</th>
+                  {canWrite && <th className="py-3 px-4 font-semibold text-right">Actions</th>}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredSubjects.map((s) => (
+                  <tr key={s.id} className="hover:bg-slate-50/70">
+                    <td className="py-3 px-4 font-mono text-xs text-slate-600">{s.code}</td>
+                    <td className="py-3 px-4 font-semibold text-slate-900">{s.name}</td>
+                    <td className="py-3 px-4 text-xs text-slate-700">{s.className}</td>
+                    <td className="py-3 px-4 text-xs text-slate-700">
+                      {canWrite ? (
+                        <select
+                          value={s.teacherId || ''}
+                          onChange={(e) => handleQuickAssignSubjectTeacher(s, e.target.value)}
+                          className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-teal-600"
+                        >
+                          <option value="">Unassigned</option>
+                          {teachers.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name} ({t.accessCode || t.staffId})
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span>{s.teacherName || 'Unassigned'}</span>
+                      )}
+                    </td>
+                    {canWrite && (
+                      <td className="py-3 px-4 text-right">
+                        <Button variant="ghost" size="sm" onClick={() => openEditSubjectModal(s)}>
+                          <Pencil className="w-3.5 h-3.5" /> Edit
+                        </Button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
+      {/* Class Detail Modal: Assigned Class Teacher, Subject Teachers, Students & Downloadable Codes */}
+      <Modal
+        open={Boolean(detailClass)}
+        onClose={() => setDetailClassId(null)}
+        title={detailClass ? `${detailClass.name} (${detailClass.code})` : 'Class Details'}
+        subtitle={
+          detailClass
+            ? `Room: ${detailClass.roomName || 'Unassigned'} · Academic Year ${detailClass.academicYear}`
+            : undefined
+        }
+        maxWidth="max-w-4xl"
+      >
+        {detailClass && (
+          <div className="space-y-6">
+            {/* Assigned Faculty Cards */}
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                  <UserCheck className="w-3.5 h-3.5 text-teal-600" />
+                  Assigned Teachers for {detailClass.name}
+                </h3>
+                {canWrite && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => openNewSubjectModal(detailClass.id)}
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add Subject
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        const target = detailClass;
+                        setDetailClassId(null);
+                        openEditClass(target);
+                      }}
+                    >
+                      <Pencil className="w-3.5 h-3.5" /> Edit Class &amp; Room
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {/* Class Teacher Card */}
+                <div className="p-3.5 rounded-xl bg-[#0F295C] text-white space-y-1">
+                  <p className="text-[11px] font-medium text-teal-300 uppercase tracking-wider">Class Teacher</p>
+                  <p className="text-sm font-bold">
+                    {detailClass.classTeacherName || detailClassTeacher?.name || 'Unassigned'}
+                  </p>
+                  <p className="text-[11px] font-mono text-blue-200">
+                    {detailClassTeacher
+                      ? `Code: ${detailClassTeacher.accessCode || detailClassTeacher.staffId}`
+                      : 'Assign in Edit Class'}
+                  </p>
+                </div>
+
+                {/* Subject Teacher Cards */}
+                {detailClassSubjects.map((sub) => (
+                  <div key={sub.id} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold text-teal-800 uppercase tracking-wider truncate">
+                        {sub.name} Teacher
+                      </p>
+                      <span className="font-mono text-[10px] text-slate-400 shrink-0">{sub.code}</span>
+                    </div>
+                    {canWrite ? (
+                      <select
+                        value={sub.teacherId || ''}
+                        onChange={(e) => handleQuickAssignSubjectTeacher(sub, e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs font-semibold text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                      >
+                        <option value="">Unassigned</option>
+                        {teachers.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name} ({t.accessCode || t.staffId})
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <p className="text-sm font-bold text-slate-900">{sub.teacherName || 'Unassigned'}</p>
+                    )}
+                  </div>
+                ))}
+
+                {detailClassSubjects.length === 0 && (
+                  <div className="sm:col-span-1 lg:col-span-2 p-3.5 rounded-xl bg-slate-50 border border-dashed border-slate-300 flex items-center justify-between gap-3 text-xs text-slate-500">
+                    <span>No subject teachers assigned to this section yet.</span>
+                    {canWrite && (
+                      <Button variant="secondary" size="sm" onClick={() => openNewSubjectModal(detailClass.id)}>
+                        <Plus className="w-3.5 h-3.5" /> Add Subject
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Students & Student Access Codes inside Class + Excel/PDF/CSV Download */}
+            <div className="space-y-3 pt-4 border-t border-slate-200">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold font-display text-slate-900">
+                    Students &amp; Login Codes ({detailClassStudents.length})
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    School Code <strong className="font-mono text-slate-800">{schoolCode}</strong> · Class Code{' '}
+                    <strong className="font-mono text-slate-800">{detailClass.code}</strong>
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={detailClassStudents.length === 0}
+                    onClick={() => handleDownloadCodes('excel', detailClass)}
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
+                    Excel (.xlsx)
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={detailClassStudents.length === 0}
+                    onClick={() => handleDownloadCodes('pdf', detailClass)}
+                  >
+                    <FileText className="w-3.5 h-3.5 text-red-600" />
+                    PDF
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={detailClassStudents.length === 0}
+                    onClick={() => handleDownloadCodes('csv', detailClass)}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    CSV
+                  </Button>
+                </div>
+              </div>
+
+              {detailClassStudents.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-500 bg-slate-50 rounded-xl border border-slate-200">
+                  No students enrolled in {detailClass.name} yet.
+                </div>
+              ) : (
+                <div className="border border-slate-200 rounded-xl overflow-x-auto max-h-80 overflow-y-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 sticky top-0">
+                      <tr>
+                        <th className="py-2.5 px-3 font-semibold">Roll</th>
+                        <th className="py-2.5 px-3 font-semibold">Student Name</th>
+                        <th className="py-2.5 px-3 font-semibold">Admission No.</th>
+                        <th className="py-2.5 px-3 font-semibold">Student Code</th>
+                        <th className="py-2.5 px-3 font-semibold">Status</th>
+                        <th className="py-2.5 px-3 font-semibold text-right">4 Codes</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {detailClassStudents.map((st) => (
+                        <tr key={st.id} className="hover:bg-slate-50/70">
+                          <td className="py-2.5 px-3 font-mono tabular-nums text-slate-600">#{st.rollNumber}</td>
+                          <td className="py-2.5 px-3 font-semibold text-slate-900">{st.name}</td>
+                          <td className="py-2.5 px-3 font-mono text-slate-600">{st.admissionNumber}</td>
+                          <td className="py-2.5 px-3 font-mono font-bold text-[#0F295C]">
+                            {st.accessCode || <span className="text-amber-700 font-sans font-medium">Unassigned</span>}
+                          </td>
+                          <td className="py-2.5 px-3"><StatusText status={st.status} /></td>
+                          <td className="py-2.5 px-3 text-right">
+                            <div className="inline-flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleCopyStudentFourCodes(st)}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-teal-200 bg-teal-50 text-teal-800 font-semibold hover:bg-teal-100 cursor-pointer"
+                              >
+                                {copiedKey === `cls-four-${st.id}` ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-600" /> Copied
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" /> Copy
+                                  </>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setFourCodesPack(
+                                    buildStudentFourCodePack({
+                                      schoolCode,
+                                      schoolName: schoolName || 'School',
+                                      student: st,
+                                      classes,
+                                      teachers,
+                                    }),
+                                  )
+                                }
+                                className="p-1 text-slate-400 hover:text-[#0F295C] cursor-pointer"
+                                title="View all 4 login codes"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <StudentFourCodesModal pack={fourCodesPack} onClose={() => setFourCodesPack(null)} />
+
+      {/* Create / Edit Class Modal (with Editable Room & Subjects Management) */}
       <Modal
         open={classModal}
         onClose={() => { setClassModal(false); setEditingClass(null); }}
         title={editingClass ? `Edit ${editingClass.name}` : 'Create Class & Section'}
-        maxWidth="max-w-md"
+        subtitle="Configure homeroom, class teacher, and subjects taught in this class."
+        maxWidth="max-w-2xl"
       >
         <form onSubmit={handleSaveClass} className="space-y-4">
           <div className="grid grid-cols-3 gap-3">
@@ -1701,66 +2703,211 @@ export function PrincipalClassesSubjectsView({
               />
             </div>
           </div>
+
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Homeroom</label>
+              <select
+                value={classForm.roomId}
+                onChange={(e) => setClassForm({ ...classForm, roomId: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+              >
+                <option value="">Unassigned</option>
+                {rooms.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name} ({r.capacity} seats)</option>
+                ))}
+                <option value="__custom__">+ Enter / Create Room Name…</option>
+              </select>
+              {classForm.roomId === '__custom__' && (
+                <input
+                  type="text"
+                  value={classForm.customRoomName}
+                  onChange={(e) => setClassForm({ ...classForm, customRoomName: e.target.value })}
+                  placeholder="Room 204 - East Wing"
+                  className="mt-2 w-full px-3 py-2 text-xs border border-teal-300 rounded-lg bg-teal-50/30 focus:outline-none focus:border-teal-600"
+                />
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Class Teacher</label>
+              <select
+                value={classForm.classTeacherId}
+                onChange={(e) => setClassForm({ ...classForm, classTeacherId: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+              >
+                <option value="">Unassigned</option>
+                {teachers.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name} ({t.accessCode || t.staffId})</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Inline Class Subjects & Subject Teachers Section */}
+          <div className="pt-3 border-t border-slate-200 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
+                  <BookOpen className="w-3.5 h-3.5 text-teal-600" />
+                  Subjects in this Class ({classSubjectDrafts.length})
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  List subjects taught here so teachers can be assigned by Subject &amp; Class.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  setClassSubjectDrafts((prev) => [...prev, { name: '', code: '', teacherId: '' }])
+                }
+              >
+                <Plus className="w-3.5 h-3.5" /> Add Subject Row
+              </Button>
+            </div>
+
+            {classSubjectDrafts.length > 0 && (
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {classSubjectDrafts.map((row, idx) => (
+                  <div
+                    key={row.id || `new-sub-${idx}`}
+                    className="grid grid-cols-12 gap-2 items-center p-2 rounded-lg bg-slate-50 border border-slate-200"
+                  >
+                    <input
+                      type="text"
+                      value={row.name}
+                      onChange={(e) =>
+                        setClassSubjectDrafts((prev) =>
+                          prev.map((r, i) => (i === idx ? { ...r, name: e.target.value } : r)),
+                        )
+                      }
+                      placeholder="Subject Name"
+                      className="col-span-5 px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                    />
+                    <input
+                      type="text"
+                      value={row.code}
+                      onChange={(e) =>
+                        setClassSubjectDrafts((prev) =>
+                          prev.map((r, i) => (i === idx ? { ...r, code: e.target.value.toUpperCase() } : r)),
+                        )
+                      }
+                      placeholder="Code"
+                      className="col-span-2 px-2 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg"
+                    />
+                    <select
+                      value={row.teacherId}
+                      onChange={(e) =>
+                        setClassSubjectDrafts((prev) =>
+                          prev.map((r, i) => (i === idx ? { ...r, teacherId: e.target.value } : r)),
+                        )
+                      }
+                      className="col-span-4 px-2 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                    >
+                      <option value="">Teacher (Optional)</option>
+                      {teachers.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="col-span-1 flex justify-end">
+                      {!row.id && (
+                        <button
+                          type="button"
+                          onClick={() => setClassSubjectDrafts((prev) => prev.filter((_, i) => i !== idx))}
+                          className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                          aria-label="Remove subject row"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {classSubjectDrafts.some((d) => !d.id && d.name.trim()) && (
+              <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={classForm.applySubjectsToAllSections}
+                  onChange={(e) =>
+                    setClassForm({ ...classForm, applySubjectsToAllSections: e.target.checked })
+                  }
+                  className="rounded border-slate-300 text-teal-600"
+                />
+                Also add these new subjects to all sections of {normalizeGradeLevel(classForm.gradeLevel) || classForm.gradeLevel}
+              </label>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-3 pt-2">
+            <Button type="button" variant="secondary" onClick={() => { setClassModal(false); setEditingClass(null); }}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={savingClass}>
+              {savingClass ? 'Saving…' : editingClass ? 'Save Changes' : 'Create Class'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Add / Edit Subject Modal */}
+      <Modal
+        open={subModal}
+        onClose={() => { setSubModal(false); setEditingSubject(null); }}
+        title={editingSubject ? `Edit Subject — ${editingSubject.name}` : 'Add Subject'}
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleSaveSubject} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Subject Name *</label>
+              <input type="text" required value={subForm.name} onChange={(e) => setSubForm({ ...subForm, name: e.target.value })} placeholder="Mathematics" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Subject Code</label>
+              <input type="text" value={subForm.code} onChange={(e) => setSubForm({ ...subForm, code: e.target.value.toUpperCase() })} placeholder="MATH-10" className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg" />
+            </div>
+          </div>
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Homeroom</label>
-            <select value={classForm.roomId} onChange={(e) => setClassForm({ ...classForm, roomId: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
-              <option value="">None</option>
-              {rooms.map((r) => (
-                <option key={r.id} value={r.id}>{r.name} ({r.capacity} seats)</option>
+            <label className="block text-xs font-medium text-slate-700 mb-1">Class &amp; Section *</label>
+            <select required value={subForm.classId} onChange={(e) => setSubForm({ ...subForm, classId: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
+              {gradeGroups.map((grp) => (
+                <optgroup key={grp.gradeLevel} label={grp.gradeLevel}>
+                  {grp.sections.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name} ({c.code})</option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>
+          {!editingSubject && (
+            <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={subForm.applyToGrade}
+                onChange={(e) => setSubForm({ ...subForm, applyToGrade: e.target.checked })}
+                className="rounded border-slate-300 text-teal-600"
+              />
+              Add this subject to all sections of the selected grade
+            </label>
+          )}
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Class Teacher</label>
-            <select value={classForm.classTeacherId} onChange={(e) => setClassForm({ ...classForm, classTeacherId: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
+            <label className="block text-xs font-medium text-slate-700 mb-1">Assigned Subject Teacher</label>
+            <select value={subForm.teacherId} onChange={(e) => setSubForm({ ...subForm, teacherId: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
               <option value="">Unassigned</option>
               {teachers.map((t) => (
                 <option key={t.id} value={t.id}>{t.name} ({t.accessCode || t.staffId})</option>
               ))}
             </select>
           </div>
-          <p className="text-[11px] text-slate-500">
-            Sections have unlimited student capacity. Students can be added manually or imported from Excel.
-          </p>
           <div className="flex justify-end gap-3">
-            <Button type="button" variant="secondary" onClick={() => { setClassModal(false); setEditingClass(null); }}>Cancel</Button>
-            <Button type="submit" variant="primary">{editingClass ? 'Save Changes' : 'Create Class'}</Button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal open={subModal} onClose={() => setSubModal(false)} title="Add Subject" maxWidth="max-w-md">
-        <form onSubmit={handleCreateSubject} className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Subject Name *</label>
-              <input type="text" required value={subForm.name} onChange={(e) => setSubForm({ ...subForm, name: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Subject Code *</label>
-              <input type="text" required value={subForm.code} onChange={(e) => setSubForm({ ...subForm, code: e.target.value.toUpperCase() })} placeholder="CHEM-10" className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Class *</label>
-            <select required value={subForm.classId} onChange={(e) => setSubForm({ ...subForm, classId: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
-              {classes.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Assigned Teacher</label>
-            <select value={subForm.teacherId} onChange={(e) => setSubForm({ ...subForm, teacherId: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
-              <option value="">Unassigned</option>
-              {teachers.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex justify-end gap-3">
-            <Button type="button" variant="secondary" onClick={() => setSubModal(false)}>Cancel</Button>
-            <Button type="submit" variant="primary">Add Subject</Button>
+            <Button type="button" variant="secondary" onClick={() => { setSubModal(false); setEditingSubject(null); }}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={savingSub}>
+              {savingSub ? 'Saving…' : editingSubject ? 'Save Subject' : 'Add Subject'}
+            </Button>
           </div>
         </form>
       </Modal>

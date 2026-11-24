@@ -31,7 +31,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
       <span className={`inline-flex shrink-0 items-center justify-center ${s.box}`}>
         <img
           src="/logo.png?v=2"
-          alt="AcademiaOne"
+          alt="SJ Academia One"
           className={`h-full w-full object-contain ${isDark ? 'drop-shadow-[0_1px_4px_rgba(0,0,0,0.35)]' : ''}`}
           draggable={false}
         />
@@ -43,7 +43,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
               isDark ? 'text-white' : 'text-slate-900'
             }`}
           >
-            AcademiaOne
+            SJ Academia One
           </span>
           {subtitle && (
             <span

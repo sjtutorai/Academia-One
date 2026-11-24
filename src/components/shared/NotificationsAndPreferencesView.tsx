@@ -187,7 +187,7 @@ export function NotificationsAndPreferencesView() {
                   Delivery Channels
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  Control how AcademiaOne alerts you for messages, task reminders, and offers.
+                  Control how SJ Academia One alerts you for messages, task reminders, and offers.
                 </p>
               </div>
               <Button variant="primary" size="sm" onClick={handleEnablePush}>

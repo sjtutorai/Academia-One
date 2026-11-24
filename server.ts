@@ -263,7 +263,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`AcademiaOne server running on http://0.0.0.0:${PORT}`);
+    console.log(`SJ Academia One server running on http://0.0.0.0:${PORT}`);
   });
 }
 

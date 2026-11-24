@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import {
   Eye,
@@ -31,8 +31,22 @@ import { BrandLogo } from '../components/ui/BrandLogo';
 export function SignInPage() {
   const { signInUnified, signInGoogle } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const { pushToast } = useToast();
   const prefersReducedMotion = useReducedMotion();
+
+  const resolvePostLoginRoute = (role: keyof typeof ROLE_HOME_ROUTES) => {
+    const requestedFrom = (location.state as { from?: string } | null)?.from;
+    const rolePrefix = `/${role.replace('_', '-')}/`;
+    if (
+      typeof requestedFrom === 'string' &&
+      requestedFrom.startsWith(rolePrefix) &&
+      !requestedFrom.includes('//')
+    ) {
+      return requestedFrom;
+    }
+    return ROLE_HOME_ROUTES[role];
+  };
 
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -77,7 +91,7 @@ export function SignInPage() {
           return;
         }
         pushToast('success', `Signed in as ${res.profile.displayName}`);
-        navigate(ROLE_HOME_ROUTES[res.profile.role]);
+        navigate(resolvePostLoginRoute(res.profile.role), { replace: true });
       }
     } finally {
       setSubmitting(false);
@@ -106,7 +120,7 @@ export function SignInPage() {
           return;
         }
         pushToast('success', `Signed in as ${res.profile.displayName}`);
-        navigate(ROLE_HOME_ROUTES[res.profile.role]);
+        navigate(resolvePostLoginRoute(res.profile.role), { replace: true });
       }
     } finally {
       setGoogleSubmitting(false);
@@ -123,7 +137,7 @@ export function SignInPage() {
           className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors mb-6"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
-          Back to AcademiaOne
+          Back to SJ Academia One
         </Link>
 
         <motion.div
@@ -374,7 +388,7 @@ export function SignUpPage() {
           className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors mb-6"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
-          Back to AcademiaOne
+          Back to SJ Academia One
         </Link>
 
         <motion.div
@@ -734,14 +748,14 @@ export function EmailVerificationPage() {
             <p className="text-sm text-slate-500 mt-1.5 leading-relaxed">
               We sent a verification link to{' '}
               <span className="font-semibold text-slate-900">{firebaseUser?.email || activeUser?.email || 'your email'}</span>.
-              Verify your email to unlock your AcademiaOne workspace.
+              Verify your email to unlock your SJ Academia One workspace.
             </p>
           </div>
 
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 space-y-2 leading-relaxed">
             <p className="font-semibold text-slate-800">Next steps:</p>
             <ol className="list-decimal list-inside space-y-1">
-              <li>Open your email inbox and click the AcademiaOne verification link.</li>
+              <li>Open your email inbox and click the SJ Academia One verification link.</li>
               <li>Check your Spam or Promotions folder if you do not see it within a minute.</li>
               <li>Return here and click <span className="font-semibold text-slate-800">I&apos;ve Verified My Email</span>.</li>
             </ol>

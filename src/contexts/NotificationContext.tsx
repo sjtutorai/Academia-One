@@ -162,7 +162,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         },
         system: {
           title: 'Security Notice: Session Verified',
-          body: 'Your AcademiaOne account preferences and notification channel settings were synchronized.',
+          body: 'Your SJ Academia One account preferences and notification channel settings were synchronized.',
         },
       };
       const sample = samples[category];

@@ -85,7 +85,7 @@ export async function seedDemoEcosystem(actorUid: string, actorName: string): Pr
 
   // 1. Platform Settings
   batch1.set(doc(db, 'platformSettings', 'global'), {
-    platformName: 'AcademiaOne',
+    platformName: 'SJ Academia One',
     supportEmail: 'support@academiaone.edu',
     supportPhone: '+1 (800) 555-0199',
     allowPublicRegistration: true,

@@ -207,7 +207,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       ) {
         const claimed: PlatformUser = {
           ...existing,
-          displayName: (existing.displayName || dirEntry.displayName || 'AcademiaOne User').trim().slice(0, 120),
+          displayName: (existing.displayName || dirEntry.displayName || 'SJ Academia One User').trim().slice(0, 120),
           role: dirEntry.role,
           schoolId: dirEntry.schoolId.slice(0, 128),
           status: 'active',
@@ -215,9 +215,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           classId: (dirEntry.classId || existing.classId || '').slice(0, 128),
           section: (dirEntry.section || existing.section || '').slice(0, 32),
           assignedClassIds: Array.isArray(dirEntry.assignedClassIds)
-            ? dirEntry.assignedClassIds.slice(0, 50)
+            ? dirEntry.assignedClassIds.slice(0, 200)
             : Array.isArray(existing.assignedClassIds)
-              ? existing.assignedClassIds.slice(0, 50)
+              ? existing.assignedClassIds.slice(0, 200)
               : [],
           coordinatorPermissions: dirEntry.coordinatorPermissions || existing.coordinatorPermissions || DEFAULT_COORD_PERMS,
         };
@@ -261,8 +261,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const safeUsername = (derivedUsername.length >= 3 ? derivedUsername : `usr_${fbUser.uid.slice(0, 6)}`).slice(0, 64);
     const safeEmail = (email || `${fbUser.uid}@academiaone.edu`).slice(0, 160);
-    const safeDisplayNameRaw = (fbUser.displayName || dirEntry?.displayName || derivedUsername || 'AcademiaOne User').trim();
-    const safeDisplayName = (safeDisplayNameRaw.length >= 2 ? safeDisplayNameRaw : 'AcademiaOne User').slice(0, 120);
+    const safeDisplayNameRaw = (fbUser.displayName || dirEntry?.displayName || derivedUsername || 'SJ Academia One User').trim();
+    const safeDisplayName = (safeDisplayNameRaw.length >= 2 ? safeDisplayNameRaw : 'SJ Academia One User').slice(0, 120);
 
     const newProfile: PlatformUser = {
       uid: fbUser.uid,
@@ -641,7 +641,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           uid: cred.user.uid,
           username: (cleanUser.length >= 3 ? cleanUser : `user_${cred.user.uid.slice(0, 6)}`).slice(0, 64),
           email: cleanEmail.slice(0, 160),
-          displayName: (safeDisplayNameRaw.length >= 2 ? safeDisplayNameRaw : 'AcademiaOne User').slice(0, 120),
+          displayName: (safeDisplayNameRaw.length >= 2 ? safeDisplayNameRaw : 'SJ Academia One User').slice(0, 120),
           role: isMainHead ? 'main_head' : dirEntry ? dirEntry.role : 'student',
           schoolId: isMainHead ? 'platform' : dirEntry ? dirEntry.schoolId.slice(0, 128) : 'unassigned',
           status: 'active',
@@ -650,7 +650,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           accessCode: (dirEntry?.accessCode || '').slice(0, 24),
           classId: (dirEntry?.classId || '').slice(0, 128),
           section: (dirEntry?.section || '').slice(0, 32),
-          assignedClassIds: Array.isArray(dirEntry?.assignedClassIds) ? dirEntry.assignedClassIds.slice(0, 50) : [],
+          assignedClassIds: Array.isArray(dirEntry?.assignedClassIds) ? dirEntry.assignedClassIds.slice(0, 200) : [],
           assignedSubjectIds: [],
           coordinatorPermissions: dirEntry?.coordinatorPermissions || DEFAULT_COORD_PERMS,
           isDemo: false,

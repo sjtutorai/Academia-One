@@ -142,7 +142,7 @@ export default function MainHeadPortal() {
   return (
     <DashboardShell
       title="Platform Owner Console"
-      breadcrumb="AcademiaOne / Main Head"
+      breadcrumb="SJ Academia One / Main Head"
       navItems={MAIN_HEAD_NAV}
       onGlobalSearch={setGlobalSearch}
       globalSearchPlaceholder="Search schools, applications, users…"

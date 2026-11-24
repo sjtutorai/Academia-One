@@ -37,7 +37,7 @@ function FullScreenLoader() {
   return (
     <div className="min-h-[100dvh] bg-slate-50 flex flex-col items-center justify-center p-6">
       <div className="w-9 h-9 rounded-lg border-2 border-slate-200 border-t-[#2563EB] animate-spin" />
-      <p className="text-xs font-medium text-slate-500 mt-4">Loading AcademiaOne workspace…</p>
+      <p className="text-xs font-medium text-slate-500 mt-4">Loading SJ Academia One workspace…</p>
     </div>
   );
 }
@@ -50,11 +50,13 @@ function ProtectedRoleRoute({
   children: React.ReactNode;
 }) {
   const { activeUser, activeSchool, loading, isPreviewMode, needsEmailVerification } = useAuth();
+  const location = useLocation();
 
   if (loading) return <FullScreenLoader />;
 
   if (!activeUser) {
-    return <Navigate to="/login" replace />;
+    const returnTo = `${location.pathname}${location.search || ''}`;
+    return <Navigate to="/login" state={{ from: returnTo }} replace />;
   }
 
   if (needsEmailVerification && !isPreviewMode) {
@@ -64,7 +66,7 @@ function ProtectedRoleRoute({
   if (activeUser.status !== 'active') {
     return (
       <AccessDeniedPage
-        reason={`Your account is currently ${activeUser.status}. Contact your school Principal or AcademiaOne platform support to restore access.`}
+        reason={`Your account is currently ${activeUser.status}. Contact your school Principal or SJ Academia One platform support to restore access.`}
       />
     );
   }
