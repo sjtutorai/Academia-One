@@ -27,6 +27,7 @@ import {
   MOTION_EASE,
 } from '../lib/motion';
 import { useAuth } from '../contexts/AuthContext';
+import { ThemeToggleButton, useTheme } from '../contexts/ThemeContext';
 import { Button, useToast } from '../components/ui/Primitives';
 import { BrandLogo } from '../components/ui/BrandLogo';
 import { PWAInstallButton } from '../components/shared/PWAControls';
@@ -54,6 +55,7 @@ const FAQS = [
 
 export default function LandingPage() {
   const { activeUser } = useAuth();
+  const { isDark } = useTheme();
   const navigate = useNavigate();
   const { pushToast } = useToast();
   const prefersReducedMotion = useReducedMotion();
@@ -135,12 +137,12 @@ export default function LandingPage() {
   };
 
   return (
-    <div className="min-h-[100dvh] bg-[#F8FAFC] text-slate-900">
+    <div className="min-h-[100dvh] bg-[#F8FAFC] dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-200">
       {/* Sticky Top Navigation */}
       <header
         className={`sticky top-0 z-40 transition-all duration-200 border-b safe-top ${
           scrolled
-            ? 'bg-white/95 backdrop-blur-md border-slate-200 py-3 shadow-xs'
+            ? 'bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-slate-200 dark:border-slate-800 py-3 shadow-xs'
             : 'bg-[#0F295C] border-blue-900/80 py-4'
         }`}
       >
@@ -149,13 +151,13 @@ export default function LandingPage() {
             to="/"
             className="whitespace-nowrap shrink-0 hover:opacity-90 transition-opacity"
           >
-            <BrandLogo size="md" tone={scrolled ? 'light' : 'dark'} />
+            <BrandLogo size="md" tone={scrolled && !isDark ? 'light' : 'dark'} />
           </Link>
 
           <nav
             aria-label="Primary Navigation"
             className={`hidden lg:flex items-center gap-7 text-sm font-medium ${
-              scrolled ? 'text-slate-600' : 'text-blue-100'
+              scrolled ? 'text-slate-600 dark:text-slate-300' : 'text-blue-100'
             }`}
           >
             <a href="#features" className="nav-link-underline hover:text-blue-400 transition-colors whitespace-nowrap shrink-0">
@@ -173,6 +175,7 @@ export default function LandingPage() {
           </nav>
 
           <div className="hidden lg:flex items-center gap-3 shrink-0">
+            <ThemeToggleButton variant={scrolled ? 'icon' : 'dark-surface'} />
             <PWAInstallButton
               variant="compact"
               className={scrolled ? '' : '!bg-blue-800/80 !text-white !border-blue-700 hover:!bg-blue-700'}
@@ -190,7 +193,7 @@ export default function LandingPage() {
                 <Link
                   to="/application-status"
                   className={`nav-link-underline text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
-                    scrolled ? 'text-slate-600 hover:text-slate-900' : 'text-slate-300 hover:text-white'
+                    scrolled ? 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 hover:text-white'
                   }`}
                 >
                   Track Application
@@ -198,7 +201,7 @@ export default function LandingPage() {
                 <Link
                   to="/login"
                   className={`nav-link-underline text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
-                    scrolled ? 'text-slate-700 hover:text-slate-900' : 'text-slate-200 hover:text-white'
+                    scrolled ? 'text-slate-700 dark:text-slate-200 hover:text-slate-900 dark:hover:text-white' : 'text-slate-200 hover:text-white'
                   }`}
                 >
                   Sign In
@@ -211,13 +214,14 @@ export default function LandingPage() {
           </div>
 
           <div className="flex lg:hidden items-center gap-2">
+            <ThemeToggleButton variant={scrolled ? 'icon' : 'dark-surface'} />
             <PWAInstallButton
               variant="compact"
               className={scrolled ? '' : '!bg-blue-800/80 !text-white !border-blue-700 hover:!bg-blue-700'}
             />
             <button
               type="button"
-              className={`p-2 rounded-lg transition-colors cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center ${scrolled ? 'text-slate-700 hover:bg-slate-100' : 'text-white hover:bg-slate-800'}`}
+              className={`p-2 rounded-lg transition-colors cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center ${scrolled ? 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800' : 'text-white hover:bg-slate-800'}`}
               onClick={() => setMobileMenuOpen((v) => !v)}
               aria-label="Toggle navigation menu"
             >
@@ -234,19 +238,19 @@ export default function LandingPage() {
               animate={{ opacity: 1, y: 0 }}
               exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
               transition={{ duration: 0.18, ease: MOTION_EASE.out }}
-              className="lg:hidden bg-white border-t border-slate-200 px-6 py-5 space-y-4 shadow-md"
+              className="lg:hidden bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 px-6 py-5 space-y-4 shadow-md"
             >
-              <div className="flex flex-col gap-3 text-sm font-medium text-slate-700">
+              <div className="flex flex-col gap-3 text-sm font-medium text-slate-700 dark:text-slate-200">
                 <a href="#features" onClick={() => setMobileMenuOpen(false)}>Features</a>
                 <a href="#portals" onClick={() => setMobileMenuOpen(false)}>For Schools</a>
                 <a href="#how-it-works" onClick={() => setMobileMenuOpen(false)}>How It Works</a>
                 <a href="#faq" onClick={() => setMobileMenuOpen(false)}>FAQ</a>
                 <a href="#contact" onClick={() => setMobileMenuOpen(false)}>Contact</a>
-                <Link to="/application-status" onClick={() => setMobileMenuOpen(false)} className="text-teal-700">
+                <Link to="/application-status" onClick={() => setMobileMenuOpen(false)} className="text-teal-700 dark:text-blue-400">
                   Track Application Status
                 </Link>
               </div>
-              <div className="pt-3 border-t border-slate-100 space-y-2.5">
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2.5">
                 <PWAInstallButton variant="header" className="w-full" />
                 <div className="flex items-center gap-3">
                   <Button variant="secondary" className="flex-1" onClick={() => navigate('/login')}>

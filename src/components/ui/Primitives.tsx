@@ -60,17 +60,17 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               animate="animate"
               exit="exit"
               role={t.type === 'error' ? 'alert' : 'status'}
-              className="pointer-events-auto flex items-start gap-3 bg-white border border-slate-200 shadow-lg rounded-xl px-4 py-3 text-sm text-slate-800"
+              className="pointer-events-auto flex items-start gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-lg rounded-xl px-4 py-3 text-sm text-slate-800 dark:text-slate-100"
             >
-              {t.type === 'success' && <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0 mt-0.5" />}
-              {t.type === 'error' && <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />}
-              {t.type === 'warning' && <AlertTriangle className="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" />}
-              {t.type === 'info' && <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />}
+              {t.type === 'success' && <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400 shrink-0 mt-0.5" />}
+              {t.type === 'error' && <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />}
+              {t.type === 'warning' && <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />}
+              {t.type === 'info' && <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />}
               <span className="flex-1 leading-snug">{t.message}</span>
               <button
                 type="button"
                 onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
-                className="text-slate-400 hover:text-slate-600 p-0.5 rounded transition-colors cursor-pointer"
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded transition-colors cursor-pointer"
                 aria-label="Dismiss message"
               >
                 <X className="w-4 h-4" />
@@ -135,12 +135,13 @@ export function Button({
     'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-150 ease-out active:scale-[0.98] disabled:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0 cursor-pointer';
   const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
     primary: 'bg-blue-600 text-white hover:bg-blue-700 hover:shadow-sm',
-    navy: 'bg-[#0F295C] text-white hover:bg-[#17397A] hover:shadow-sm',
-    secondary: 'bg-white text-slate-700 border border-slate-300 hover:bg-blue-50/40 hover:border-blue-300',
+    navy: 'bg-[#0F295C] dark:bg-blue-700 text-white hover:bg-[#17397A] dark:hover:bg-blue-600 hover:shadow-sm',
+    secondary:
+      'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-700 hover:bg-blue-50/40 dark:hover:bg-slate-700/80 hover:border-blue-300 dark:hover:border-slate-600',
     danger: 'bg-red-600 text-white hover:bg-red-700 hover:shadow-sm',
     success: 'bg-green-600 text-white hover:bg-green-700 hover:shadow-sm',
     warning: 'bg-yellow-400 text-slate-950 hover:bg-yellow-500 hover:shadow-sm',
-    ghost: 'text-slate-600 hover:text-blue-700 hover:bg-blue-50/70',
+    ghost: 'text-slate-600 dark:text-slate-300 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-50/70 dark:hover:bg-slate-800',
   };
   const sizes: Record<NonNullable<ButtonProps['size']>, string> = {
     sm: 'text-xs px-3 py-1.5 min-h-[34px]',
@@ -165,13 +166,14 @@ export function Button({
 // ============================================================================
 export function StatusText({ status }: { status: string }) {
   const normalized = (status || '').toLowerCase();
-  let color = 'text-slate-600';
+  let color = 'text-slate-600 dark:text-slate-400';
   if (['active', 'published', 'present', 'completed', 'paid_manual', 'converted', 'approved'].includes(normalized)) {
-    color = 'text-green-700';
+    color = 'text-green-700 dark:text-green-400';
   } else if (
     [
       'trial',
       'late',
+      'half_day',
       'draft',
       'pending',
       'under_review',
@@ -187,15 +189,15 @@ export function StatusText({ status }: { status: string }) {
       'principal_pending',
     ].includes(normalized)
   ) {
-    color = 'text-yellow-700';
+    color = 'text-yellow-700 dark:text-amber-400';
   } else if (
     ['suspended', 'expired', 'absent', 'overdue', 'cancelled', 'withdrawn', 'rejected', 'inactive', 'archived', 'dismissed'].includes(
       normalized,
     )
   ) {
-    color = 'text-red-700';
+    color = 'text-red-700 dark:text-red-400';
   } else if (['reviewed', 'submitted', 'promoted', 'transferred', 'new'].includes(normalized)) {
-    color = 'text-blue-700';
+    color = 'text-blue-700 dark:text-blue-400';
   }
 
   const label = status
@@ -221,14 +223,14 @@ export function StatCard({
 }) {
   const valColor =
     tone === 'blue'
-      ? 'text-blue-700'
+      ? 'text-blue-700 dark:text-blue-400'
       : tone === 'green' || tone === 'teal'
-        ? 'text-green-700'
+        ? 'text-green-700 dark:text-emerald-400'
         : tone === 'yellow' || tone === 'amber'
-          ? 'text-yellow-700'
+          ? 'text-yellow-700 dark:text-amber-400'
           : tone === 'red'
-            ? 'text-red-700'
-            : 'text-[#0F295C]';
+            ? 'text-red-700 dark:text-red-400'
+            : 'text-[#0F295C] dark:text-slate-100';
 
   const topAccent =
     tone === 'blue'
@@ -242,14 +244,14 @@ export function StatCard({
             : 'bg-blue-600/80';
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden flex flex-col justify-between transition-all duration-200 hover:border-blue-200 hover:shadow-sm">
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden flex flex-col justify-between transition-all duration-200 hover:border-blue-200 dark:hover:border-slate-700 hover:shadow-sm">
       <div className={`h-1 w-full ${topAccent}`} aria-hidden="true" />
       <div className="p-5 flex flex-col justify-between gap-2 flex-1">
-        <p className="text-xs font-medium text-slate-500">{label}</p>
+        <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{label}</p>
         <p className={`text-2xl font-bold font-display tabular-nums tracking-tight ${valColor}`}>
           {value}
         </p>
-        {subtext && <p className="text-xs text-slate-500 truncate">{subtext}</p>}
+        {subtext && <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{subtext}</p>}
       </div>
     </div>
   );
@@ -325,19 +327,19 @@ export function Modal({
             initial="initial"
             animate="animate"
             exit="exit"
-            className={`bg-white border border-slate-200 rounded-t-2xl sm:rounded-xl shadow-xl w-full ${maxWidth} max-h-[92dvh] sm:max-h-[90dvh] flex flex-col focus:outline-none safe-bottom`}
+            className={`bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-t-2xl sm:rounded-xl shadow-xl w-full ${maxWidth} max-h-[92dvh] sm:max-h-[90dvh] flex flex-col focus:outline-none safe-bottom text-slate-900 dark:text-slate-100`}
           >
-            <div className="flex items-start justify-between gap-3 px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-200 shrink-0">
+            <div className="flex items-start justify-between gap-3 px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-200 dark:border-slate-800 shrink-0">
               <div className="min-w-0">
-                <h2 id="modal-title" className="text-base font-bold font-display text-slate-900">
+                <h2 id="modal-title" className="text-base font-bold font-display text-slate-900 dark:text-white">
                   {title}
                 </h2>
-                {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
+                {subtitle && <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{subtitle}</p>}
               </div>
               <button
                 type="button"
                 onClick={onClose}
-                className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg transition-colors cursor-pointer shrink-0 -mr-1.5 -mt-1"
+                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg transition-colors cursor-pointer shrink-0 -mr-1.5 -mt-1"
                 aria-label="Close modal"
               >
                 <X className="w-5 h-5" />
@@ -374,9 +376,9 @@ export function ConfirmDialog({
 }) {
   return (
     <Modal open={open} onClose={onClose} title={title} maxWidth="max-w-md">
-      <p className="text-sm text-slate-600 leading-relaxed">{description}</p>
+      <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">{description}</p>
       {warning && (
-        <div className="mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+        <div className="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/80 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
           {warning}
         </div>
       )}
@@ -399,10 +401,10 @@ export function SkeletonCardGrid({ count = 4 }: { count?: number }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-pulse">
       {Array.from({ length: count }).map((_, idx) => (
-        <div key={idx} className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
-          <div className="h-3 bg-slate-100 rounded w-1/2" />
-          <div className="h-7 bg-slate-200/70 rounded w-2/5" />
-          <div className="h-3 bg-slate-100 rounded w-3/4" />
+        <div key={idx} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3">
+          <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/2" />
+          <div className="h-7 bg-slate-200/70 dark:bg-slate-700 rounded w-2/5" />
+          <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-3/4" />
         </div>
       ))}
     </div>
@@ -411,13 +413,13 @@ export function SkeletonCardGrid({ count = 4 }: { count?: number }) {
 
 export function SkeletonTable({ rows = 5, cols = 5 }: { rows?: number; cols?: number }) {
   return (
-    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden animate-pulse">
-      <div className="h-10 bg-slate-50 border-b border-slate-200" />
-      <div className="divide-y divide-slate-100">
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden animate-pulse">
+      <div className="h-10 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800" />
+      <div className="divide-y divide-slate-100 dark:divide-slate-800">
         {Array.from({ length: rows }).map((_, r) => (
           <div key={r} className="grid gap-4 px-5 py-3.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
             {Array.from({ length: cols }).map((__, c) => (
-              <div key={c} className="h-4 bg-slate-100 rounded w-3/4" />
+              <div key={c} className="h-4 bg-slate-100 dark:bg-slate-800 rounded w-3/4" />
             ))}
           </div>
         ))}
@@ -438,9 +440,9 @@ export function EmptyState({
   onAction?: () => void;
 }) {
   return (
-    <div className="bg-white border border-slate-200 rounded-xl px-6 py-12 text-center">
-      <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-      <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">{description}</p>
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-6 py-12 text-center">
+      <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
+      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">{description}</p>
       {actionLabel && onAction && (
         <div className="mt-5">
           <Button variant="primary" size="sm" onClick={onAction}>
@@ -468,7 +470,7 @@ export function PaginationBar({
 }) {
   if (totalPages <= 1) return null;
   return (
-    <div className="flex items-center justify-between gap-4 pt-4 text-xs text-slate-500">
+    <div className="flex items-center justify-between gap-4 pt-4 text-xs text-slate-500 dark:text-slate-400">
       <span className="tabular-nums">
         Page {page} of {totalPages} · {totalItems} records
       </span>

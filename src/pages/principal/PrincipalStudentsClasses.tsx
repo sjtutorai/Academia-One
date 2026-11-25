@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { collection, doc, onSnapshot, query, setDoc, updateDoc, where, serverTimestamp } from 'firebase/firestore';
+import { collection, deleteDoc, doc, onSnapshot, query, setDoc, updateDoc, where, serverTimestamp } from 'firebase/firestore';
 import {
   Plus,
   Download,
@@ -1657,6 +1657,10 @@ export function PrincipalClassesSubjectsView({
     teacherId: '',
     applyToGrade: false,
   });
+  const [quickSubName, setQuickSubName] = useState('');
+  const [quickSubCode, setQuickSubCode] = useState('');
+  const [quickSubTeacherId, setQuickSubTeacherId] = useState('');
+  const [addingQuickSub, setAddingQuickSub] = useState(false);
 
   const orderedClasses = useMemo(() => sortClassesInOrder(classes), [classes]);
   const gradeGroups = useMemo(() => groupClassesByGrade(classes), [classes]);
@@ -2128,6 +2132,128 @@ export function PrincipalClassesSubjectsView({
     }
   };
 
+  const handleQuickAssignClassTeacher = async (cls: SchoolClass, nextTeacherId: string) => {
+    if (!canWrite) return;
+    const prevTeacher = teachers.find((t) => t.id === cls.classTeacherId);
+    const nextTeacher = teachers.find((t) => t.id === nextTeacherId);
+    try {
+      await updateDoc(doc(db, 'classes', cls.id), {
+        classTeacherId: nextTeacher?.id || '',
+        classTeacherName: nextTeacher?.name || '',
+        updatedAt: serverTimestamp(),
+      });
+      if (prevTeacher && prevTeacher.id !== nextTeacher?.id && prevTeacher.classTeacherOfClassId === cls.id) {
+        await updateDoc(doc(db, 'teachers', prevTeacher.id), {
+          classTeacherOfClassId: '',
+          updatedAt: serverTimestamp(),
+        }).catch(() => undefined);
+      }
+      if (nextTeacher) {
+        const nextAssigned = Array.from(new Set([...(nextTeacher.assignedClassIds || []), cls.id]));
+        await updateDoc(doc(db, 'teachers', nextTeacher.id), {
+          classTeacherOfClassId: cls.id,
+          assignedClassIds: nextAssigned,
+          updatedAt: serverTimestamp(),
+        }).catch(() => undefined);
+        if (nextTeacher.userId) {
+          await updateDoc(doc(db, 'users', nextTeacher.userId), {
+            assignedClassIds: nextAssigned,
+            updatedAt: serverTimestamp(),
+          }).catch(() => undefined);
+        }
+      }
+      pushToast(
+        'success',
+        nextTeacher
+          ? `Assigned ${nextTeacher.name} as Class Teacher of ${cls.name}.`
+          : `Cleared Class Teacher for ${cls.name}.`,
+      );
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to update class teacher.');
+    }
+  };
+
+  const handleQuickAssignClassRoom = async (cls: SchoolClass, nextRoomId: string) => {
+    if (!canWrite) return;
+    const room = rooms.find((r) => r.id === nextRoomId);
+    try {
+      await updateDoc(doc(db, 'classes', cls.id), {
+        roomId: room?.id || '',
+        roomName: room?.name || '',
+        updatedAt: serverTimestamp(),
+      });
+      pushToast('success', room ? `Assigned ${room.name} to ${cls.name}.` : `Cleared room assignment for ${cls.name}.`);
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to update room.');
+    }
+  };
+
+  const handleQuickAddSubjectInDetail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canWrite || !detailClass) return;
+    const cleanName = quickSubName.trim().slice(0, 100);
+    if (cleanName.length < 2) {
+      pushToast('error', 'Enter a subject name (at least 2 characters).');
+      return;
+    }
+    const exists = detailClassSubjects.some((s) => s.name.trim().toLowerCase() === cleanName.toLowerCase());
+    if (exists) {
+      pushToast('error', `"${cleanName}" is already assigned to ${detailClass.name}.`);
+      return;
+    }
+    setAddingQuickSub(true);
+    try {
+      const id = generateId('sub');
+      const teacher = teachers.find((t) => t.id === quickSubTeacherId);
+      const cleanCode = (
+        quickSubCode.trim() ||
+        `${cleanName.replace(/[^A-Za-z]/g, '').slice(0, 4).toUpperCase() || 'SUB'}-${detailClass.code}`
+      )
+        .toUpperCase()
+        .slice(0, 24);
+      await setDoc(doc(db, 'subjects', id), {
+        id,
+        schoolId,
+        name: cleanName,
+        code: cleanCode,
+        classId: detailClass.id,
+        className: detailClass.name,
+        teacherId: teacher?.id || '',
+        teacherName: teacher?.name || '',
+        status: 'active',
+        createdBy: actor.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      if (teacher) {
+        await syncTeacherForSubject(teacher.id, detailClass.id, cleanName);
+      }
+      setQuickSubName('');
+      setQuickSubCode('');
+      setQuickSubTeacherId('');
+      pushToast(
+        'success',
+        teacher
+          ? `Added ${cleanName} (${teacher.name}) to ${detailClass.name}.`
+          : `Added ${cleanName} to ${detailClass.name}.`,
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'subjects');
+    } finally {
+      setAddingQuickSub(false);
+    }
+  };
+
+  const handleDeleteSubjectFromDetail = async (sub: Subject) => {
+    if (!canWrite) return;
+    try {
+      await deleteDoc(doc(db, 'subjects', sub.id));
+      pushToast('success', `Removed ${sub.name} from ${sub.className || 'class'}.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `subjects/${sub.id}`);
+    }
+  };
+
   const handleCopyStudentFourCodes = (st: StudentProfile) => {
     const pack = buildStudentFourCodePack({
       schoolCode,
@@ -2426,79 +2552,121 @@ export function PrincipalClassesSubjectsView({
         )}
       </div>
 
-      {/* Class Detail Modal: Assigned Class Teacher, Subject Teachers, Students & Downloadable Codes */}
+      {/* Class Detail Modal: Assign Class Teacher, Room, Subject Teachers, Add/Remove Subjects & Download Codes */}
       <Modal
         open={Boolean(detailClass)}
         onClose={() => setDetailClassId(null)}
         title={detailClass ? `${detailClass.name} (${detailClass.code})` : 'Class Details'}
         subtitle={
           detailClass
-            ? `Room: ${detailClass.roomName || 'Unassigned'} · Academic Year ${detailClass.academicYear}`
+            ? `Assign class teacher, room, subjects, and subject teachers directly · AY ${detailClass.academicYear}`
             : undefined
         }
         maxWidth="max-w-4xl"
       >
         {detailClass && (
           <div className="space-y-6">
-            {/* Assigned Faculty Cards */}
+            {/* Assigned Faculty & Room Controls */}
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-                  <UserCheck className="w-3.5 h-3.5 text-teal-600" />
-                  Assigned Teachers for {detailClass.name}
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <UserCheck className="w-3.5 h-3.5 text-teal-600 dark:text-blue-400" />
+                  Teachers, Subjects &amp; Room for {detailClass.name}
                 </h3>
                 {canWrite && (
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => openNewSubjectModal(detailClass.id)}
-                    >
-                      <Plus className="w-3.5 h-3.5" /> Add Subject
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        const target = detailClass;
-                        setDetailClassId(null);
-                        openEditClass(target);
-                      }}
-                    >
-                      <Pencil className="w-3.5 h-3.5" /> Edit Class &amp; Room
-                    </Button>
-                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      const target = detailClass;
+                      setDetailClassId(null);
+                      openEditClass(target);
+                    }}
+                  >
+                    <Pencil className="w-3.5 h-3.5" /> Full Class Editor
+                  </Button>
                 )}
               </div>
 
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {/* Class Teacher Card */}
-                <div className="p-3.5 rounded-xl bg-[#0F295C] text-white space-y-1">
-                  <p className="text-[11px] font-medium text-teal-300 uppercase tracking-wider">Class Teacher</p>
-                  <p className="text-sm font-bold">
-                    {detailClass.classTeacherName || detailClassTeacher?.name || 'Unassigned'}
-                  </p>
-                  <p className="text-[11px] font-mono text-blue-200">
-                    {detailClassTeacher
-                      ? `Code: ${detailClassTeacher.accessCode || detailClassTeacher.staffId}`
-                      : 'Assign in Edit Class'}
-                  </p>
+                {/* Interactive Class Teacher Card */}
+                <div className="p-3.5 rounded-xl bg-[#0F295C] text-white space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-medium text-teal-300 uppercase tracking-wider">Class Teacher</p>
+                    {detailClassTeacher && (
+                      <span className="text-[10px] font-mono text-blue-200">
+                        {detailClassTeacher.accessCode || detailClassTeacher.staffId}
+                      </span>
+                    )}
+                  </div>
+                  {canWrite ? (
+                    <select
+                      value={detailClass.classTeacherId || ''}
+                      onChange={(e) => handleQuickAssignClassTeacher(detailClass, e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs font-semibold text-slate-900 dark:text-white bg-white dark:bg-slate-800 border border-blue-400/50 rounded-lg focus:outline-none focus:border-blue-300"
+                    >
+                      <option value="">Unassigned</option>
+                      {teachers.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name} ({t.accessCode || t.staffId})
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="text-sm font-bold">
+                      {detailClass.classTeacherName || detailClassTeacher?.name || 'Unassigned'}
+                    </p>
+                  )}
+                  <div className="pt-1 border-t border-blue-800/80 flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-blue-200">Room:</span>
+                    {canWrite ? (
+                      <select
+                        value={detailClass.roomId || ''}
+                        onChange={(e) => handleQuickAssignClassRoom(detailClass, e.target.value)}
+                        className="px-2 py-1 text-[11px] font-medium text-slate-900 dark:text-white bg-white dark:bg-slate-800 rounded border border-blue-400/40 max-w-[160px]"
+                      >
+                        <option value="">No room</option>
+                        {rooms.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name} ({r.roomNumber})
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="text-[11px] font-medium text-white">{detailClass.roomName || 'Unassigned'}</span>
+                    )}
+                  </div>
                 </div>
 
-                {/* Subject Teacher Cards */}
+                {/* Subject Teacher Cards (Assign Teacher or Remove Subject Inline) */}
                 {detailClassSubjects.map((sub) => (
-                  <div key={sub.id} className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                  <div
+                    key={sub.id}
+                    className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2"
+                  >
                     <div className="flex items-center justify-between gap-2">
-                      <p className="text-[11px] font-semibold text-teal-800 uppercase tracking-wider truncate">
+                      <p className="text-[11px] font-semibold text-teal-800 dark:text-blue-300 uppercase tracking-wider truncate">
                         {sub.name} Teacher
                       </p>
-                      <span className="font-mono text-[10px] text-slate-400 shrink-0">{sub.code}</span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <span className="font-mono text-[10px] text-slate-400">{sub.code}</span>
+                        {canWrite && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSubjectFromDetail(sub)}
+                            title={`Remove ${sub.name} from ${detailClass.name}`}
+                            className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 rounded cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                     {canWrite ? (
                       <select
                         value={sub.teacherId || ''}
                         onChange={(e) => handleQuickAssignSubjectTeacher(sub, e.target.value)}
-                        className="w-full px-2.5 py-1.5 text-xs font-semibold text-slate-900 bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-600"
+                        className="w-full px-2.5 py-1.5 text-xs font-semibold text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:border-teal-600"
                       >
                         <option value="">Unassigned</option>
                         {teachers.map((t) => (
@@ -2508,34 +2676,74 @@ export function PrincipalClassesSubjectsView({
                         ))}
                       </select>
                     ) : (
-                      <p className="text-sm font-bold text-slate-900">{sub.teacherName || 'Unassigned'}</p>
+                      <p className="text-sm font-bold text-slate-900 dark:text-slate-100">{sub.teacherName || 'Unassigned'}</p>
                     )}
                   </div>
                 ))}
-
-                {detailClassSubjects.length === 0 && (
-                  <div className="sm:col-span-1 lg:col-span-2 p-3.5 rounded-xl bg-slate-50 border border-dashed border-slate-300 flex items-center justify-between gap-3 text-xs text-slate-500">
-                    <span>No subject teachers assigned to this section yet.</span>
-                    {canWrite && (
-                      <Button variant="secondary" size="sm" onClick={() => openNewSubjectModal(detailClass.id)}>
-                        <Plus className="w-3.5 h-3.5" /> Add Subject
-                      </Button>
-                    )}
-                  </div>
-                )}
               </div>
+
+              {/* Inline Add Subject & Assign Teacher Form right inside Class Detail Modal */}
+              {canWrite && (
+                <form
+                  onSubmit={handleQuickAddSubjectInDetail}
+                  className="p-3.5 rounded-xl bg-blue-50/60 dark:bg-slate-800/90 border border-blue-200/80 dark:border-slate-700 space-y-2.5"
+                >
+                  <p className="text-xs font-semibold text-[#0F295C] dark:text-blue-300 flex items-center gap-1.5">
+                    <BookOpen className="w-3.5 h-3.5" />
+                    Add Subject &amp; Assign Teacher for {detailClass.name}
+                  </p>
+                  <div className="grid sm:grid-cols-12 gap-2">
+                    <input
+                      type="text"
+                      value={quickSubName}
+                      onChange={(e) => setQuickSubName(e.target.value)}
+                      placeholder="Subject name (e.g., Mathematics)"
+                      className="sm:col-span-4 px-3 py-1.5 text-xs bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:border-blue-600"
+                    />
+                    <input
+                      type="text"
+                      value={quickSubCode}
+                      onChange={(e) => setQuickSubCode(e.target.value.toUpperCase().slice(0, 24))}
+                      placeholder="Code (auto)"
+                      className="sm:col-span-2 px-3 py-1.5 text-xs font-mono uppercase bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:border-blue-600"
+                    />
+                    <select
+                      value={quickSubTeacherId}
+                      onChange={(e) => setQuickSubTeacherId(e.target.value)}
+                      className="sm:col-span-4 px-3 py-1.5 text-xs bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:border-blue-600"
+                    >
+                      <option value="">Assign Teacher (Optional)</option>
+                      {teachers.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name} ({t.accessCode || t.staffId})
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      size="sm"
+                      loading={addingQuickSub}
+                      className="sm:col-span-2"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Add
+                    </Button>
+                  </div>
+                </form>
+              )}
             </div>
 
             {/* Students & Student Access Codes inside Class + Excel/PDF/CSV Download */}
-            <div className="space-y-3 pt-4 border-t border-slate-200">
+            <div className="space-y-3 pt-4 border-t border-slate-200 dark:border-slate-800">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-sm font-bold font-display text-slate-900">
+                  <h3 className="text-sm font-bold font-display text-slate-900 dark:text-white">
                     Students &amp; Login Codes ({detailClassStudents.length})
                   </h3>
-                  <p className="text-xs text-slate-500">
-                    School Code <strong className="font-mono text-slate-800">{schoolCode}</strong> · Class Code{' '}
-                    <strong className="font-mono text-slate-800">{detailClass.code}</strong>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    School Code <strong className="font-mono text-slate-800 dark:text-slate-200">{schoolCode}</strong> · Class Code{' '}
+                    <strong className="font-mono text-slate-800 dark:text-slate-200">{detailClass.code}</strong>
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">

@@ -20,6 +20,7 @@ import {
 } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { ThemeToggleButton, useTheme } from '../contexts/ThemeContext';
 import { ROLE_HOME_ROUTES } from '../lib/permissions';
 import { MOTION_EASE } from '../lib/motion';
 import { Button, GoogleLogo, useToast } from '../components/ui/Primitives';
@@ -30,6 +31,7 @@ import { BrandLogo } from '../components/ui/BrandLogo';
 // ============================================================================
 export function SignInPage() {
   const { signInUnified, signInGoogle } = useAuth();
+  const { isDark } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const { pushToast } = useToast();
@@ -130,34 +132,37 @@ export function SignInPage() {
   const busy = submitting || googleSubmitting;
 
   return (
-    <div className="min-h-[100dvh] bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 safe-top safe-bottom">
+    <div className="min-h-[100dvh] bg-gradient-to-br from-[#F8FAFC] via-[#EFF4FB] to-[#E8EEF8] dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 safe-top safe-bottom transition-colors duration-200">
       <div className="max-w-md w-full mx-auto">
-        <Link
-          to="/"
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors mb-6"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          Back to SJ Academia One
-        </Link>
+        <div className="flex items-center justify-between mb-6">
+          <Link
+            to="/"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Back to SJ Academia One
+          </Link>
+          <ThemeToggleButton variant="pill" />
+        </div>
 
         <motion.div
           initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           transition={{ duration: 0.28, ease: MOTION_EASE.out }}
-          className="bg-white border border-slate-200/90 rounded-xl overflow-hidden shadow-sm"
+          className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm"
         >
           <div className="p-6 sm:p-8">
           <div className="mb-6">
-            <BrandLogo size="md" />
-            <h1 className="text-xl font-bold font-display text-[#0F295C] mt-4">Sign in to your account</h1>
-            <p className="text-sm text-slate-500 mt-1">
+            <BrandLogo size="md" tone={isDark ? 'dark' : 'light'} />
+            <h1 className="text-xl font-bold font-display text-[#0F295C] dark:text-white mt-4">Sign in to your account</h1>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
               Enter your credentials. You will be routed automatically to your authorized portal.
             </p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
             <div>
-              <label htmlFor="login-id" className="block text-xs font-medium text-slate-700 mb-1.5">
+              <label htmlFor="login-id" className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
                 Username or Email
               </label>
               <input
@@ -169,18 +174,18 @@ export function SignInPage() {
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 placeholder="Enter username or email"
-                className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15 disabled:bg-slate-50"
+                className="w-full px-3.5 py-2.5 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15 disabled:bg-slate-50 dark:disabled:bg-slate-800/60"
               />
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label htmlFor="login-pw" className="block text-xs font-medium text-slate-700">
+                <label htmlFor="login-pw" className="block text-xs font-medium text-slate-700 dark:text-slate-300">
                   Password
                 </label>
                 <Link
                   to="/forgot-password"
-                  className="text-xs font-medium text-teal-700 hover:text-teal-800 transition-colors"
+                  className="text-xs font-medium text-teal-700 dark:text-blue-400 hover:text-teal-800 dark:hover:text-blue-300 transition-colors"
                 >
                   Forgot Password?
                 </Link>
@@ -195,12 +200,12 @@ export function SignInPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your password"
-                  className="w-full pl-3.5 pr-10 py-2.5 text-sm border border-slate-300 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15 disabled:bg-slate-50"
+                  className="w-full pl-3.5 pr-10 py-2.5 text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700 rounded-lg transition-all duration-150 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15 disabled:bg-slate-50 dark:disabled:bg-slate-800/60"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
                   <AnimatePresence mode="wait" initial={false}>
@@ -219,12 +224,12 @@ export function SignInPage() {
               </div>
             </div>
 
-            <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+            <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={rememberSession}
                 onChange={(e) => setRememberSession(e.target.checked)}
-                className="rounded border-slate-300 text-teal-600 focus:ring-teal-600"
+                className="rounded border-slate-300 dark:border-slate-600 text-teal-600 focus:ring-teal-600"
               />
               Keep session active on this trusted device (60 min idle timeout enforced)
             </label>

@@ -1,11 +1,12 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-display: "Manrope", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Plus Jakarta Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
-  /* 4-Color AcademiaOne Palette: Blue, Red, Green, Yellow */
+  /* 4-Color SJ Academia One Palette: Blue, Red, Green, Yellow */
   --color-navy-950: #091A3A;
   --color-navy-900: #0F295C;
   --color-navy-800: #17397A;
@@ -63,6 +64,26 @@
     min-height: 100dvh;
     overflow-x: clip;
     -webkit-tap-highlight-color: transparent;
+    transition: background-color 180ms ease, color 180ms ease;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  html.dark body {
+    background-color: #070d19;
+    color: #e2e8f0;
+  }
+
+  html.dark input::placeholder,
+  html.dark textarea::placeholder {
+    color: #64748b;
+  }
+
+  html.dark option {
+    background-color: #0f172a;
+    color: #f1f5f9;
   }
 
   button,

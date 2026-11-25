@@ -34,6 +34,7 @@ import type {
   SchoolCodeClassSlot,
   StudentProfile,
   SubscriptionPlan,
+  TeacherProfile,
 } from '../types/models';
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -721,6 +722,7 @@ export async function permanentlyDeleteSchoolCascade(params: {
     'students',
     'timetablePeriods',
     'attendanceRecords',
+    'teacherAttendance',
     'homework',
     'homeworkSubmissions',
     'examinations',
@@ -910,6 +912,14 @@ export async function removeOrWithdrawStudent(params: {
     }
   }
 
+  if (student.userId) {
+    try {
+      await deleteDoc(doc(db, 'users', student.userId));
+    } catch {
+      // Non-blocking if user doc does not exist
+    }
+  }
+
   try {
     await updateDoc(doc(db, 'schools', schoolId), {
       studentCount: Math.max(0, totalStudentsCount - 1),
@@ -931,5 +941,206 @@ export async function removeOrWithdrawStudent(params: {
     details: `Permanently deleted student record ${student.name} (${student.admissionNumber || student.rollNumber})${studentCode ? ` and released access code ${studentCode}` : ''}.`,
   }).catch(() => undefined);
 }
+
+/**
+ * Permanently removes a Teacher from a school: deletes teacher profile, linked user account,
+ * emailDirectory binding, memberAccessCode, unassigns class-teacher & subject-teacher references,
+ * updates school teacher count, and records an audit log.
+ */
+export async function permanentlyDeleteTeacher(params: {
+  teacher: TeacherProfile;
+  schoolId: string;
+  totalTeachersCount: number;
+  actorUid: string;
+  actorName: string;
+  actorRole: 'principal' | 'main_head';
+}): Promise<void> {
+  const { teacher, schoolId, totalTeachersCount, actorUid, actorName, actorRole } = params;
+  const teacherCode = (teacher.accessCode || '').trim().toUpperCase();
+  const teacherEmail = (teacher.email || '').trim().toLowerCase();
+
+  try {
+    await deleteDoc(doc(db, 'teachers', teacher.id));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `teachers/${teacher.id}`);
+  }
+
+  // Delete linked platform user account if present
+  if (teacher.userId) {
+    try {
+      await deleteDoc(doc(db, 'users', teacher.userId));
+    } catch {
+      // Non-blocking if user never activated
+    }
+  }
+
+  // Delete memberAccessCode
+  if (teacherCode) {
+    try {
+      const codeRef = doc(db, 'memberAccessCodes', teacherCode);
+      const codeSnap = await getDoc(codeRef);
+      if (codeSnap.exists()) {
+        const data = codeSnap.data() as MemberAccessCode;
+        if (data.schoolId === schoolId) {
+          await deleteDoc(codeRef);
+        }
+      }
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  // Delete emailDirectory binding
+  if (teacherEmail) {
+    try {
+      const emailRef = doc(db, 'emailDirectory', emailToKey(teacherEmail));
+      const emailSnap = await getDoc(emailRef);
+      if (emailSnap.exists()) {
+        const data = emailSnap.data() as EmailDirectoryEntry;
+        if (data.schoolId === schoolId && data.role === 'teacher') {
+          await deleteDoc(emailRef);
+        }
+      }
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  // Unassign from classes where this teacher was Class Teacher
+  try {
+    const classSnap = await getDocs(
+      query(collection(db, 'classes'), where('schoolId', '==', schoolId), where('classTeacherId', '==', teacher.id)),
+    );
+    if (!classSnap.empty) {
+      const batch = writeBatch(db);
+      classSnap.docs.forEach((d) => {
+        batch.update(d.ref, {
+          classTeacherId: '',
+          classTeacherName: '',
+          updatedAt: serverTimestamp(),
+        });
+      });
+      await batch.commit();
+    }
+  } catch {
+    // Non-blocking
+  }
+
+  // Unassign from subjects where this teacher was assigned
+  try {
+    const subSnap = await getDocs(
+      query(collection(db, 'subjects'), where('schoolId', '==', schoolId), where('teacherId', '==', teacher.id)),
+    );
+    if (!subSnap.empty) {
+      const batch = writeBatch(db);
+      subSnap.docs.forEach((d) => {
+        batch.update(d.ref, {
+          teacherId: '',
+          teacherName: '',
+          updatedAt: serverTimestamp(),
+        });
+      });
+      await batch.commit();
+    }
+  } catch {
+    // Non-blocking
+  }
+
+  try {
+    await updateDoc(doc(db, 'schools', schoolId), {
+      teacherCount: Math.max(0, totalTeachersCount - 1),
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-blocking
+  }
+
+  await recordAuditLog({
+    schoolId,
+    actorUid,
+    actorName,
+    actorRole,
+    action: 'DELETE_TEACHER',
+    targetType: 'teacher',
+    targetId: teacher.id,
+    targetLabel: teacher.name,
+    details: `Permanently removed teacher ${teacher.name} (${teacher.staffId})${teacherCode ? ` and revoked code ${teacherCode}` : ''}.`,
+  }).catch(() => undefined);
+}
+
+/**
+ * Permanently removes a Coordinator from a school: deletes user doc, emailDirectory entry,
+ * memberAccessCode, updates school coordinator count, and logs audit entry.
+ */
+export async function permanentlyDeleteCoordinator(params: {
+  coordinator: PlatformUser;
+  schoolId: string;
+  totalCoordinatorsCount: number;
+  actorUid: string;
+  actorName: string;
+  actorRole: 'principal' | 'main_head';
+}): Promise<void> {
+  const { coordinator, schoolId, totalCoordinatorsCount, actorUid, actorName, actorRole } = params;
+  const accessCode = (coordinator.accessCode || '').trim().toUpperCase();
+  const cleanEmail = (coordinator.email || '').trim().toLowerCase();
+
+  try {
+    await deleteDoc(doc(db, 'users', coordinator.uid));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `users/${coordinator.uid}`);
+  }
+
+  if (accessCode) {
+    try {
+      const codeRef = doc(db, 'memberAccessCodes', accessCode);
+      const codeSnap = await getDoc(codeRef);
+      if (codeSnap.exists()) {
+        const data = codeSnap.data() as MemberAccessCode;
+        if (data.schoolId === schoolId) {
+          await deleteDoc(codeRef);
+        }
+      }
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  if (cleanEmail) {
+    try {
+      const emailRef = doc(db, 'emailDirectory', emailToKey(cleanEmail));
+      const emailSnap = await getDoc(emailRef);
+      if (emailSnap.exists()) {
+        const data = emailSnap.data() as EmailDirectoryEntry;
+        if (data.schoolId === schoolId && data.role === 'coordinator') {
+          await deleteDoc(emailRef);
+        }
+      }
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  try {
+    await updateDoc(doc(db, 'schools', schoolId), {
+      coordinatorCount: Math.max(0, totalCoordinatorsCount - 1),
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-blocking
+  }
+
+  await recordAuditLog({
+    schoolId,
+    actorUid,
+    actorName,
+    actorRole,
+    action: 'DELETE_COORDINATOR',
+    targetType: 'coordinator',
+    targetId: coordinator.uid,
+    targetLabel: coordinator.displayName,
+    details: `Permanently removed coordinator ${coordinator.displayName} (${coordinator.email})${accessCode ? ` and revoked code ${accessCode}` : ''}.`,
+  }).catch(() => undefined);
+}
+
 
 

@@ -343,6 +343,29 @@ service cloud.firestore {
         && isShortString(data.createdBy, 1, 128);
     }
 
+    function isValidTeacherAttendance(data) {
+      return data.keys().hasAll(['id', 'schoolId', 'teacherId', 'teacherName', 'date', 'status', 'markedBy', 'markedByUid', 'markedByName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'schoolId', 'teacherId', 'teacherUid', 'teacherName', 'staffId', 'date', 'status', 'checkInTime', 'latitude', 'longitude', 'distanceMeters', 'withinRange', 'photoDataUrl', 'markedBy', 'markedByUid', 'markedByName', 'notes', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.schoolId)
+        && isValidId(data.teacherId)
+        && isOptString(data, 'teacherUid', 128)
+        && isShortString(data.teacherName, 2, 120)
+        && isOptString(data, 'staffId', 32)
+        && isShortString(data.date, 8, 20)
+        && data.status in ['present', 'late', 'half_day', 'absent', 'on_leave']
+        && isOptString(data, 'checkInTime', 40)
+        && (!('latitude' in data) || (data.latitude is number && data.latitude >= -90 && data.latitude <= 90))
+        && (!('longitude' in data) || (data.longitude is number && data.longitude >= -180 && data.longitude <= 180))
+        && (!('distanceMeters' in data) || (data.distanceMeters is number && data.distanceMeters >= 0 && data.distanceMeters <= 10000000))
+        && (!('withinRange' in data) || data.withinRange is bool)
+        && isOptString(data, 'photoDataUrl', 300000)
+        && data.markedBy in ['teacher', 'principal']
+        && isValidId(data.markedByUid)
+        && isShortString(data.markedByName, 1, 120)
+        && isOptString(data, 'notes', 500);
+    }
+
     function isValidHomework(data) {
       return data.keys().hasAll(['id', 'schoolId', 'classId', 'subjectName', 'title', 'assignedDate', 'dueDate', 'status', 'createdBy', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly(['id', 'schoolId', 'classId', 'className', 'subjectId', 'subjectName', 'teacherId', 'teacherName', 'title', 'instructions', 'assignedDate', 'dueDate', 'allowOnlineSubmission', 'attachmentName', 'status', 'createdBy', 'createdAt', 'updatedAt'])
@@ -672,7 +695,10 @@ service cloud.firestore {
           isMainHead() ||
           (isPrincipalOf(existing().schoolId) && incoming().schoolId == existing().schoolId && incoming().role in ['coordinator', 'teacher', 'student'])
         );
-      allow delete: if isValidId(userId) && isMainHead();
+      allow delete: if isValidId(userId) && isSignedIn() && (
+        isMainHead() ||
+        (isPrincipalOf(existing().schoolId) && existing().role in ['coordinator', 'teacher', 'student'])
+      );
     }
 
     match /schools/{schoolId} {
@@ -860,6 +886,34 @@ service cloud.firestore {
         && incoming().id == existing().id && incoming().schoolId == existing().schoolId
         && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time
         && (isMainHead() || isStaffOf(existing().schoolId));
+      allow delete: if isValidId(recordId) && isSignedIn() && (isMainHead() || isPrincipalOf(existing().schoolId));
+    }
+
+    match /teacherAttendance/{recordId} {
+      allow get: if isValidId(recordId) && isSignedIn() && (
+        isMainHead() ||
+        isCoordinatorOrPrincipalOf(existing().schoolId) ||
+        (isSameSchool(existing().schoolId) && existing().teacherUid == request.auth.uid)
+      );
+      allow list: if isSignedIn() && (
+        isBootstrappedMainHead() ||
+        (userDocExists() && existing().schoolId == userDoc().schoolId && (userDoc().role in ['principal', 'coordinator'] || existing().teacherUid == request.auth.uid))
+      );
+      allow create: if isValidId(recordId) && isSignedIn() && isValidTeacherAttendance(incoming())
+        && incoming().createdAt == request.time && incoming().updatedAt == request.time
+        && (
+          isMainHead() ||
+          isPrincipalOf(incoming().schoolId) ||
+          (isSameSchool(incoming().schoolId) && userDoc().role == 'teacher' && incoming().teacherUid == request.auth.uid && incoming().markedBy == 'teacher' && incoming().markedByUid == request.auth.uid)
+        );
+      allow update: if isValidId(recordId) && isSignedIn() && isValidTeacherAttendance(incoming())
+        && incoming().id == existing().id && incoming().schoolId == existing().schoolId
+        && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time
+        && (
+          isMainHead() ||
+          isPrincipalOf(existing().schoolId) ||
+          (isSameSchool(existing().schoolId) && existing().teacherUid == request.auth.uid && incoming().teacherUid == request.auth.uid && incoming().markedBy == 'teacher' && incoming().markedByUid == request.auth.uid)
+        );
       allow delete: if isValidId(recordId) && isSignedIn() && (isMainHead() || isPrincipalOf(existing().schoolId));
     }
 

@@ -10,6 +10,7 @@ import type {
   StudentProfile,
   TimetablePeriod,
   AttendanceRecord,
+  TeacherAttendanceRecord,
   Homework,
   HomeworkSubmission,
   Examination,
@@ -27,6 +28,7 @@ export interface SchoolDataBundle {
   students: StudentProfile[];
   timetable: TimetablePeriod[];
   attendance: AttendanceRecord[];
+  teacherAttendance: TeacherAttendanceRecord[];
   homework: Homework[];
   submissions: HomeworkSubmission[];
   examinations: Examination[];
@@ -41,6 +43,7 @@ export function useSchoolData(
   schoolId: string | undefined,
   includeSchoolUsers = false,
   studentUidFilter?: string,
+  teacherUidFilter?: string,
 ): SchoolDataBundle {
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -49,6 +52,7 @@ export function useSchoolData(
   const [students, setStudents] = useState<StudentProfile[]>([]);
   const [timetable, setTimetable] = useState<TimetablePeriod[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [teacherAttendance, setTeacherAttendance] = useState<TeacherAttendanceRecord[]>([]);
   const [homework, setHomework] = useState<Homework[]>([]);
   const [submissions, setSubmissions] = useState<HomeworkSubmission[]>([]);
   const [examinations, setExaminations] = useState<Examination[]>([]);
@@ -66,7 +70,8 @@ export function useSchoolData(
 
     setLoading(true);
     let settled = 0;
-    const total = includeSchoolUsers ? 14 : 13;
+    const includeTeacherAttendance = !studentUidFilter;
+    const total = 13 + (includeSchoolUsers ? 1 : 0) + (includeTeacherAttendance ? 1 : 0);
     const markSettled = () => {
       settled += 1;
       if (settled >= total) setLoading(false);
@@ -134,6 +139,17 @@ export function useSchoolData(
       sub<Announcement>('announcements', setAnnouncements),
     ];
 
+    if (includeTeacherAttendance) {
+      const teacherAttendanceQuery = teacherUidFilter
+        ? query(
+            collection(db, 'teacherAttendance'),
+            where('schoolId', '==', schoolId),
+            where('teacherUid', '==', teacherUidFilter),
+          )
+        : query(collection(db, 'teacherAttendance'), where('schoolId', '==', schoolId));
+      unsubs.push(subQuery<TeacherAttendanceRecord>('teacherAttendance', teacherAttendanceQuery, setTeacherAttendance));
+    }
+
     if (includeSchoolUsers) {
       unsubs.push(sub<PlatformUser>('users', setSchoolUsers));
     }
@@ -141,7 +157,7 @@ export function useSchoolData(
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [schoolId, includeSchoolUsers, studentUidFilter]);
+  }, [schoolId, includeSchoolUsers, studentUidFilter, teacherUidFilter]);
 
   return {
     classes,
@@ -151,6 +167,7 @@ export function useSchoolData(
     students,
     timetable,
     attendance,
+    teacherAttendance,
     homework,
     submissions,
     examinations,

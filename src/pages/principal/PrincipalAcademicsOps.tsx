@@ -1,11 +1,35 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { doc, setDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { Plus, Download, AlertTriangle, Trash2, CheckCircle2, Calendar, List } from 'lucide-react';
+import { doc, setDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import {
+  Plus,
+  Download,
+  AlertTriangle,
+  Trash2,
+  CheckCircle2,
+  Calendar,
+  List,
+  Clock,
+  FileSpreadsheet,
+  MapPin,
+  Navigation,
+  Pencil,
+  Upload,
+  Loader2,
+} from 'lucide-react';
 import { db, generateId, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { detectExamConflicts, detectTimetableConflicts } from '../../lib/permissions';
 import { exportToCsv } from '../../lib/csv';
 import { recordAuditLog } from '../../lib/audit';
-import { sanitizePhoneDigits } from '../../lib/schoolCodes';
+import { sanitizePhoneDigits, sortClassesInOrder } from '../../lib/schoolCodes';
+import {
+  buildDefaultPeriodSchedule,
+  DEFAULT_ATTENDANCE_GEOFENCE_METERS,
+} from '../../lib/geoAttendance';
+import {
+  downloadTimetableExcelTemplate,
+  parseTimetableExcelFile,
+  type TimetableExcelParseResult,
+} from '../../lib/excelImport';
 import { Button, EmptyState, Modal, StatusText, useToast } from '../../components/ui/Primitives';
 import { DetectLocationAddressPicker } from '../../components/shared/DetectLocationAddressPicker';
 import type {
@@ -14,6 +38,7 @@ import type {
   Examination,
   Homework,
   HomeworkSubmission,
+  PeriodTimingSlot,
   PlatformUser,
   Room,
   School,
@@ -31,6 +56,7 @@ const DAYS: DayOfWeek[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday
 // Conflict-Checked Weekly Timetable Builder
 // ============================================================================
 export function PrincipalTimetableView({
+  school,
   timetable,
   classes,
   subjects,
@@ -40,6 +66,7 @@ export function PrincipalTimetableView({
   actor,
   canWrite,
 }: {
+  school?: School | null;
   timetable: TimetablePeriod[];
   classes: SchoolClass[];
   subjects: Subject[];
@@ -50,30 +77,56 @@ export function PrincipalTimetableView({
   canWrite: boolean;
 }) {
   const { pushToast } = useToast();
+  const sortedClasses = useMemo(() => sortClassesInOrder(classes), [classes]);
   const [viewBy, setViewBy] = useState<'class' | 'teacher'>('class');
-  const [selectedClassId, setSelectedClassId] = useState(classes[0]?.id || '');
+  const [selectedClassId, setSelectedClassId] = useState(sortedClasses[0]?.id || '');
   const [selectedTeacherId, setSelectedTeacherId] = useState(teachers[0]?.id || '');
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingPeriod, setEditingPeriod] = useState<TimetablePeriod | null>(null);
+  const [savingSlot, setSavingSlot] = useState(false);
+
+  // Excel Timetable Import modal state
+  const [importOpen, setImportOpen] = useState(false);
+  const [parsingExcel, setParsingExcel] = useState(false);
+  const [importingExcel, setImportingExcel] = useState(false);
+  const [parseResult, setParseResult] = useState<TimetableExcelParseResult | null>(null);
+  const [replaceExisting, setReplaceExisting] = useState(true);
+  const [importError, setImportError] = useState('');
+
+  const periodSchedule = useMemo<PeriodTimingSlot[]>(() => {
+    if (school?.settings?.periodSchedule && school.settings.periodSchedule.length > 0) {
+      return school.settings.periodSchedule;
+    }
+    return buildDefaultPeriodSchedule(school?.settings?.periodsPerDay || 8);
+  }, [school?.settings?.periodSchedule, school?.settings?.periodsPerDay]);
+
+  const workingDays = useMemo<DayOfWeek[]>(() => {
+    const configured = school?.settings?.workingDays;
+    if (configured && configured.length > 0) {
+      return DAYS.filter((d) => configured.includes(d));
+    }
+    return DAYS.slice(0, 5);
+  }, [school?.settings?.workingDays]);
 
   const [form, setForm] = useState({
-    classId: classes[0]?.id || '',
+    classId: sortedClasses[0]?.id || '',
     dayOfWeek: 'Monday' as DayOfWeek,
     periodNumber: '1',
-    startTime: '08:30',
-    endTime: '09:20',
-    isBreak: false,
+    startTime: periodSchedule[0]?.startTime || '08:30',
+    endTime: periodSchedule[0]?.endTime || '09:15',
+    isBreak: Boolean(periodSchedule[0]?.isBreak),
     subjectId: subjects[0]?.id || '',
     teacherId: teachers[0]?.id || '',
     roomId: rooms[0]?.id || '',
   });
 
-  const activeClassId = selectedClassId || classes[0]?.id || '';
+  const activeClassId = selectedClassId || sortedClasses[0]?.id || '';
   const activeTeacherId = selectedTeacherId || teachers[0]?.id || '';
 
   const visiblePeriods = useMemo(() => {
     return timetable
       .filter((p) => (viewBy === 'class' ? p.classId === activeClassId : p.teacherId === activeTeacherId))
-      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+      .sort((a, b) => a.periodNumber - b.periodNumber || a.startTime.localeCompare(b.startTime));
   }, [timetable, viewBy, activeClassId, activeTeacherId]);
 
   const liveConflicts = useMemo(() => {
@@ -81,6 +134,7 @@ export function PrincipalTimetableView({
     const subj = subjects.find((s) => s.id === form.subjectId);
     const tch = teachers.find((t) => t.id === form.teacherId);
     const rm = rooms.find((r) => r.id === form.roomId);
+    const otherPeriods = editingPeriod ? timetable.filter((p) => p.id !== editingPeriod.id) : timetable;
     return detectTimetableConflicts(
       {
         schoolId,
@@ -99,27 +153,79 @@ export function PrincipalTimetableView({
         roomName: form.isBreak ? '' : rm?.name,
         status: 'published',
       },
-      timetable,
+      otherPeriods,
     );
-  }, [form, classes, subjects, teachers, rooms, timetable, schoolId]);
+  }, [form, classes, subjects, teachers, rooms, timetable, schoolId, editingPeriod]);
 
-  const handleAddPeriod = async (e: React.FormEvent) => {
+  const applyTimingForPeriod = (periodNumStr: string) => {
+    const num = Number(periodNumStr);
+    const slot = periodSchedule.find((s) => s.periodNumber === num);
+    if (slot) {
+      setForm((prev) => ({
+        ...prev,
+        periodNumber: periodNumStr,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        isBreak: Boolean(slot.isBreak),
+      }));
+    } else {
+      setForm((prev) => ({ ...prev, periodNumber: periodNumStr }));
+    }
+  };
+
+  const openAddPeriodModal = () => {
+    setEditingPeriod(null);
+    const firstSlot = periodSchedule[0];
+    const classSubjects = subjects.filter((s) => s.classId === activeClassId);
+    const defaultSub = classSubjects[0] || subjects[0];
+    const defaultTeacherId = defaultSub?.teacherId || teachers[0]?.id || '';
+    const activeCls = classes.find((c) => c.id === activeClassId);
+    setForm({
+      classId: activeClassId || sortedClasses[0]?.id || '',
+      dayOfWeek: workingDays[0] || 'Monday',
+      periodNumber: String(firstSlot?.periodNumber || 1),
+      startTime: firstSlot?.startTime || '08:30',
+      endTime: firstSlot?.endTime || '09:15',
+      isBreak: Boolean(firstSlot?.isBreak),
+      subjectId: defaultSub?.id || '',
+      teacherId: defaultTeacherId,
+      roomId: activeCls?.roomId || rooms[0]?.id || '',
+    });
+    setModalOpen(true);
+  };
+
+  const openEditPeriodModal = (p: TimetablePeriod) => {
+    setEditingPeriod(p);
+    setForm({
+      classId: p.classId,
+      dayOfWeek: p.dayOfWeek,
+      periodNumber: String(p.periodNumber),
+      startTime: p.startTime,
+      endTime: p.endTime,
+      isBreak: Boolean(p.isBreak),
+      subjectId: p.subjectId || '',
+      teacherId: p.teacherId || '',
+      roomId: p.roomId || '',
+    });
+    setModalOpen(true);
+  };
+
+  const handleSavePeriod = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canWrite) return;
+    if (!canWrite || savingSlot) return;
     if (liveConflicts.length > 0) {
-      pushToast('error', 'Resolve timetable conflicts before publishing.');
+      pushToast('error', 'Resolve timetable conflicts before saving.');
       return;
     }
     const cls = classes.find((c) => c.id === form.classId);
     const subj = subjects.find((s) => s.id === form.subjectId);
     const tch = teachers.find((t) => t.id === form.teacherId);
     const rm = rooms.find((r) => r.id === form.roomId);
-    const id = generateId('tt');
+    const slotMeta = periodSchedule.find((s) => s.periodNumber === (Number(form.periodNumber) || 1));
 
+    setSavingSlot(true);
     try {
-      await setDoc(doc(db, 'timetablePeriods', id), {
-        id,
-        schoolId,
+      const payload = {
         classId: form.classId,
         className: cls?.name || '',
         dayOfWeek: form.dayOfWeek,
@@ -128,97 +234,321 @@ export function PrincipalTimetableView({
         endTime: form.endTime,
         isBreak: form.isBreak,
         subjectId: form.isBreak ? '' : subj?.id || '',
-        subjectName: form.isBreak ? 'Break / Recess' : subj?.name || 'General Study',
+        subjectName: form.isBreak ? slotMeta?.label || 'Break / Recess' : subj?.name || 'General Study',
         teacherId: form.isBreak ? '' : tch?.id || '',
         teacherName: form.isBreak ? '' : tch?.name || '',
         roomId: form.isBreak ? '' : rm?.id || '',
         roomName: form.isBreak ? '' : rm?.name || '',
-        status: 'published',
-        createdBy: actor.uid,
-        createdAt: serverTimestamp(),
+        status: 'published' as const,
         updatedAt: serverTimestamp(),
-      });
-      pushToast('success', 'Timetable slot published.');
+      };
+
+      if (editingPeriod) {
+        await updateDoc(doc(db, 'timetablePeriods', editingPeriod.id), payload);
+        pushToast('success', 'Timetable slot updated.');
+      } else {
+        const id = generateId('tt');
+        await setDoc(doc(db, 'timetablePeriods', id), {
+          id,
+          schoolId,
+          ...payload,
+          createdBy: actor.uid,
+          createdAt: serverTimestamp(),
+        });
+        pushToast('success', 'Timetable slot published.');
+      }
       setModalOpen(false);
+      setEditingPeriod(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `timetablePeriods/${id}`);
+      handleFirestoreError(err, OperationType.WRITE, 'timetablePeriods');
+      pushToast('error', 'Unable to save timetable slot.');
+    } finally {
+      setSavingSlot(false);
     }
   };
 
+  const handleTimetableExcelSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setParsingExcel(true);
+    setImportError('');
+    setParseResult(null);
+    try {
+      const result = await parseTimetableExcelFile(file, {
+        existingClasses: classes,
+        existingSubjects: subjects,
+        existingTeachers: teachers,
+        existingRooms: rooms,
+        periodSchedule,
+        fallbackClassId: activeClassId,
+      });
+      setParseResult(result);
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Unable to parse Excel timetable file.');
+    } finally {
+      setParsingExcel(false);
+    }
+  };
+
+  const handleConfirmTimetableImport = async () => {
+    if (!canWrite || !parseResult || importingExcel) return;
+    const validRows = parseResult.periods.filter((r) => r.errors.length === 0);
+    if (validRows.length === 0) {
+      pushToast('error', 'No valid timetable periods found in the uploaded sheet.');
+      return;
+    }
+
+    setImportingExcel(true);
+    try {
+      const now = serverTimestamp();
+      // 1. Auto-create any missing classes detected in the Excel file
+      const createdClassIdByCode = new Map<string, { id: string; name: string }>();
+      if (parseResult.classesToCreate.length > 0) {
+        const classBatch = writeBatch(db);
+        for (const draft of parseResult.classesToCreate) {
+          const newId = generateId('cls');
+          createdClassIdByCode.set(draft.code.toUpperCase(), { id: newId, name: draft.name });
+          classBatch.set(doc(db, 'classes', newId), {
+            id: newId,
+            schoolId,
+            name: draft.name,
+            code: draft.code,
+            gradeLevel: draft.gradeLevel,
+            section: draft.section,
+            capacity: 40,
+            academicYear: school?.academicYear || '2026-2027',
+            classTeacherId: '',
+            classTeacherName: '',
+            roomId: '',
+            roomName: '',
+            status: 'active',
+            createdBy: actor.uid,
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+        await classBatch.commit();
+      }
+
+      // Resolve final class IDs for each parsed period
+      const resolvedRows = validRows
+        .map((row) => {
+          const created = createdClassIdByCode.get(row.classCode.toUpperCase());
+          const finalClassId = row.matchedClassId || created?.id || '';
+          const finalClassName = created?.name || row.className;
+          return { ...row, finalClassId, finalClassName };
+        })
+        .filter((r) => Boolean(r.finalClassId));
+
+      // 2. Optionally replace existing periods for affected classes
+      if (replaceExisting) {
+        const affectedClassIds = new Set(resolvedRows.map((r) => r.finalClassId));
+        const existingToDelete = timetable.filter((p) => affectedClassIds.has(p.classId));
+        const CHUNK = 350;
+        for (let i = 0; i < existingToDelete.length; i += CHUNK) {
+          const delBatch = writeBatch(db);
+          existingToDelete.slice(i, i + CHUNK).forEach((p) => {
+            delBatch.delete(doc(db, 'timetablePeriods', p.id));
+          });
+          await delBatch.commit();
+        }
+      }
+
+      // 3. Batch-write imported timetable periods
+      const CHUNK = 350;
+      for (let i = 0; i < resolvedRows.length; i += CHUNK) {
+        const batch = writeBatch(db);
+        resolvedRows.slice(i, i + CHUNK).forEach((row) => {
+          const id = generateId('tt');
+          batch.set(doc(db, 'timetablePeriods', id), {
+            id,
+            schoolId,
+            classId: row.finalClassId,
+            className: row.finalClassName.slice(0, 80),
+            dayOfWeek: row.dayOfWeek,
+            periodNumber: row.periodNumber,
+            startTime: row.startTime,
+            endTime: row.endTime,
+            isBreak: row.isBreak,
+            subjectId: row.isBreak ? '' : row.matchedSubjectId || '',
+            subjectName: (row.isBreak ? row.subjectName || 'Break / Recess' : row.subjectName || 'General Study').slice(0, 100),
+            teacherId: row.isBreak ? '' : row.matchedTeacherId || '',
+            teacherName: row.isBreak ? '' : (row.teacherName || '').slice(0, 100),
+            roomId: row.isBreak ? '' : row.matchedRoomId || '',
+            roomName: row.isBreak ? '' : (row.roomName || '').slice(0, 80),
+            status: 'published',
+            createdBy: actor.uid,
+            createdAt: now,
+            updatedAt: now,
+          });
+        });
+        await batch.commit();
+      }
+
+      await recordAuditLog({
+        schoolId,
+        actorUid: actor.uid,
+        actorName: actor.displayName,
+        actorRole: actor.role,
+        action: 'IMPORT_TIMETABLE_EXCEL',
+        targetType: 'timetable',
+        targetId: schoolId,
+        targetLabel: `${resolvedRows.length} periods imported (${parseResult.sheetName})`,
+        details: `Format: ${parseResult.detectedFormat}. Auto-created ${parseResult.classesToCreate.length} missing class-sections.`,
+      }).catch(() => undefined);
+
+      pushToast(
+        'success',
+        `Imported ${resolvedRows.length} timetable periods${parseResult.classesToCreate.length > 0 ? ` and created ${parseResult.classesToCreate.length} new classes` : ''}.`,
+      );
+      setImportOpen(false);
+      setParseResult(null);
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to import timetable.');
+      handleFirestoreError(err, OperationType.WRITE, 'timetablePeriods');
+    } finally {
+      setImportingExcel(false);
+    }
+  };
+
+  const classSubjectsForForm = useMemo(() => {
+    const scoped = subjects.filter((s) => s.classId === form.classId);
+    return scoped.length > 0 ? scoped : subjects;
+  }, [subjects, form.classId]);
+
+  const validImportCount = parseResult ? parseResult.periods.filter((p) => p.errors.length === 0).length : 0;
+  const errorImportCount = parseResult ? parseResult.periods.filter((p) => p.errors.length > 0).length : 0;
+
   return (
     <div className="space-y-5">
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="inline-flex p-1 bg-slate-100 rounded-lg text-xs">
-            <button type="button" onClick={() => setViewBy('class')} className={`px-3 py-1.5 rounded-md font-medium cursor-pointer ${viewBy === 'class' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}>
+          <div className="inline-flex p-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs">
+            <button
+              type="button"
+              onClick={() => setViewBy('class')}
+              className={`px-3 py-1.5 rounded-md font-medium cursor-pointer transition-colors ${viewBy === 'class' ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm' : 'text-slate-600 dark:text-slate-400'}`}
+            >
               By Class
             </button>
-            <button type="button" onClick={() => setViewBy('teacher')} className={`px-3 py-1.5 rounded-md font-medium cursor-pointer ${viewBy === 'teacher' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'}`}>
+            <button
+              type="button"
+              onClick={() => setViewBy('teacher')}
+              className={`px-3 py-1.5 rounded-md font-medium cursor-pointer transition-colors ${viewBy === 'teacher' ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm' : 'text-slate-600 dark:text-slate-400'}`}
+            >
               By Teacher
             </button>
           </div>
 
           {viewBy === 'class' ? (
-            <select value={activeClassId} onChange={(e) => setSelectedClassId(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-1.5 text-xs bg-white">
-              {classes.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
+            <select
+              value={activeClassId}
+              onChange={(e) => setSelectedClassId(e.target.value)}
+              className="border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200"
+            >
+              {sortedClasses.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.code})
+                </option>
+              ))}
             </select>
           ) : (
-            <select value={activeTeacherId} onChange={(e) => setSelectedTeacherId(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-1.5 text-xs bg-white">
-              {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            <select
+              value={activeTeacherId}
+              onChange={(e) => setSelectedTeacherId(e.target.value)}
+              className="border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200"
+            >
+              {teachers.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
             </select>
           )}
+
+          <span className="hidden xl:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+            <Clock className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+            {periodSchedule.length} periods/day · {workingDays.length} working days
+          </span>
         </div>
 
-        <Button
-          variant="primary"
-          size="sm"
-          disabled={!canWrite || classes.length === 0}
-          onClick={() => {
-            setForm((f) => ({ ...f, classId: activeClassId || classes[0]?.id || '', teacherId: teachers[0]?.id || '', roomId: rooms[0]?.id || '', subjectId: subjects[0]?.id || '' }));
-            setModalOpen(true);
-          }}
-        >
-          <Plus className="w-4 h-4" />
-          Add Period Slot
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!canWrite}
+            onClick={() => {
+              setParseResult(null);
+              setImportError('');
+              setImportOpen(true);
+            }}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" />
+            Import Excel Timetable
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!canWrite || classes.length === 0}
+            onClick={openAddPeriodModal}
+          >
+            <Plus className="w-4 h-4" />
+            Add Period Slot
+          </Button>
+        </div>
       </div>
 
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {DAYS.slice(0, 5).map((day) => {
+        {workingDays.map((day) => {
           const dayItems = visiblePeriods.filter((p) => p.dayOfWeek === day);
           return (
-            <div key={day} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="text-sm font-bold font-display text-slate-900">{day}</h3>
-                <span className="text-xs text-slate-500 tabular-nums">{dayItems.length} periods</span>
+            <div key={day} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+              <div className="px-4 py-3 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <h3 className="text-sm font-bold font-display text-slate-900 dark:text-slate-100">{day}</h3>
+                <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">{dayItems.length} periods</span>
               </div>
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
                 {dayItems.length === 0 ? (
-                  <p className="p-4 text-xs text-slate-400">No periods scheduled.</p>
+                  <p className="p-4 text-xs text-slate-400 dark:text-slate-500">No periods scheduled.</p>
                 ) : (
                   dayItems.map((p) => (
-                    <div key={p.id} className={`p-3.5 flex items-start justify-between gap-2 ${p.isBreak ? 'bg-slate-50/70' : ''}`}>
+                    <div key={p.id} className={`p-3.5 flex items-start justify-between gap-2 ${p.isBreak ? 'bg-slate-50/70 dark:bg-slate-800/40' : ''}`}>
                       <div>
-                        <p className="text-xs font-mono text-teal-700 tabular-nums">{p.startTime} – {p.endTime} · P{p.periodNumber}</p>
-                        <p className="text-sm font-semibold text-slate-900 mt-0.5">{p.subjectName || 'Break'}</p>
+                        <p className="text-xs font-mono text-teal-700 dark:text-teal-400 tabular-nums">
+                          {p.startTime} – {p.endTime} · P{p.periodNumber}
+                        </p>
+                        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 mt-0.5">{p.subjectName || 'Break'}</p>
                         {!p.isBreak && (
-                          <p className="text-xs text-slate-500">
-                            {viewBy === 'class' ? p.teacherName : p.className} {p.roomName ? `· ${p.roomName}` : ''}
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {viewBy === 'class' ? p.teacherName || 'Unassigned Teacher' : p.className} {p.roomName ? `· ${p.roomName}` : ''}
                           </p>
                         )}
                       </div>
                       {canWrite && (
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            await deleteDoc(doc(db, 'timetablePeriods', p.id));
-                            pushToast('success', 'Removed period slot.');
-                          }}
-                          className="text-slate-400 hover:text-red-600 p-1 cursor-pointer"
-                          aria-label="Delete period"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="inline-flex items-center gap-0.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => openEditPeriodModal(p)}
+                            className="text-slate-400 hover:text-teal-600 dark:hover:text-teal-400 p-1 cursor-pointer"
+                            aria-label="Edit period"
+                            title="Edit period slot"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await deleteDoc(doc(db, 'timetablePeriods', p.id));
+                              pushToast('success', 'Removed period slot.');
+                            }}
+                            className="text-slate-400 hover:text-red-600 p-1 cursor-pointer"
+                            aria-label="Delete period"
+                            title="Delete period slot"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       )}
                     </div>
                   ))
@@ -229,68 +559,153 @@ export function PrincipalTimetableView({
         })}
       </div>
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Add Timetable Period" subtitle="Automatic overlap detection checks teacher, class, and room availability.">
-        <form onSubmit={handleAddPeriod} className="space-y-4">
+      {/* Add / Edit Single Period Modal */}
+      <Modal
+        open={modalOpen}
+        onClose={() => {
+          setModalOpen(false);
+          setEditingPeriod(null);
+        }}
+        title={editingPeriod ? 'Edit Timetable Period' : 'Add Timetable Period'}
+        subtitle="Period timings auto-fill from School Settings. Overlap checks guard teacher, class, and room conflicts."
+      >
+        <form onSubmit={handleSavePeriod} className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Class</label>
-              <select value={form.classId} onChange={(e) => setForm({ ...form, classId: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
-                {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Class</label>
+              <select
+                value={form.classId}
+                onChange={(e) => setForm({ ...form, classId: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+              >
+                {sortedClasses.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.code})
+                  </option>
+                ))}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Day</label>
-              <select value={form.dayOfWeek} onChange={(e) => setForm({ ...form, dayOfWeek: e.target.value as DayOfWeek })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
-                {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Day</label>
+              <select
+                value={form.dayOfWeek}
+                onChange={(e) => setForm({ ...form, dayOfWeek: e.target.value as DayOfWeek })}
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+              >
+                {DAYS.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
 
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Period #</label>
-              <input type="number" min={1} max={12} value={form.periodNumber} onChange={(e) => setForm({ ...form, periodNumber: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg tabular-nums" />
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Period #</label>
+              <select
+                value={form.periodNumber}
+                onChange={(e) => applyTimingForPeriod(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 tabular-nums"
+              >
+                {periodSchedule.map((slot) => (
+                  <option key={slot.periodNumber} value={String(slot.periodNumber)}>
+                    P{slot.periodNumber} · {slot.label} ({slot.startTime})
+                  </option>
+                ))}
+              </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Start Time</label>
-              <input type="time" value={form.startTime} onChange={(e) => setForm({ ...form, startTime: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg tabular-nums" />
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Start Time</label>
+              <input
+                type="time"
+                value={form.startTime}
+                onChange={(e) => setForm({ ...form, startTime: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 tabular-nums"
+              />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">End Time</label>
-              <input type="time" value={form.endTime} onChange={(e) => setForm({ ...form, endTime: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg tabular-nums" />
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">End Time</label>
+              <input
+                type="time"
+                value={form.endTime}
+                onChange={(e) => setForm({ ...form, endTime: e.target.value })}
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 tabular-nums"
+              />
             </div>
           </div>
 
-          <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-            <input type="checkbox" checked={form.isBreak} onChange={(e) => setForm({ ...form, isBreak: e.target.checked })} className="rounded border-slate-300 text-teal-600" />
+          <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.isBreak}
+              onChange={(e) => setForm({ ...form, isBreak: e.target.checked })}
+              className="rounded border-slate-300 text-teal-600"
+            />
             Mark slot as Break / Recess
           </label>
 
           {!form.isBreak && (
             <div className="grid sm:grid-cols-3 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Subject</label>
-                <select value={form.subjectId} onChange={(e) => setForm({ ...form, subjectId: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
-                  {subjects.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.code})</option>)}
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Subject</label>
+                <select
+                  value={form.subjectId}
+                  onChange={(e) => {
+                    const nextSubId = e.target.value;
+                    const matched = subjects.find((s) => s.id === nextSubId);
+                    setForm({
+                      ...form,
+                      subjectId: nextSubId,
+                      teacherId: matched?.teacherId || form.teacherId,
+                    });
+                  }}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+                >
+                  <option value="">Select subject…</option>
+                  {classSubjectsForForm.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.code})
+                    </option>
+                  ))}
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Teacher</label>
-                <select value={form.teacherId} onChange={(e) => setForm({ ...form, teacherId: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
-                  {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Teacher</label>
+                <select
+                  value={form.teacherId}
+                  onChange={(e) => setForm({ ...form, teacherId: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+                >
+                  <option value="">Unassigned</option>
+                  {teachers.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Room</label>
-                <select value={form.roomId} onChange={(e) => setForm({ ...form, roomId: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
-                  {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Room</label>
+                <select
+                  value={form.roomId}
+                  onChange={(e) => setForm({ ...form, roomId: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+                >
+                  <option value="">No Room</option>
+                  {rooms.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
           )}
 
           {liveConflicts.length > 0 && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800 space-y-1">
+            <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 rounded-lg text-xs text-red-800 dark:text-red-300 space-y-1">
               {liveConflicts.map((c) => (
                 <p key={c} className="flex items-start gap-1.5">
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
@@ -301,10 +716,184 @@ export function PrincipalTimetableView({
           )}
 
           <div className="flex justify-end gap-3">
-            <Button type="button" variant="secondary" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button type="submit" variant="primary" disabled={liveConflicts.length > 0}>Publish Slot</Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setModalOpen(false);
+                setEditingPeriod(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" loading={savingSlot} disabled={liveConflicts.length > 0}>
+              {editingPeriod ? 'Save Changes' : 'Publish Slot'}
+            </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Excel Timetable Import Modal */}
+      <Modal
+        open={importOpen}
+        onClose={() => !importingExcel && setImportOpen(false)}
+        title="Import Timetable from Excel"
+        subtitle="Upload an .xlsx, .xls, or .csv timetable. Automatically detects class-section rows or weekly period grids and applies your configured school timings."
+        maxWidth="max-w-3xl"
+      >
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+            <div className="text-xs text-slate-600 dark:text-slate-300 space-y-0.5">
+              <p className="font-semibold text-slate-900 dark:text-slate-100">Supports both Tabular &amp; Weekly Grid Excel Layouts</p>
+              <p>
+                Tabular: <span className="font-mono">Class, Section, Day, Period, Start Time, End Time, Subject, Teacher, Room</span>
+              </p>
+              <p>
+                Grid: <span className="font-mono">Class, Section, Day, Period 1, Period 2, …</span> (timings auto-filled from School Settings)
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => downloadTimetableExcelTemplate(periodSchedule, sortedClasses[0]?.code || 'C1A')}
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download Template (.xlsx)
+            </Button>
+          </div>
+
+          <label className="flex flex-col items-center justify-center gap-2 p-6 rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-teal-500 dark:hover:border-teal-500 transition-colors cursor-pointer text-center">
+            {parsingExcel ? (
+              <Loader2 className="w-6 h-6 text-teal-600 animate-spin" />
+            ) : (
+              <Upload className="w-6 h-6 text-teal-600 dark:text-teal-400" />
+            )}
+            <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              {parsingExcel ? 'Analyzing Excel sheet…' : 'Click to choose Excel (.xlsx, .xls) or CSV timetable file'}
+            </span>
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              Classes, sections, subjects, teachers, and period timings are matched automatically.
+            </span>
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={handleTimetableExcelSelect}
+              disabled={parsingExcel || importingExcel}
+              className="hidden"
+            />
+          </label>
+
+          {importError && (
+            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 text-xs text-red-700 dark:text-red-300 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{importError}</span>
+            </div>
+          )}
+
+          {parseResult && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                  <p className="text-slate-500 dark:text-slate-400">Detected Layout</p>
+                  <p className="font-bold text-slate-900 dark:text-slate-100 capitalize mt-0.5">{parseResult.detectedFormat}</p>
+                </div>
+                <div className="p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/50">
+                  <p className="text-emerald-700 dark:text-emerald-400">Valid Periods</p>
+                  <p className="font-bold text-emerald-900 dark:text-emerald-200 tabular-nums mt-0.5">{validImportCount}</p>
+                </div>
+                <div className="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/50">
+                  <p className="text-blue-700 dark:text-blue-400">New Classes to Create</p>
+                  <p className="font-bold text-blue-900 dark:text-blue-200 tabular-nums mt-0.5">{parseResult.classesToCreate.length}</p>
+                </div>
+                <div className="p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/50">
+                  <p className="text-amber-700 dark:text-amber-400">Skipped / Errors</p>
+                  <p className="font-bold text-amber-900 dark:text-amber-200 tabular-nums mt-0.5">{errorImportCount}</p>
+                </div>
+              </div>
+
+              {parseResult.classesToCreate.length > 0 && (
+                <div className="p-3 rounded-lg bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/50 text-xs text-blue-800 dark:text-blue-300">
+                  Missing classes will be auto-created:{' '}
+                  <span className="font-semibold">
+                    {parseResult.classesToCreate.map((c) => `${c.name} (${c.code})`).join(', ')}
+                  </span>
+                </div>
+              )}
+
+              <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={replaceExisting}
+                  onChange={(e) => setReplaceExisting(e.target.checked)}
+                  className="rounded border-slate-300 text-teal-600"
+                />
+                Replace existing timetable slots for the classes included in this Excel sheet
+              </label>
+
+              <div className="max-h-60 overflow-auto border border-slate-200 dark:border-slate-700 rounded-lg">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 sticky top-0">
+                    <tr className="border-b border-slate-200 dark:border-slate-700">
+                      <th className="py-2 px-3 font-semibold">Class</th>
+                      <th className="py-2 px-3 font-semibold">Day</th>
+                      <th className="py-2 px-3 font-semibold">Period &amp; Time</th>
+                      <th className="py-2 px-3 font-semibold">Subject</th>
+                      <th className="py-2 px-3 font-semibold">Teacher / Room</th>
+                      <th className="py-2 px-3 font-semibold">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {parseResult.periods.slice(0, 40).map((row, idx) => (
+                      <tr key={`${row.rowNumber}_${row.periodNumber}_${idx}`}>
+                        <td className="py-2 px-3 font-medium text-slate-900 dark:text-slate-100">
+                          {row.className || '—'} <span className="font-mono text-[10px] text-slate-500">{row.classCode}</span>
+                        </td>
+                        <td className="py-2 px-3 text-slate-700 dark:text-slate-300">{row.dayOfWeek}</td>
+                        <td className="py-2 px-3 font-mono tabular-nums text-teal-700 dark:text-teal-400">
+                          P{row.periodNumber} · {row.startTime}–{row.endTime}
+                        </td>
+                        <td className="py-2 px-3 text-slate-800 dark:text-slate-200">
+                          {row.isBreak ? 'Break / Recess' : row.subjectName || '—'}
+                        </td>
+                        <td className="py-2 px-3 text-slate-500 dark:text-slate-400">
+                          {[row.teacherName, row.roomName].filter(Boolean).join(' · ') || '—'}
+                        </td>
+                        <td className="py-2 px-3">
+                          {row.errors.length === 0 ? (
+                            <span className="text-emerald-700 dark:text-emerald-400 font-semibold">Ready</span>
+                          ) : (
+                            <span className="text-red-600 dark:text-red-400">{row.errors[0]}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {parseResult.periods.length > 40 && (
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 px-3 py-2 bg-slate-50 dark:bg-slate-800/70">
+                    Showing first 40 of {parseResult.periods.length} analyzed period rows.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+            <Button type="button" variant="secondary" onClick={() => setImportOpen(false)} disabled={importingExcel}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              loading={importingExcel}
+              disabled={!canWrite || validImportCount === 0}
+              onClick={handleConfirmTimetableImport}
+            >
+              Import {validImportCount > 0 ? `${validImportCount} Periods` : 'Timetable'}
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );
@@ -958,27 +1547,141 @@ export function PrincipalSchoolSettingsView({
   canWrite: boolean;
 }) {
   const { pushToast } = useToast();
+  const initialCount = school?.settings?.periodsPerDay || school?.settings?.periodSchedule?.length || 8;
   const [address, setAddress] = useState(school?.address || '');
   const [phone, setPhone] = useState(school?.phone || '');
   const [email, setEmail] = useState(school?.email || '');
   const [academicYear, setAcademicYear] = useState(school?.academicYear || '2026-2027');
   const [allowOnline, setAllowOnline] = useState(school?.settings?.allowOnlineHomeworkSubmission !== false);
+  const [periodsPerDay, setPeriodsPerDay] = useState<number>(initialCount);
+  const [periodSchedule, setPeriodSchedule] = useState<PeriodTimingSlot[]>(
+    buildDefaultPeriodSchedule(initialCount, school?.settings?.periodSchedule),
+  );
+  const [workingDays, setWorkingDays] = useState<DayOfWeek[]>(
+    school?.settings?.workingDays?.length
+      ? school.settings.workingDays
+      : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+  );
+  const [campusLat, setCampusLat] = useState<string>(
+    typeof school?.settings?.campusLatitude === 'number' ? String(school.settings.campusLatitude) : '',
+  );
+  const [campusLng, setCampusLng] = useState<string>(
+    typeof school?.settings?.campusLongitude === 'number' ? String(school.settings.campusLongitude) : '',
+  );
+  const [geofenceMeters, setGeofenceMeters] = useState<string>(
+    String(school?.settings?.attendanceGeofenceMeters || DEFAULT_ATTENDANCE_GEOFENCE_METERS),
+  );
+  const [locatingGps, setLocatingGps] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!school) return;
+    const count = school.settings?.periodsPerDay || school.settings?.periodSchedule?.length || 8;
     setAddress(school.address || '');
     setPhone(school.phone || '');
     setEmail(school.email || '');
     setAcademicYear(school.academicYear || '2026-2027');
     setAllowOnline(school.settings?.allowOnlineHomeworkSubmission !== false);
-  }, [school?.id, school?.address, school?.phone, school?.email, school?.academicYear, school?.settings?.allowOnlineHomeworkSubmission]);
+    setPeriodsPerDay(count);
+    setPeriodSchedule(buildDefaultPeriodSchedule(count, school.settings?.periodSchedule));
+    setWorkingDays(
+      school.settings?.workingDays?.length
+        ? school.settings.workingDays
+        : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+    );
+    setCampusLat(typeof school.settings?.campusLatitude === 'number' ? String(school.settings.campusLatitude) : '');
+    setCampusLng(typeof school.settings?.campusLongitude === 'number' ? String(school.settings.campusLongitude) : '');
+    setGeofenceMeters(String(school.settings?.attendanceGeofenceMeters || DEFAULT_ATTENDANCE_GEOFENCE_METERS));
+  }, [school]);
 
   if (!school) return <EmptyState title="School profile unavailable" description="No school record is linked to this account." />;
+
+  const handlePeriodCountChange = (nextCount: number) => {
+    const clamped = Math.max(1, Math.min(12, Math.round(nextCount) || 1));
+    setPeriodsPerDay(clamped);
+    setPeriodSchedule((prev) => buildDefaultPeriodSchedule(clamped, prev));
+  };
+
+  const updatePeriodSlot = (periodNumber: number, patch: Partial<PeriodTimingSlot>) => {
+    setPeriodSchedule((prev) =>
+      prev.map((slot) => (slot.periodNumber === periodNumber ? { ...slot, ...patch } : slot)),
+    );
+  };
+
+  const toggleWorkingDay = (day: DayOfWeek) => {
+    setWorkingDays((prev) => {
+      if (prev.includes(day)) {
+        if (prev.length <= 1) return prev;
+        return prev.filter((d) => d !== day);
+      }
+      return DAYS.filter((d) => prev.includes(d) || d === day);
+    });
+  };
+
+  const handlePinCurrentGps = () => {
+    if (!navigator.geolocation) {
+      pushToast('error', 'Geolocation is not supported in this browser.');
+      return;
+    }
+    setLocatingGps(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setCampusLat(pos.coords.latitude.toFixed(6));
+        setCampusLng(pos.coords.longitude.toFixed(6));
+        setLocatingGps(false);
+        pushToast('success', 'Campus GPS coordinates pinned. Save School Settings to apply.');
+      },
+      (err) => {
+        setLocatingGps(false);
+        pushToast('error', err.message || 'Unable to detect current GPS coordinates. Please allow location access.');
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 },
+    );
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canWrite || saving) return;
+
+    const parsedLat = campusLat.trim() ? Number(campusLat.trim()) : undefined;
+    const parsedLng = campusLng.trim() ? Number(campusLng.trim()) : undefined;
+    if (
+      (parsedLat !== undefined && (!Number.isFinite(parsedLat) || parsedLat < -90 || parsedLat > 90)) ||
+      (parsedLng !== undefined && (!Number.isFinite(parsedLng) || parsedLng < -180 || parsedLng > 180))
+    ) {
+      pushToast('error', 'Enter valid campus GPS latitude (-90 to 90) and longitude (-180 to 180).');
+      return;
+    }
+
+    const parsedRadius = Math.max(
+      25,
+      Math.min(2000, Math.round(Number(geofenceMeters) || DEFAULT_ATTENDANCE_GEOFENCE_METERS)),
+    );
+
+    const sanitizedSchedule: PeriodTimingSlot[] = periodSchedule.map((s) => ({
+      periodNumber: s.periodNumber,
+      label: (s.label.trim() || (s.isBreak ? 'Break / Recess' : `Period ${s.periodNumber}`)).slice(0, 40),
+      startTime: s.startTime || '08:30',
+      endTime: s.endTime || '09:15',
+      isBreak: Boolean(s.isBreak),
+    }));
+
+    const nextSettings: NonNullable<School['settings']> = {
+      ...(school.settings || {}),
+      allowOnlineHomeworkSubmission: allowOnline,
+      workingDays,
+      periodsPerDay: sanitizedSchedule.length,
+      periodSchedule: sanitizedSchedule,
+      attendanceGeofenceMeters: parsedRadius,
+    };
+    if (parsedLat !== undefined && parsedLng !== undefined) {
+      nextSettings.campusLatitude = parsedLat;
+      nextSettings.campusLongitude = parsedLng;
+    } else {
+      delete nextSettings.campusLatitude;
+      delete nextSettings.campusLongitude;
+    }
+
     setSaving(true);
     try {
       await updateDoc(doc(db, 'schools', school.id), {
@@ -986,7 +1689,7 @@ export function PrincipalSchoolSettingsView({
         phone: phone.trim().slice(0, 32),
         email: email.trim().slice(0, 160),
         academicYear: academicYear.trim().slice(0, 24),
-        settings: { ...(school.settings || {}), allowOnlineHomeworkSubmission: allowOnline },
+        settings: nextSettings,
         updatedAt: serverTimestamp(),
       });
       await recordAuditLog({
@@ -998,8 +1701,9 @@ export function PrincipalSchoolSettingsView({
         targetType: 'school',
         targetId: school.id,
         targetLabel: school.name,
+        details: `Periods/day: ${sanitizedSchedule.length}, Working days: ${workingDays.length}, Attendance radius: ${parsedRadius}m.`,
       }).catch(() => undefined);
-      pushToast('success', 'School settings and campus address saved.');
+      pushToast('success', 'School settings, period timings, and campus geofence saved.');
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'Unable to save school settings.');
     } finally {
@@ -1008,83 +1712,275 @@ export function PrincipalSchoolSettingsView({
   };
 
   return (
-    <form onSubmit={handleSave} className="max-w-2xl bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-      <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-        <div>
-          <h2 className="text-base font-bold font-display text-slate-900">{school.name}</h2>
-          <p className="text-xs text-slate-500">Code: {school.code} · Free Unlimited Campus Access</p>
+    <form onSubmit={handleSave} className="max-w-4xl space-y-6">
+      {/* 1. Core School Profile & Contact */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-5">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+          <div>
+            <h2 className="text-base font-bold font-display text-slate-900 dark:text-slate-100">{school.name}</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Code: {school.code} · Free Unlimited Campus Access</p>
+          </div>
+          <CheckCircle2 className="w-5 h-5 text-teal-600 dark:text-teal-400" />
         </div>
-        <CheckCircle2 className="w-5 h-5 text-teal-600" />
-      </div>
 
-      <div className="grid sm:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-xs font-medium text-slate-700 mb-1">Academic Year</label>
+        <div className="grid sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Academic Year</label>
+            <input
+              type="text"
+              value={academicYear}
+              onChange={(e) => setAcademicYear(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-teal-600"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Office Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-teal-600"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Office Phone (Numbers only)</label>
+            <input
+              type="tel"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={15}
+              value={phone}
+              onChange={(e) => setPhone(sanitizePhoneDigits(e.target.value))}
+              placeholder="9876543210"
+              className="w-full px-3 py-2 text-sm tabular-nums border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-teal-600"
+            />
+          </div>
+        </div>
+
+        <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer pt-1">
           <input
-            type="text"
-            value={academicYear}
-            onChange={(e) => setAcademicYear(e.target.value)}
-            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600"
+            type="checkbox"
+            checked={allowOnline}
+            onChange={(e) => setAllowOnline(e.target.checked)}
+            className="rounded border-slate-300 text-teal-600"
           />
+          Enable online homework file submissions for students
+        </label>
+      </div>
+
+      {/* 2. Daily Periods & Timings Configuration */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex items-start gap-2.5">
+            <Clock className="w-5 h-5 text-teal-600 dark:text-teal-400 shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-sm font-bold font-display text-slate-900 dark:text-slate-100">
+                Daily Periods &amp; Bell Timings
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Configure how many periods run each day and set exact timings. Used automatically by manual Timetable creation and Excel Timetable imports.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Periods / Day</label>
+            <select
+              value={periodsPerDay}
+              disabled={!canWrite}
+              onChange={(e) => handlePeriodCountChange(Number(e.target.value))}
+              className="px-3 py-1.5 text-sm font-semibold tabular-nums border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+            >
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => (
+                <option key={n} value={n}>
+                  {n} {n === 1 ? 'Period' : 'Periods'}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-700 mb-1">Office Email</label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600"
-          />
+
+        {/* Working Days */}
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">Active School Working Days</p>
+          <div className="flex flex-wrap gap-2">
+            {DAYS.map((day) => {
+              const active = workingDays.includes(day);
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  disabled={!canWrite}
+                  onClick={() => toggleWorkingDay(day)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-[#0F295C] dark:bg-teal-600 text-white border-[#0F295C] dark:border-teal-600'
+                      : 'bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {day}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Period Timings Table */}
+        <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-50 dark:bg-slate-800/70 text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+              <tr>
+                <th className="py-2.5 px-3 font-semibold w-16">#</th>
+                <th className="py-2.5 px-3 font-semibold">Period Label</th>
+                <th className="py-2.5 px-3 font-semibold w-36">Start Time</th>
+                <th className="py-2.5 px-3 font-semibold w-36">End Time</th>
+                <th className="py-2.5 px-3 font-semibold w-28 text-center">Break / Recess</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {periodSchedule.map((slot) => (
+                <tr key={slot.periodNumber} className={slot.isBreak ? 'bg-amber-50/40 dark:bg-amber-950/20' : ''}>
+                  <td className="py-2 px-3 font-mono font-bold text-teal-700 dark:text-teal-400 tabular-nums">
+                    P{slot.periodNumber}
+                  </td>
+                  <td className="py-2 px-3">
+                    <input
+                      type="text"
+                      value={slot.label}
+                      disabled={!canWrite}
+                      onChange={(e) => updatePeriodSlot(slot.periodNumber, { label: e.target.value })}
+                      className="w-full px-2.5 py-1.5 text-xs border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                    />
+                  </td>
+                  <td className="py-2 px-3">
+                    <input
+                      type="time"
+                      value={slot.startTime}
+                      disabled={!canWrite}
+                      onChange={(e) => updatePeriodSlot(slot.periodNumber, { startTime: e.target.value })}
+                      className="w-full px-2.5 py-1.5 text-xs tabular-nums border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                    />
+                  </td>
+                  <td className="py-2 px-3">
+                    <input
+                      type="time"
+                      value={slot.endTime}
+                      disabled={!canWrite}
+                      onChange={(e) => updatePeriodSlot(slot.periodNumber, { endTime: e.target.value })}
+                      className="w-full px-2.5 py-1.5 text-xs tabular-nums border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                    />
+                  </td>
+                  <td className="py-2 px-3 text-center">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(slot.isBreak)}
+                      disabled={!canWrite}
+                      onChange={(e) =>
+                        updatePeriodSlot(slot.periodNumber, {
+                          isBreak: e.target.checked,
+                          label: e.target.checked
+                            ? slot.label.startsWith('Period')
+                              ? 'Short Break'
+                              : slot.label
+                            : slot.label.toLowerCase().includes('break')
+                              ? `Period ${slot.periodNumber}`
+                              : slot.label,
+                        })
+                      }
+                      className="rounded border-slate-300 text-teal-600"
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 
-      <div>
-        <label className="block text-xs font-medium text-slate-700 mb-1">Office Phone (Numbers only)</label>
-        <input
-          type="tel"
-          inputMode="numeric"
-          pattern="[0-9]*"
-          maxLength={15}
-          value={phone}
-          onChange={(e) => setPhone(sanitizePhoneDigits(e.target.value))}
-          placeholder="9876543210"
-          className="w-full sm:max-w-xs px-3 py-2 text-sm tabular-nums border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600"
-        />
-      </div>
+      {/* 3. Campus Address & Teacher Attendance Geofence (100m default) */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex items-start gap-2.5">
+            <MapPin className="w-5 h-5 text-teal-600 dark:text-teal-400 shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-sm font-bold font-display text-slate-900 dark:text-slate-100">
+                Campus Location &amp; Teacher Attendance Geofence
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Teachers must be within the configured campus radius (default 100 metres) and capture a live verification photo to mark their daily attendance.
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!canWrite || locatingGps}
+            onClick={handlePinCurrentGps}
+          >
+            {locatingGps ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Navigation className="w-3.5 h-3.5" />}
+            {locatingGps ? 'Locating…' : 'Pin Current GPS'}
+          </Button>
+        </div>
 
-      <div className="space-y-3 pt-1">
         <DetectLocationAddressPicker
           disabled={!canWrite}
-          label="Detect Campus Address"
-          helperText="Detect your current location to populate the official school address, then drag the pin on the map if needed."
+          label="Detect Campus Address & Pin Coordinates"
+          helperText="Detect your campus location to fill the official address and set exact GPS geofence coordinates (drag the pin to refine)."
           onAddressDetected={(detected) => {
             setAddress(detected.formattedAddress.slice(0, 300));
-            pushToast('success', 'Location detected and campus address updated. Click Save School Settings to apply.');
+            setCampusLat(detected.latitude.toFixed(6));
+            setCampusLng(detected.longitude.toFixed(6));
+            pushToast('success', 'Campus address & GPS coordinates updated. Click Save School Settings to apply.');
           }}
         />
+
         <div>
-          <label className="block text-xs font-medium text-slate-700 mb-1">School Campus Address</label>
+          <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">School Campus Address</label>
           <textarea
             rows={2}
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             placeholder="Click Detect Current Location above or enter full campus street address"
-            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg transition-colors focus:outline-none focus:border-teal-600"
+            className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-teal-600"
           />
+        </div>
+
+        <div className="grid sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Campus Latitude</label>
+            <input
+              type="text"
+              value={campusLat}
+              onChange={(e) => setCampusLat(e.target.value)}
+              placeholder="e.g. 28.613939"
+              className="w-full px-3 py-2 text-sm font-mono tabular-nums border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-teal-600"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Campus Longitude</label>
+            <input
+              type="text"
+              value={campusLng}
+              onChange={(e) => setCampusLng(e.target.value)}
+              placeholder="e.g. 77.209021"
+              className="w-full px-3 py-2 text-sm font-mono tabular-nums border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-teal-600"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Allowed Range (Metres)</label>
+            <input
+              type="number"
+              min={25}
+              max={2000}
+              value={geofenceMeters}
+              onChange={(e) => setGeofenceMeters(e.target.value)}
+              className="w-full px-3 py-2 text-sm font-mono tabular-nums border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-teal-600"
+            />
+          </div>
         </div>
       </div>
 
-      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer pt-1">
-        <input
-          type="checkbox"
-          checked={allowOnline}
-          onChange={(e) => setAllowOnline(e.target.checked)}
-          className="rounded border-slate-300 text-teal-600"
-        />
-        Enable online homework file submissions for students
-      </label>
-
-      <div className="flex justify-end pt-2">
+      <div className="flex justify-end">
         <Button type="submit" variant="navy" loading={saving} disabled={!canWrite}>
           {saving ? 'Saving…' : 'Save School Settings'}
         </Button>

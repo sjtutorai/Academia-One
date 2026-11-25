@@ -13,9 +13,12 @@ import {
   AlertTriangle,
   Eye,
   Settings,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotifications } from '../contexts/NotificationContext';
+import { ThemeToggleButton, useTheme } from '../contexts/ThemeContext';
 import { ROLE_LABELS, getSchoolAccessMode } from '../lib/permissions';
 import {
   getDrawerVariants,
@@ -54,6 +57,7 @@ export function DashboardShell({
 }: DashboardShellProps) {
   const { activeUser, activeSchool, schoolLoading, logout, isPreviewMode, exitDemoPreview } = useAuth();
   const { unreadCount } = useNotifications();
+  const { isDark, toggleTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
   const prefersReducedMotion = useReducedMotion();
@@ -208,7 +212,7 @@ export function DashboardShell({
   const pageVariants = getPageEntranceVariants(prefersReducedMotion);
 
   return (
-    <div className="min-h-[100dvh] bg-[#F8FAFC] flex">
+    <div className="min-h-[100dvh] bg-[#F8FAFC] dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex transition-colors duration-200">
       {/* Desktop Sidebar */}
       <aside
         className={`hidden lg:block shrink-0 transition-[width] duration-200 ease-out ${
@@ -247,9 +251,9 @@ export function DashboardShell({
       <div className="flex-1 min-w-0 flex flex-col">
         {/* Demo Preview Mode Notice */}
         {isPreviewMode && activeUser && (
-          <div className="bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs text-amber-950">
+          <div className="bg-amber-50 dark:bg-amber-950/60 border-b border-amber-200 dark:border-amber-800/80 px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs text-amber-950 dark:text-amber-100">
             <div className="flex items-center gap-2">
-              <Eye className="w-4 h-4 text-amber-700 shrink-0" />
+              <Eye className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" />
               <span>
                 <strong>Demo Role Preview:</strong> Viewing as <strong>{activeUser.displayName}</strong> ({ROLE_LABELS[activeUser.role]} · {activeSchool?.name || activeUser.schoolId})
               </span>
@@ -269,27 +273,27 @@ export function DashboardShell({
 
         {/* Subscription Grace / Suspended Banner */}
         {accessMode.bannerMessage && (
-          <div className="bg-red-50 border-b border-red-200 px-6 py-2.5 flex items-center gap-2.5 text-xs text-red-900">
-            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+          <div className="bg-red-50 dark:bg-red-950/60 border-b border-red-200 dark:border-red-800/80 px-6 py-2.5 flex items-center gap-2.5 text-xs text-red-900 dark:text-red-200">
+            <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
             <span>{accessMode.bannerMessage}</span>
           </div>
         )}
 
         {/* Top Navigation Bar */}
-        <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-200 safe-top safe-x">
+        <header className="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800 safe-top safe-x">
           <div className="h-14 sm:h-16 px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-4">
             <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               <button
                 type="button"
                 onClick={() => setMobileOpen(true)}
-                className="lg:hidden min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-600 hover:bg-blue-50 transition-colors cursor-pointer shrink-0"
+                className="lg:hidden min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
                 aria-label="Open navigation menu"
               >
                 <Menu className="w-5 h-5" />
               </button>
               <div className="min-w-0">
-                {breadcrumb && <p className="text-[11px] font-medium text-blue-600 truncate leading-tight">{breadcrumb}</p>}
-                <h1 className="text-sm sm:text-lg font-bold font-display text-[#0F295C] truncate leading-tight">
+                {breadcrumb && <p className="text-[11px] font-medium text-blue-600 dark:text-blue-400 truncate leading-tight">{breadcrumb}</p>}
+                <h1 className="text-sm sm:text-lg font-bold font-display text-[#0F295C] dark:text-white truncate leading-tight">
                   {title}
                 </h1>
               </div>
@@ -305,13 +309,13 @@ export function DashboardShell({
                       value={searchValue}
                       onChange={(e) => handleSearch(e.target.value)}
                       placeholder={globalSearchPlaceholder}
-                      className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg transition-all duration-150 focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
+                      className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800/90 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-lg transition-all duration-150 focus:outline-none focus:bg-white dark:focus:bg-slate-800 focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                     />
                   </div>
                   <button
                     type="button"
                     onClick={() => setMobileSearchOpen((v) => !v)}
-                    className="md:hidden min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700 transition-colors cursor-pointer"
+                    className="md:hidden min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-800 hover:text-blue-700 dark:hover:text-blue-300 transition-colors cursor-pointer"
                     aria-label={mobileSearchOpen ? 'Close search' : 'Search records'}
                     aria-expanded={mobileSearchOpen}
                   >
@@ -322,9 +326,11 @@ export function DashboardShell({
 
               <PWAInstallButton variant="compact" className="hidden sm:inline-flex" />
 
+              <ThemeToggleButton variant="icon" />
+
               <Link
                 to={`${basePortalPath}/notifications`}
-                className="relative min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                className="relative min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-800 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
                 aria-label="Notifications"
               >
                 <Bell className="w-5 h-5" />
@@ -345,11 +351,11 @@ export function DashboardShell({
               </Link>
 
               {/* Profile Dropdown Menu (Accessible on both Mobile & Desktop) */}
-              <div ref={profileMenuRef} className="relative sm:pl-2 sm:border-l sm:border-slate-200">
+              <div ref={profileMenuRef} className="relative sm:pl-2 sm:border-l sm:border-slate-200 dark:sm:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setProfileMenuOpen((v) => !v)}
-                  className="flex items-center gap-2 text-xs text-slate-700 hover:text-slate-900 rounded-lg p-1 sm:px-1.5 hover:bg-blue-50/60 transition-colors cursor-pointer min-h-[40px]"
+                  className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-200 hover:text-slate-900 dark:hover:text-white rounded-lg p-1 sm:px-1.5 hover:bg-blue-50/60 dark:hover:bg-slate-800 transition-colors cursor-pointer min-h-[40px]"
                   aria-expanded={profileMenuOpen}
                   aria-haspopup="menu"
                   aria-label="Account menu"
@@ -359,7 +365,7 @@ export function DashboardShell({
                   </div>
                   <div className="hidden sm:block text-left leading-tight max-w-[120px]">
                     <p className="font-semibold truncate">{activeUser?.displayName}</p>
-                    <p className="text-[11px] text-slate-500">{activeUser ? ROLE_LABELS[activeUser.role] : ''}</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">{activeUser ? ROLE_LABELS[activeUser.role] : ''}</p>
                   </div>
                 </button>
 
@@ -371,19 +377,30 @@ export function DashboardShell({
                       animate="animate"
                       exit="exit"
                       role="menu"
-                      className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-xl shadow-lg py-1.5 z-40 origin-top-right"
+                      className="absolute right-0 mt-2 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-lg py-1.5 z-40 origin-top-right"
                     >
-                      <div className="px-3.5 py-2 border-b border-slate-100">
-                        <p className="text-xs font-semibold text-slate-900 truncate">{activeUser?.displayName}</p>
-                        <p className="text-[11px] text-slate-500 truncate">{activeUser?.email}</p>
+                      <div className="px-3.5 py-2 border-b border-slate-100 dark:border-slate-800">
+                        <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">{activeUser?.displayName}</p>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">{activeUser?.email}</p>
                       </div>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => toggleTheme()}
+                        className="w-full flex items-center justify-between gap-2.5 px-3.5 py-2.5 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                      >
+                        <span className="flex items-center gap-2.5">
+                          {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-500" />}
+                          {isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                        </span>
+                      </button>
                       <Link
                         to={`${basePortalPath}/profile`}
                         onClick={() => setProfileMenuOpen(false)}
                         role="menuitem"
-                        className="flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+                        className="flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
                       >
-                        <UserCircle2 className="w-4 h-4 text-slate-500" />
+                        <UserCircle2 className="w-4 h-4 text-slate-500 dark:text-slate-400" />
                         Profile & Security
                       </Link>
                       {activeUser?.role === 'principal' && (
@@ -391,9 +408,9 @@ export function DashboardShell({
                           to="/principal/settings"
                           onClick={() => setProfileMenuOpen(false)}
                           role="menuitem"
-                          className="flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+                          className="flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
                         >
-                          <Settings className="w-4 h-4 text-slate-500" />
+                          <Settings className="w-4 h-4 text-slate-500 dark:text-slate-400" />
                           School Settings
                         </Link>
                       )}
@@ -405,7 +422,7 @@ export function DashboardShell({
                           await logout();
                           navigate('/login');
                         }}
-                        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/50 transition-colors cursor-pointer"
                       >
                         <LogOut className="w-4 h-4" />
                         Sign Out
@@ -419,7 +436,7 @@ export function DashboardShell({
 
           {/* Expandable Mobile Search Bar */}
           {onGlobalSearch && mobileSearchOpen && (
-            <div className="md:hidden px-3 pb-3 pt-1 border-t border-slate-100 bg-white">
+            <div className="md:hidden px-3 pb-3 pt-1 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
               <div className="relative flex items-center">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
                 <input
@@ -428,7 +445,7 @@ export function DashboardShell({
                   value={searchValue}
                   onChange={(e) => handleSearch(e.target.value)}
                   placeholder={globalSearchPlaceholder}
-                  className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
+                  className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:bg-white dark:focus:bg-slate-800 focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15"
                 />
               </div>
             </div>
@@ -450,7 +467,7 @@ export function DashboardShell({
         {/* Mobile & Compact Tablet Bottom Navigation Bar */}
         <nav
           aria-label="Primary mobile navigation"
-          className="lg:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 safe-bottom safe-x"
+          className="lg:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 safe-bottom safe-x"
         >
           <div className="grid grid-cols-5 h-14 items-center max-w-xl mx-auto">
             {bottomNavItems.map((item) => {
@@ -463,7 +480,7 @@ export function DashboardShell({
                   key={item.id}
                   to={item.path}
                   className={`flex flex-col items-center justify-center gap-0.5 h-full px-1 transition-colors ${
-                    active ? 'text-blue-700 font-semibold' : 'text-slate-500 hover:text-slate-800'
+                    active ? 'text-blue-700 dark:text-blue-400 font-semibold' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
                   }`}
                 >
                   <Icon className="w-5 h-5 shrink-0" />
@@ -474,7 +491,7 @@ export function DashboardShell({
             <button
               type="button"
               onClick={() => setMobileOpen(true)}
-              className="flex flex-col items-center justify-center gap-0.5 h-full px-1 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+              className="flex flex-col items-center justify-center gap-0.5 h-full px-1 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors cursor-pointer"
               aria-label="Open full menu"
             >
               <Menu className="w-5 h-5 shrink-0" />

@@ -313,6 +313,34 @@
       },
       "required": ["id", "schoolId", "classId", "date", "status", "entries", "createdBy", "createdAt", "updatedAt"]
     },
+    "TeacherAttendanceRecord": {
+      "title": "TeacherAttendanceRecord",
+      "description": "Daily teacher geofenced check-in attendance with GPS distance, verification photo, and principal override.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "schoolId": { "type": "string", "maxLength": 128 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "teacherUid": { "type": "string", "maxLength": 128 },
+        "teacherName": { "type": "string", "maxLength": 120 },
+        "staffId": { "type": "string", "maxLength": 32 },
+        "date": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "enum": ["present", "late", "half_day", "absent", "on_leave"] },
+        "checkInTime": { "type": "string", "maxLength": 40 },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "distanceMeters": { "type": "number" },
+        "withinRange": { "type": "boolean" },
+        "photoDataUrl": { "type": "string", "maxLength": 300000 },
+        "markedBy": { "type": "string", "enum": ["teacher", "principal"] },
+        "markedByUid": { "type": "string", "maxLength": 128 },
+        "markedByName": { "type": "string", "maxLength": 120 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "schoolId", "teacherId", "teacherName", "date", "status", "markedBy", "markedByUid", "markedByName", "createdAt", "updatedAt"]
+    },
     "Homework": {
       "title": "Homework",
       "description": "Class homework assignment with due date and online submission toggle.",
@@ -753,6 +781,7 @@
     "/students/{studentId}": { "schema": { "$ref": "#/entities/StudentProfile" }, "description": "School student enrollment records" },
     "/timetablePeriods/{periodId}": { "schema": { "$ref": "#/entities/TimetablePeriod" }, "description": "Weekly timetable slots" },
     "/attendanceRecords/{recordId}": { "schema": { "$ref": "#/entities/AttendanceRecord" }, "description": "Daily attendance registers" },
+    "/teacherAttendance/{recordId}": { "schema": { "$ref": "#/entities/TeacherAttendanceRecord" }, "description": "Daily geofenced teacher check-in attendance records with photo verification" },
     "/homework/{homeworkId}": { "schema": { "$ref": "#/entities/Homework" }, "description": "Homework assignments" },
     "/homeworkSubmissions/{submissionId}": { "schema": { "$ref": "#/entities/HomeworkSubmission" }, "description": "Student homework submissions" },
     "/examinations/{examId}": { "schema": { "$ref": "#/entities/Examination" }, "description": "Scheduled examinations" },

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -24,6 +24,13 @@ import {
   Eye,
   FileSpreadsheet,
   FileText,
+  Camera,
+  MapPin,
+  Navigation,
+  RefreshCw,
+  AlertTriangle,
+  ShieldCheck,
+  Loader2,
 } from 'lucide-react';
 import {
   collection,
@@ -66,6 +73,12 @@ import {
   StatusText,
   useToast,
 } from '../../components/ui/Primitives';
+import {
+  calculateDistanceMeters,
+  captureVideoFrameToDataUrl,
+  compressImageFileToDataUrl,
+  DEFAULT_ATTENDANCE_GEOFENCE_METERS,
+} from '../../lib/geoAttendance';
 import { NotificationsAndPreferencesView } from '../../components/shared/NotificationsAndPreferencesView';
 import { ProfileSecurityView } from '../../components/shared/ProfileSecurityView';
 import type {
@@ -77,8 +90,10 @@ import type {
   LearningMaterial,
   MemberAccessCode,
   PlatformUser,
+  School,
   SchoolJoinRequest,
   Subject,
+  TeacherAttendanceRecord,
   TeacherProfile,
 } from '../../types/models';
 
@@ -107,7 +122,7 @@ function getTodayDayName(): DayOfWeek {
 export default function TeacherPortal() {
   const { activeUser, activeSchool } = useAuth();
   const schoolId = activeUser?.schoolId || '';
-  const data = useSchoolData(schoolId, false);
+  const data = useSchoolData(schoolId, false, undefined, activeUser?.uid);
   const access = getSchoolAccessMode(activeSchool);
   const [globalSearch, setGlobalSearch] = useState('');
 
@@ -236,7 +251,10 @@ export default function TeacherPortal() {
           element={
             <TeacherAttendanceView
               user={activeUser}
+              school={activeSchool}
+              teacherProfile={teacherProfile}
               teacherId={teacherProfile?.id || activeUser.uid}
+              teacherAttendance={data.teacherAttendance}
               data={scopedData}
               canWrite={access.canWrite}
             />
@@ -741,19 +759,236 @@ function TeacherClassesView({
 // ============================================================================
 function TeacherAttendanceView({
   user,
+  school,
+  teacherProfile,
   teacherId,
+  teacherAttendance,
   data,
   canWrite,
 }: {
   user: PlatformUser;
+  school: School | null;
+  teacherProfile?: TeacherProfile;
   teacherId: string;
+  teacherAttendance: TeacherAttendanceRecord[];
   data: SchoolDataBundle;
   canWrite: boolean;
 }) {
   const { pushToast } = useToast();
+  const [activeTab, setActiveTab] = useState<'self' | 'students'>('self');
+
+  // ---------- Teacher Self Attendance (100m Geofence + Live Photo) ----------
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const allowedRadiusMeters = school?.settings?.attendanceGeofenceMeters || DEFAULT_ATTENDANCE_GEOFENCE_METERS;
+  const campusLat = school?.settings?.campusLatitude;
+  const campusLng = school?.settings?.campusLongitude;
+  const hasCampusCoords = typeof campusLat === 'number' && typeof campusLng === 'number';
+
+  const myRecords = useMemo(
+    () =>
+      teacherAttendance
+        .filter((r) => r.teacherUid === user.uid || r.teacherId === teacherId)
+        .sort((a, b) => b.date.localeCompare(a.date)),
+    [teacherAttendance, user.uid, teacherId],
+  );
+  const todaySelfRecord = useMemo(
+    () => myRecords.find((r) => r.date === todayStr),
+    [myRecords, todayStr],
+  );
+
+  const [locating, setLocating] = useState(false);
+  const [gpsError, setGpsError] = useState('');
+  const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
+  const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [photoDataUrl, setPhotoDataUrl] = useState('');
+  const [selfNote, setSelfNote] = useState('');
+  const [submittingSelf, setSubmittingSelf] = useState(false);
+  const [previewPhotoRecord, setPreviewPhotoRecord] = useState<TeacherAttendanceRecord | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    setCameraActive(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+    };
+  }, []);
+
+  const withinRange =
+    hasCampusCoords && distanceMeters !== null ? distanceMeters <= allowedRadiusMeters : false;
+
+  const handleVerifyLocation = () => {
+    if (!navigator.geolocation) {
+      setGpsError('Geolocation is not supported by your browser.');
+      return;
+    }
+    setLocating(true);
+    setGpsError('');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setCoords({ lat, lng, accuracy: Math.round(pos.coords.accuracy || 0) });
+        if (hasCampusCoords && campusLat !== undefined && campusLng !== undefined) {
+          const dist = calculateDistanceMeters(lat, lng, campusLat, campusLng);
+          setDistanceMeters(dist);
+          if (dist <= allowedRadiusMeters) {
+            pushToast('success', `Location verified: ${dist}m from campus (within ${allowedRadiusMeters}m limit).`);
+          } else {
+            pushToast('error', `You are ${dist}m from campus. Move within ${allowedRadiusMeters}m to mark attendance.`);
+          }
+        }
+        setLocating(false);
+      },
+      (err) => {
+        setLocating(false);
+        setGpsError(err.message || 'Location permission denied. Enable GPS/location access and try again.');
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 },
+    );
+  };
+
+  const handleStartCamera = async () => {
+    setCameraError('');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraError('Live camera access is unavailable in this browser. Use the Upload / Take Photo button below.');
+      return;
+    }
+    try {
+      stopCamera();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      setCameraActive(true);
+      requestAnimationFrame(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => undefined);
+        }
+      });
+    } catch {
+      setCameraError('Unable to open live camera (permission blocked or no camera found). Use the photo capture upload below.');
+    }
+  };
+
+  const handleCapturePhoto = () => {
+    if (!videoRef.current) return;
+    const dataUrl = captureVideoFrameToDataUrl(videoRef.current, 480, 0.72);
+    if (!dataUrl || dataUrl.length > 290000) {
+      pushToast('error', 'Captured photo could not be compressed. Please try again.');
+      return;
+    }
+    setPhotoDataUrl(dataUrl);
+    stopCamera();
+  };
+
+  const handleFallbackPhotoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const compressed = await compressImageFileToDataUrl(file, 480, 0.7);
+      if (compressed.length > 290000) {
+        pushToast('error', 'Photo size is too large. Please take a smaller photo.');
+        return;
+      }
+      setPhotoDataUrl(compressed);
+      setCameraError('');
+      stopCamera();
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to process photo.');
+    }
+  };
+
+  const handleSubmitSelfAttendance = async () => {
+    if (!canWrite || submittingSelf) return;
+    if (!hasCampusCoords) {
+      pushToast('error', 'School campus GPS coordinates are not configured yet. Ask your Principal to pin them in School Settings.');
+      return;
+    }
+    if (!coords || distanceMeters === null || distanceMeters > allowedRadiusMeters) {
+      pushToast('error', `You must verify your GPS location within ${allowedRadiusMeters}m of campus.`);
+      return;
+    }
+    if (!photoDataUrl) {
+      pushToast('error', 'Please capture a live verification photo before marking attendance.');
+      return;
+    }
+
+    setSubmittingSelf(true);
+    const recordId = `tatt_${user.schoolId}_${teacherId}_${todayStr}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const checkInTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    try {
+      const payload = {
+        id: recordId,
+        schoolId: user.schoolId,
+        teacherId,
+        teacherUid: user.uid,
+        teacherName: (teacherProfile?.name || user.displayName || 'Teacher').slice(0, 120),
+        staffId: (teacherProfile?.staffId || user.accessCode || '').slice(0, 40),
+        date: todayStr,
+        status: 'present' as const,
+        checkInTime,
+        latitude: coords.lat,
+        longitude: coords.lng,
+        distanceMeters: Math.round(distanceMeters),
+        withinRange: true,
+        photoDataUrl,
+        note: selfNote.trim().slice(0, 300),
+        markedBy: 'teacher' as const,
+        markedByUid: user.uid,
+        markedByName: user.displayName.slice(0, 120),
+        updatedAt: serverTimestamp(),
+      };
+
+      if (todaySelfRecord) {
+        await updateDoc(doc(db, 'teacherAttendance', todaySelfRecord.id), payload);
+      } else {
+        await setDoc(doc(db, 'teacherAttendance', recordId), {
+          ...payload,
+          createdAt: serverTimestamp(),
+        });
+      }
+
+      await recordAuditLog({
+        schoolId: user.schoolId,
+        actorUid: user.uid,
+        actorName: user.displayName,
+        actorRole: 'teacher',
+        action: 'TEACHER_SELF_ATTENDANCE_MARKED',
+        targetType: 'teacherAttendance',
+        targetId: recordId,
+        targetLabel: `${user.displayName} · ${todayStr} (${Math.round(distanceMeters)}m)`,
+      }).catch(() => undefined);
+
+      pushToast('success', `Daily attendance marked at ${checkInTime} (${Math.round(distanceMeters)}m from campus).`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `teacherAttendance/${recordId}`);
+      pushToast('error', 'Failed to submit self attendance. Please try again.');
+    } finally {
+      setSubmittingSelf(false);
+    }
+  };
+
+  // ---------- Class Student Attendance Register ----------
   const [selectedClassId, setSelectedClassId] = useState(data.classes[0]?.id || '');
   const activeClassId = selectedClassId || data.classes[0]?.id || '';
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayStr);
   const [entries, setEntries] = useState<AttendanceEntry[]>([]);
   const [saving, setSaving] = useState(false);
 
@@ -854,106 +1089,460 @@ function TeacherAttendanceView({
 
   return (
     <div className="space-y-5">
-      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-wrap items-end justify-between gap-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Assigned Class</label>
-            <select
-              value={activeClassId}
-              onChange={(e) => setSelectedClassId(e.target.value)}
-              className="text-sm border border-slate-300 rounded-lg px-3 py-2"
-            >
-              {data.classes.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Attendance Date</label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="text-sm border border-slate-300 rounded-lg px-3 py-2"
-            />
-          </div>
-          {existingRecord && (
-            <div className="pb-2 text-xs text-slate-500">
-              Existing register loaded · <StatusText status={existingRecord.status} />
-            </div>
-          )}
+      {/* Top Tab Switcher */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-semibold">
+          <button
+            type="button"
+            onClick={() => setActiveTab('self')}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg transition-colors cursor-pointer ${
+              activeTab === 'self'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
+          >
+            <MapPin className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+            My Daily Attendance ({allowedRadiusMeters}m + Photo)
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              stopCamera();
+              setActiveTab('students');
+            }}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg transition-colors cursor-pointer ${
+              activeTab === 'students'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
+          >
+            <ClipboardCheck className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+            Class Student Attendance
+          </button>
         </div>
 
-        {canWrite && (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => markAll('present')}>
-              Mark All Present
-            </Button>
-            <Button variant="secondary" size="sm" disabled={saving || entries.length === 0} onClick={() => handleSave('draft')}>
-              <Save className="w-4 h-4" />
-              Save Draft
-            </Button>
-            <Button variant="primary" size="sm" disabled={saving || entries.length === 0} onClick={() => handleSave('submitted')}>
-              <CheckCircle2 className="w-4 h-4" />
-              {existingRecord ? 'Update Submission' : 'Submit Attendance'}
-            </Button>
+        {todaySelfRecord && (
+          <div className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 px-3 py-1.5 rounded-lg">
+            <ShieldCheck className="w-4 h-4" />
+            Checked in today at {todaySelfRecord.checkInTime || '—'}
+            {typeof todaySelfRecord.distanceMeters === 'number' ? ` · ${todaySelfRecord.distanceMeters}m from campus` : ''}
           </div>
         )}
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard label="Present" value={summary.present} tone="teal" />
-        <StatCard label="Absent" value={summary.absent} tone={summary.absent > 0 ? 'red' : 'default'} />
-        <StatCard label="Late" value={summary.late} tone={summary.late > 0 ? 'amber' : 'default'} />
-        <StatCard label="Excused" value={summary.excused} />
-      </div>
+      {activeTab === 'self' ? (
+        <div className="space-y-5">
+          {!hasCampusCoords && (
+            <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div className="text-xs text-amber-900 dark:text-amber-200 space-y-1">
+                <p className="font-bold">Campus GPS Coordinates Not Configured</p>
+                <p>
+                  Your Principal needs to pin the school&apos;s GPS coordinates in <strong>School Settings</strong> before teachers can verify location-based check-in within {allowedRadiusMeters}m.
+                </p>
+              </div>
+            </div>
+          )}
 
-      {entries.length === 0 ? (
-        <EmptyState
-          title="No Active Students in Selected Class"
-          description="Select an assigned class with active enrolled students to mark daily attendance."
-        />
-      ) : (
-        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="divide-y divide-slate-100">
-            {entries.map((entry, idx) => (
-              <div key={entry.studentId} className="px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+          {todaySelfRecord && (
+            <div className="bg-emerald-50/70 dark:bg-emerald-950/25 border border-emerald-200 dark:border-emerald-900/50 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                {todaySelfRecord.photoDataUrl ? (
+                  <button
+                    type="button"
+                    onClick={() => setPreviewPhotoRecord(todaySelfRecord)}
+                    className="w-16 h-16 rounded-xl overflow-hidden border-2 border-emerald-400 shrink-0 cursor-pointer"
+                  >
+                    <img
+                      src={todaySelfRecord.photoDataUrl}
+                      alt="Check-in verification"
+                      className="w-full h-full object-cover"
+                    />
+                  </button>
+                ) : (
+                  <div className="w-14 h-14 rounded-xl bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="w-7 h-7" />
+                  </div>
+                )}
                 <div>
-                  <p className="text-sm font-semibold text-slate-900">{entry.studentName}</p>
-                  <p className="text-xs text-slate-500 font-mono">Roll #{entry.rollNumber}</p>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {(['present', 'absent', 'late', 'excused'] as const).map((st) => (
-                    <button
-                      key={st}
-                      type="button"
-                      disabled={!canWrite}
-                      onClick={() => {
-                        const next = [...entries];
-                        next[idx] = { ...entry, status: st };
-                        setEntries(next);
-                      }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize border transition-colors cursor-pointer ${
-                        entry.status === st
-                          ? st === 'present'
-                            ? 'bg-emerald-600 text-white border-emerald-600'
-                            : st === 'absent'
-                              ? 'bg-red-600 text-white border-red-600'
-                              : st === 'late'
-                                ? 'bg-amber-600 text-white border-amber-600'
-                                : 'bg-blue-600 text-white border-blue-600'
-                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                      }`}
-                    >
-                      {st}
-                    </button>
-                  ))}
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">Today&apos;s Attendance Recorded ({todayStr})</h3>
+                    <StatusText status={todaySelfRecord.status} />
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 tabular-nums">
+                    Check-in: <strong>{todaySelfRecord.checkInTime || '—'}</strong>
+                    {typeof todaySelfRecord.distanceMeters === 'number'
+                      ? ` · Verified ${todaySelfRecord.distanceMeters}m from school campus`
+                      : ''}
+                    {' · '}Marked by {todaySelfRecord.markedBy === 'principal' ? `Principal (${todaySelfRecord.markedByName})` : 'Self Check-In'}
+                  </p>
                 </div>
               </div>
-            ))}
+            </div>
+          )}
+
+          {/* Check-In Steps Grid */}
+          <div className="grid lg:grid-cols-2 gap-5">
+            {/* Step 1: GPS Geofence Verification */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-teal-700 dark:text-teal-400">Step 1 · Geofence Check</p>
+                  <h3 className="text-base font-bold font-display text-slate-900 dark:text-slate-100 mt-0.5">
+                    Verify School Campus Range ({allowedRadiusMeters}m)
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Confirm you are physically within {allowedRadiusMeters} metres of {school?.name || 'your school campus'}.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  disabled={locating || !hasCampusCoords}
+                  onClick={handleVerifyLocation}
+                >
+                  {locating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Navigation className="w-3.5 h-3.5" />}
+                  {locating ? 'Locating…' : coords ? 'Re-Verify GPS' : 'Verify My Location'}
+                </Button>
+              </div>
+
+              {gpsError && (
+                <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{gpsError}</span>
+                </div>
+              )}
+
+              {coords && distanceMeters !== null && (
+                <div
+                  className={`p-4 rounded-xl border ${
+                    withinRange
+                      ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/60'
+                      : 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900/60'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={`text-sm font-bold tabular-nums ${
+                        withinRange ? 'text-emerald-800 dark:text-emerald-300' : 'text-red-800 dark:text-red-300'
+                      }`}
+                    >
+                      {distanceMeters}m from school campus
+                    </span>
+                    <span
+                      className={`text-xs font-semibold ${
+                        withinRange ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'
+                      }`}
+                    >
+                      {withinRange ? `Within ${allowedRadiusMeters}m limit` : `Outside ${allowedRadiusMeters}m limit`}
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-mono text-slate-600 dark:text-slate-400 mt-1.5 tabular-nums">
+                    GPS: {coords.lat.toFixed(6)}, {coords.lng.toFixed(6)} (±{coords.accuracy}m accuracy)
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Step 2: Live Photo Capture */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-teal-700 dark:text-teal-400">Step 2 · Live Photo Proof</p>
+                  <h3 className="text-base font-bold font-display text-slate-900 dark:text-slate-100 mt-0.5">
+                    Capture Verification Photo
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Take a live selfie on campus to attach to your daily staff attendance record.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {!cameraActive && (
+                    <Button type="button" variant="secondary" size="sm" onClick={handleStartCamera}>
+                      <Camera className="w-3.5 h-3.5" />
+                      Open Camera
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {cameraError && (
+                <div className="p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-xs text-amber-800 dark:text-amber-300">
+                  {cameraError}
+                </div>
+              )}
+
+              {cameraActive && (
+                <div className="space-y-2.5">
+                  <div className="relative rounded-xl overflow-hidden bg-slate-950 border border-slate-300 dark:border-slate-700 aspect-[4/3]">
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="flex items-center justify-end gap-2">
+                    <Button type="button" variant="ghost" size="sm" onClick={stopCamera}>
+                      Cancel Camera
+                    </Button>
+                    <Button type="button" variant="primary" size="sm" onClick={handleCapturePhoto}>
+                      <Camera className="w-3.5 h-3.5" />
+                      Capture Photo
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {!cameraActive && photoDataUrl && (
+                <div className="flex items-center gap-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+                  <img
+                    src={photoDataUrl}
+                    alt="Captured teacher selfie"
+                    className="w-24 h-24 rounded-lg object-cover border border-slate-300 dark:border-slate-600"
+                  />
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Verification photo ready
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="secondary" size="sm" onClick={handleStartCamera}>
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Retake with Camera
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setPhotoDataUrl('')}>
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {!cameraActive && (
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-teal-700 dark:text-teal-400 hover:underline cursor-pointer">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Or take/upload photo from device camera</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="user"
+                    onChange={handleFallbackPhotoFile}
+                    className="hidden"
+                  />
+                </label>
+              )}
+            </div>
           </div>
+
+          {/* Step 3: Submit Self Attendance */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-wrap items-end justify-between gap-4">
+            <div className="flex-1 min-w-[240px]">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Optional Note (e.g. Morning duty, Bus escort)
+              </label>
+              <input
+                type="text"
+                value={selfNote}
+                onChange={(e) => setSelfNote(e.target.value)}
+                placeholder="Optional check-in remark"
+                maxLength={250}
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="primary"
+              loading={submittingSelf}
+              disabled={!canWrite || !withinRange || !photoDataUrl}
+              onClick={handleSubmitSelfAttendance}
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              {todaySelfRecord ? 'Update Today’s Attendance' : 'Mark My Attendance'}
+            </Button>
+          </div>
+
+          {/* Teacher Attendance History */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/70">
+              <h3 className="text-sm font-bold font-display text-slate-900 dark:text-slate-100">
+                My Recent Attendance Log ({myRecords.length})
+              </h3>
+            </div>
+            {myRecords.length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-500 dark:text-slate-400">
+                No daily check-in records yet. Verify your GPS location and photo above to mark today&apos;s attendance.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
+                    <tr>
+                      <th className="py-2.5 px-4 font-semibold">Date</th>
+                      <th className="py-2.5 px-4 font-semibold">Status</th>
+                      <th className="py-2.5 px-4 font-semibold">Check-In Time</th>
+                      <th className="py-2.5 px-4 font-semibold">Campus Distance</th>
+                      <th className="py-2.5 px-4 font-semibold">Recorded By</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">Photo</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {myRecords.slice(0, 30).map((rec) => (
+                      <tr key={rec.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                        <td className="py-2.5 px-4 font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100">{rec.date}</td>
+                        <td className="py-2.5 px-4"><StatusText status={rec.status} /></td>
+                        <td className="py-2.5 px-4 font-mono tabular-nums text-slate-700 dark:text-slate-300">{rec.checkInTime || '—'}</td>
+                        <td className="py-2.5 px-4 font-mono tabular-nums text-slate-600 dark:text-slate-400">
+                          {typeof rec.distanceMeters === 'number' ? `${rec.distanceMeters}m` : 'Manual'}
+                        </td>
+                        <td className="py-2.5 px-4 text-slate-600 dark:text-slate-400">
+                          {rec.markedBy === 'principal' ? `Principal (${rec.markedByName})` : 'Self (GPS + Photo)'}
+                        </td>
+                        <td className="py-2.5 px-4 text-right">
+                          {rec.photoDataUrl ? (
+                            <button
+                              type="button"
+                              onClick={() => setPreviewPhotoRecord(rec)}
+                              className="inline-flex items-center gap-1 text-teal-700 dark:text-teal-400 font-semibold hover:underline cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" /> View
+                            </button>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <Modal
+            open={Boolean(previewPhotoRecord)}
+            onClose={() => setPreviewPhotoRecord(null)}
+            title={previewPhotoRecord ? `Verification Photo · ${previewPhotoRecord.date}` : 'Verification Photo'}
+            subtitle={
+              previewPhotoRecord
+                ? `Check-in ${previewPhotoRecord.checkInTime || '—'}${typeof previewPhotoRecord.distanceMeters === 'number' ? ` · ${previewPhotoRecord.distanceMeters}m from campus` : ''}`
+                : undefined
+            }
+          >
+            {previewPhotoRecord?.photoDataUrl && (
+              <img
+                src={previewPhotoRecord.photoDataUrl}
+                alt="Attendance verification"
+                className="w-full max-h-[65vh] object-contain rounded-xl border border-slate-200 dark:border-slate-700"
+              />
+            )}
+          </Modal>
+        </div>
+      ) : (
+        <div className="space-y-5">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-wrap items-end justify-between gap-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Assigned Class</label>
+                <select
+                  value={activeClassId}
+                  onChange={(e) => setSelectedClassId(e.target.value)}
+                  className="text-sm border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                >
+                  {data.classes.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Attendance Date</label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="text-sm border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                />
+              </div>
+              {existingRecord && (
+                <div className="pb-2 text-xs text-slate-500 dark:text-slate-400">
+                  Existing register loaded · <StatusText status={existingRecord.status} />
+                </div>
+              )}
+            </div>
+
+            {canWrite && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={() => markAll('present')}>
+                  Mark All Present
+                </Button>
+                <Button variant="secondary" size="sm" disabled={saving || entries.length === 0} onClick={() => handleSave('draft')}>
+                  <Save className="w-4 h-4" />
+                  Save Draft
+                </Button>
+                <Button variant="primary" size="sm" disabled={saving || entries.length === 0} onClick={() => handleSave('submitted')}>
+                  <CheckCircle2 className="w-4 h-4" />
+                  {existingRecord ? 'Update Submission' : 'Submit Attendance'}
+                </Button>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <StatCard label="Present" value={summary.present} tone="teal" />
+            <StatCard label="Absent" value={summary.absent} tone={summary.absent > 0 ? 'red' : 'default'} />
+            <StatCard label="Late" value={summary.late} tone={summary.late > 0 ? 'amber' : 'default'} />
+            <StatCard label="Excused" value={summary.excused} />
+          </div>
+
+          {entries.length === 0 ? (
+            <EmptyState
+              title="No Active Students in Selected Class"
+              description="Select an assigned class with active enrolled students to mark daily attendance."
+            />
+          ) : (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                {entries.map((entry, idx) => (
+                  <div key={entry.studentId} className="px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{entry.studentName}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">Roll #{entry.rollNumber}</p>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {(['present', 'absent', 'late', 'excused'] as const).map((st) => (
+                        <button
+                          key={st}
+                          type="button"
+                          disabled={!canWrite}
+                          onClick={() => {
+                            const next = [...entries];
+                            next[idx] = { ...entry, status: st };
+                            setEntries(next);
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize border transition-colors cursor-pointer ${
+                            entry.status === st
+                              ? st === 'present'
+                                ? 'bg-emerald-600 text-white border-emerald-600'
+                                : st === 'absent'
+                                  ? 'bg-red-600 text-white border-red-600'
+                                  : st === 'late'
+                                    ? 'bg-amber-600 text-white border-amber-600'
+                                    : 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {st}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

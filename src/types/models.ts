@@ -34,6 +34,14 @@ export interface PlatformUser {
   updatedAt?: unknown;
 }
 
+export interface PeriodTimingSlot {
+  periodNumber: number;
+  label: string;
+  startTime: string;
+  endTime: string;
+  isBreak?: boolean;
+}
+
 export interface School {
   id: string;
   name: string;
@@ -62,6 +70,11 @@ export interface School {
     attendanceEditWindowHours?: number;
     gradingScale?: string;
     workingDays?: DayOfWeek[];
+    periodsPerDay?: number;
+    periodSchedule?: PeriodTimingSlot[];
+    campusLatitude?: number;
+    campusLongitude?: number;
+    attendanceGeofenceMeters?: number;
   };
   source?: 'public_application' | 'admin_manual' | 'demo_seed';
   schoolType?: string;
@@ -288,6 +301,29 @@ export interface AttendanceRecord {
   entries: AttendanceEntry[];
   editHistory?: { editedBy: string; editedAt: string; note: string }[];
   createdBy: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface TeacherAttendanceRecord {
+  id: string;
+  schoolId: string;
+  teacherId: string;
+  teacherUid?: string;
+  teacherName: string;
+  staffId?: string;
+  date: string;
+  status: 'present' | 'late' | 'half_day' | 'absent' | 'on_leave';
+  checkInTime?: string;
+  latitude?: number;
+  longitude?: number;
+  distanceMeters?: number;
+  withinRange?: boolean;
+  photoDataUrl?: string;
+  markedBy: 'teacher' | 'principal';
+  markedByUid: string;
+  markedByName: string;
+  notes?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }

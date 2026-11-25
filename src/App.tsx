@@ -9,6 +9,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './components/ui/Primitives';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import { getSchoolAccessMode, ROLE_LABELS } from './lib/permissions';
 import LandingPage from './pages/LandingPage';
 import SchoolRegistrationPage from './pages/SchoolRegistrationPage';
@@ -35,9 +36,9 @@ import type { UserRole } from './types/models';
 
 function FullScreenLoader() {
   return (
-    <div className="min-h-[100dvh] bg-slate-50 flex flex-col items-center justify-center p-6">
-      <div className="w-9 h-9 rounded-lg border-2 border-slate-200 border-t-[#2563EB] animate-spin" />
-      <p className="text-xs font-medium text-slate-500 mt-4">Loading SJ Academia One workspace…</p>
+    <div className="min-h-[100dvh] bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-6">
+      <div className="w-9 h-9 rounded-lg border-2 border-slate-200 dark:border-slate-700 border-t-[#2563EB] animate-spin" />
+      <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mt-4">Loading SJ Academia One workspace…</p>
     </div>
   );
 }
@@ -123,26 +124,27 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      {mapsQuotaExceeded && (
-        <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
-          <span>
-            Google Maps Platform quota reached. If you are the app owner, visit{' '}
-            <a
-              href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline font-semibold text-amber-950 hover:text-amber-800"
-            >
-              maps developer site
-            </a>{' '}
-            for instructions to update your account.
-          </span>
-        </div>
-      )}
-      <BrowserRouter>
-        <ToastProvider>
-          <AuthProvider>
-            <NotificationProvider>
+      <ThemeProvider>
+        {mapsQuotaExceeded && (
+          <div className="bg-amber-50 dark:bg-amber-950/60 border-b border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
+            <span>
+              Google Maps Platform quota reached. If you are the app owner, visit{' '}
+              <a
+                href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline font-semibold text-amber-950 dark:text-amber-100 hover:text-amber-800"
+              >
+                maps developer site
+              </a>{' '}
+              for instructions to update your account.
+            </span>
+          </div>
+        )}
+        <BrowserRouter>
+          <ToastProvider>
+            <AuthProvider>
+              <NotificationProvider>
               <Routes>
                 {/* Public Website, School Registration & Application Status Routes */}
                 <Route path="/" element={<LandingPage />} />
@@ -216,10 +218,11 @@ export default function App() {
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
               <OfflineIndicator />
-            </NotificationProvider>
-          </AuthProvider>
-        </ToastProvider>
-      </BrowserRouter>
+              </NotificationProvider>
+            </AuthProvider>
+          </ToastProvider>
+        </BrowserRouter>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }

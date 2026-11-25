@@ -24,6 +24,8 @@ import {
   RefreshCw,
   AlertTriangle,
   Lock,
+  ClipboardCheck,
+  Trash2,
 } from 'lucide-react';
 import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
@@ -43,6 +45,7 @@ import { useSchoolData } from '../../hooks/useSchoolData';
 import { DashboardShell, type NavItem } from '../../components/DashboardShell';
 import {
   Button,
+  ConfirmDialog,
   EmptyState,
   Modal,
   SkeletonTable,
@@ -52,7 +55,12 @@ import {
 } from '../../components/ui/Primitives';
 import { NotificationsAndPreferencesView } from '../../components/shared/NotificationsAndPreferencesView';
 import { ProfileSecurityView } from '../../components/shared/ProfileSecurityView';
-import { upsertEmailDirectoryEntry, upsertMemberAccessCode } from '../../lib/schoolProvisioning';
+import {
+  permanentlyDeleteCoordinator,
+  permanentlyDeleteTeacher,
+  upsertEmailDirectoryEntry,
+  upsertMemberAccessCode,
+} from '../../lib/schoolProvisioning';
 import {
   deriveSchoolPrefix,
   formatGradeSummaryCompact,
@@ -84,6 +92,7 @@ import {
   PrincipalReportsView,
   PrincipalSchoolSettingsView,
 } from './PrincipalAcademicsOps';
+import { PrincipalTeacherAttendanceView } from './PrincipalTeacherAttendanceView';
 import { ExcelImportModal } from '../../components/principal/ExcelImportModal';
 import type { ExcelImportKind } from '../../lib/excelImport';
 import type { CoordinatorPermissions, PlatformUser, School, Subject, TeacherProfile } from '../../types/models';
@@ -95,6 +104,7 @@ const PRINCIPAL_NAV: NavItem[] = [
   { id: 'join-requests', label: 'Join Requests', path: '/principal/join-requests', icon: UserPlus },
   { id: 'coordinators', label: 'Coordinators', path: '/principal/coordinators', icon: UserCog },
   { id: 'teachers', label: 'Teachers', path: '/principal/teachers', icon: Users },
+  { id: 'teacher-attendance', label: 'Staff Attendance', path: '/principal/teacher-attendance', icon: ClipboardCheck },
   { id: 'students', label: 'Students', path: '/principal/students', icon: GraduationCap },
   { id: 'classes', label: 'Classes & Subjects', path: '/principal/classes', icon: BookOpen },
   { id: 'rooms', label: 'Rooms', path: '/principal/rooms', icon: DoorOpen },
@@ -279,6 +289,19 @@ export default function PrincipalPortal() {
           }
         />
         <Route
+          path="teacher-attendance"
+          element={
+            <PrincipalTeacherAttendanceView
+              school={activeSchool}
+              teachers={data.teachers}
+              teacherAttendance={data.teacherAttendance}
+              actor={activeUser}
+              canWrite={access.canWrite}
+              globalSearch={globalSearch}
+            />
+          }
+        />
+        <Route
           path="students"
           element={
             <PrincipalStudentsView
@@ -334,6 +357,7 @@ export default function PrincipalPortal() {
           path="timetable"
           element={
             <PrincipalTimetableView
+              school={activeSchool}
               timetable={data.timetable}
               classes={data.classes}
               subjects={data.subjects}
@@ -601,6 +625,8 @@ function PrincipalCoordinatorsView({
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<PlatformUser | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<PlatformUser | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [form, setForm] = useState({
     displayName: '',
     username: '',
@@ -789,10 +815,10 @@ function PrincipalCoordinatorsView({
           onAction={openNew}
         />
       ) : (
-        <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
           <table className="w-full text-left border-collapse text-sm">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
+              <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/70 text-xs text-slate-500 dark:text-slate-400">
                 <th className="py-3 px-4 font-semibold">Coordinator</th>
                 <th className="py-3 px-4 font-semibold">Assigned Classes</th>
                 <th className="py-3 px-4 font-semibold">Granted Permissions</th>
@@ -800,7 +826,7 @@ function PrincipalCoordinatorsView({
                 <th className="py-3 px-4 font-semibold text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {coordinators.map((c) => {
                 const assignedCls = classes.filter((cl) => (c.assignedClassIds || []).includes(cl.id));
                 const classSummary = formatGradeSummaryCompact(assignedCls, classes);
@@ -808,20 +834,20 @@ function PrincipalCoordinatorsView({
                   .filter(([, v]) => Boolean(v))
                   .map(([k]) => k.replace(/^can/, ''));
                 return (
-                  <tr key={c.uid} className="hover:bg-slate-50/70">
+                  <tr key={c.uid} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/50">
                     <td className="py-3 px-4">
-                      <p className="font-semibold text-slate-900">
+                      <p className="font-semibold text-slate-900 dark:text-slate-100">
                         {c.displayName}{' '}
                         {c.accessCode && (
-                          <span className="ml-1.5 font-mono text-[11px] font-bold text-teal-700 bg-teal-50 border border-teal-200 px-1.5 py-0.5 rounded">
+                          <span className="ml-1.5 font-mono text-[11px] font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-800 px-1.5 py-0.5 rounded">
                             {c.accessCode}
                           </span>
                         )}
                       </p>
-                      <p className="text-xs text-slate-500">{c.email} · @{c.username}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">{c.email} · @{c.username}</p>
                     </td>
-                    <td className="py-3 px-4 text-xs font-medium text-slate-700 max-w-xs">{classSummary}</td>
-                    <td className="py-3 px-4 text-xs text-slate-600">{granted.join(' · ') || 'Read-Only'}</td>
+                    <td className="py-3 px-4 text-xs font-medium text-slate-700 dark:text-slate-300 max-w-xs">{classSummary}</td>
+                    <td className="py-3 px-4 text-xs text-slate-600 dark:text-slate-400">{granted.join(' · ') || 'Read-Only'}</td>
                     <td className="py-3 px-4"><StatusText status={c.status} /></td>
                     <td className="py-3 px-4 text-right">
                       <div className="inline-flex items-center gap-1.5">
@@ -840,6 +866,16 @@ function PrincipalCoordinatorsView({
                         >
                           {c.status === 'active' ? 'Deactivate' : 'Reactivate'}
                         </Button>
+                        <button
+                          type="button"
+                          disabled={!canWrite}
+                          onClick={() => setDeleteTarget(c)}
+                          title="Remove coordinator permanently"
+                          aria-label={`Remove coordinator ${c.displayName}`}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-40 cursor-pointer transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -849,6 +885,40 @@ function PrincipalCoordinatorsView({
           </table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onClose={() => !deleting && setDeleteTarget(null)}
+        title="Remove Coordinator Permanently?"
+        description={
+          deleteTarget
+            ? `This will permanently delete ${deleteTarget.displayName} (${deleteTarget.email}) from your school, revoke their coordinator access code, and remove their portal access.`
+            : ''
+        }
+        confirmLabel="Remove Coordinator"
+        danger
+        busy={deleting}
+        onConfirm={async () => {
+          if (!deleteTarget || !canWrite) return;
+          setDeleting(true);
+          try {
+            await permanentlyDeleteCoordinator({
+              coordinator: deleteTarget,
+              schoolId,
+              totalCoordinatorsCount: coordinators.length,
+              actorUid: actor.uid,
+              actorName: actor.displayName,
+              actorRole: actor.role === 'main_head' ? 'main_head' : 'principal',
+            });
+            pushToast('success', `Coordinator ${deleteTarget.displayName} permanently removed.`);
+            setDeleteTarget(null);
+          } catch (err) {
+            pushToast('error', err instanceof Error ? err.message : 'Unable to remove coordinator.');
+          } finally {
+            setDeleting(false);
+          }
+        }}
+      />
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? `Configure ${editing.displayName}` : 'Add Academic Coordinator'}>
         <form onSubmit={handleSave} className="space-y-4">
@@ -952,6 +1022,8 @@ function PrincipalTeachersView({
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<TeacherProfile | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<TeacherProfile | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [selectedSubjectIds, setSelectedSubjectIds] = useState<string[]>([]);
   const [form, setForm] = useState({
     staffId: '',
@@ -1266,10 +1338,10 @@ function PrincipalTeachersView({
       {filtered.length === 0 ? (
         <EmptyState title="No teachers found" description="Add faculty profiles to assign classes, subjects, and timetables." actionLabel="Add Teacher" onAction={openNew} />
       ) : (
-        <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
           <table className="w-full text-left border-collapse text-sm">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-500">
+              <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/70 text-xs text-slate-500 dark:text-slate-400">
                 <th className="py-3 px-4 font-semibold">Staff ID &amp; Name</th>
                 <th className="py-3 px-4 font-semibold">Subjects</th>
                 <th className="py-3 px-4 font-semibold">Assigned Classes</th>
@@ -1278,7 +1350,7 @@ function PrincipalTeachersView({
                 <th className="py-3 px-4 font-semibold text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {filtered.map((t) => {
                 const teacherSubjects = subjects.filter((s) => s.teacherId === t.id);
                 const subjectSummary = Array.from(
@@ -1290,13 +1362,13 @@ function PrincipalTeachersView({
                   ...(t.classTeacherOfClassId ? [t.classTeacherOfClassId] : []),
                 ]);
                 return (
-                  <tr key={t.id} className="hover:bg-slate-50/70">
+                  <tr key={t.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/50">
                     <td className="py-3 px-4">
-                      <p className="font-semibold text-slate-900">{t.name}</p>
-                      <p className="text-xs text-slate-500 font-mono">{t.staffId} · {t.email}</p>
+                      <p className="font-semibold text-slate-900 dark:text-slate-100">{t.name}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">{t.staffId} · {t.email}</p>
                     </td>
-                    <td className="py-3 px-4 text-xs text-slate-700">{subjectSummary.join(', ') || '—'}</td>
-                    <td className="py-3 px-4 text-xs text-slate-700 max-w-xs">
+                    <td className="py-3 px-4 text-xs text-slate-700 dark:text-slate-300">{subjectSummary.join(', ') || '—'}</td>
+                    <td className="py-3 px-4 text-xs text-slate-700 dark:text-slate-300 max-w-xs">
                       <p className="font-medium">
                         {formatGradeSummaryCompact(
                           classes.filter((c) => assignedIds.has(c.id)),
@@ -1304,12 +1376,12 @@ function PrincipalTeachersView({
                         )}
                       </p>
                       {t.classTeacherOfClassId && (
-                        <p className="text-[11px] text-teal-700 mt-0.5">
+                        <p className="text-[11px] text-teal-700 dark:text-teal-400 mt-0.5">
                           Class Teacher: {classes.find((c) => c.id === t.classTeacherOfClassId)?.name || t.classTeacherOfClassId}
                         </p>
                       )}
                     </td>
-                    <td className="py-3 px-4 text-xs text-slate-500 tabular-nums">{t.joiningDate || '—'}</td>
+                    <td className="py-3 px-4 text-xs text-slate-500 dark:text-slate-400 tabular-nums">{t.joiningDate || '—'}</td>
                     <td className="py-3 px-4"><StatusText status={t.status} /></td>
                     <td className="py-3 px-4 text-right">
                       <div className="inline-flex items-center gap-1.5">
@@ -1317,6 +1389,7 @@ function PrincipalTeachersView({
                         <Button
                           variant="ghost"
                           size="sm"
+                          title="Send password reset email"
                           onClick={async () => {
                             await sendPasswordResetEmail(auth, t.email).catch(() => undefined);
                             pushToast('success', `Password reset link sent to ${t.email}.`);
@@ -1324,6 +1397,16 @@ function PrincipalTeachersView({
                         >
                           <KeyRound className="w-3.5 h-3.5" />
                         </Button>
+                        <button
+                          type="button"
+                          disabled={!canWrite}
+                          onClick={() => setDeleteTarget(t)}
+                          title="Remove teacher permanently"
+                          aria-label={`Remove teacher ${t.name}`}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-40 cursor-pointer transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1333,6 +1416,40 @@ function PrincipalTeachersView({
           </table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onClose={() => !deleting && setDeleteTarget(null)}
+        title="Remove Teacher Permanently?"
+        description={
+          deleteTarget
+            ? `This will permanently delete ${deleteTarget.name} (${deleteTarget.staffId}), revoke their login access code, and unassign them from any classes or subjects they currently hold.`
+            : ''
+        }
+        confirmLabel="Remove Teacher"
+        danger
+        busy={deleting}
+        onConfirm={async () => {
+          if (!deleteTarget || !canWrite) return;
+          setDeleting(true);
+          try {
+            await permanentlyDeleteTeacher({
+              teacher: deleteTarget,
+              schoolId,
+              totalTeachersCount: teachers.length,
+              actorUid: actor.uid,
+              actorName: actor.displayName,
+              actorRole: actor.role === 'main_head' ? 'main_head' : 'principal',
+            });
+            pushToast('success', `Teacher ${deleteTarget.name} permanently removed.`);
+            setDeleteTarget(null);
+          } catch (err) {
+            pushToast('error', err instanceof Error ? err.message : 'Unable to remove teacher.');
+          } finally {
+            setDeleting(false);
+          }
+        }}
+      />
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? `Edit ${editing.name}` : 'Add Teacher Profile'} maxWidth="max-w-2xl">
         <form onSubmit={handleSave} className="space-y-4">
