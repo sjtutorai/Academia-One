@@ -4,38 +4,80 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>SJ Academia One — Multi-School Management System</title>
+    <meta name="application-name" content="SJ Academia One" />
     <meta name="theme-color" content="#0F295C" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="SJ Academia One" />
     <meta name="format-detection" content="telephone=no" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://sjacademiaone.vercel.app/" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="icon" type="image/png" href="/logo.png?v=2" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png" />
+    <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png" />
+    <link rel="icon" type="image/png" sizes="144x144" href="/favicon-144x144.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <meta name="description" content="SJ Academia One is a free multi-tenant school management platform connecting administrators, coordinators, teachers, and students through unified role-based portals." />
     <meta property="og:site_name" content="SJ Academia One" />
+    <meta property="og:url" content="https://sjacademiaone.vercel.app/" />
     <meta property="og:title" content="SJ Academia One — Multi-School Management System" />
     <meta property="og:description" content="One free platform for independent schools with strict tenant isolation, timetables, examinations, attendance, homework, and real-time notifications." />
-    <meta property="og:image" content="/pwa-512x512.png" />
+    <meta property="og:image" content="https://sjacademiaone.vercel.app/pwa-512x512.png" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:image:alt" content="SJ Academia One Logo" />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="SJ Academia One — Multi-School Management System" />
     <meta name="twitter:description" content="Manage schools, timetables, exams, attendance, homework, and student portals on SJ Academia One." />
+    <meta name="twitter:image" content="https://sjacademiaone.vercel.app/pwa-512x512.png" />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "WebApplication",
-        "name": "SJ Academia One",
-        "url": "https://sjacademiaone.vercel.app/",
-        "applicationCategory": "EducationalApplication",
-        "operatingSystem": "All",
-        "description": "Free multi-tenant school management platform connecting administrators, coordinators, teachers, and students through unified role-based portals.",
-        "offers": {
-          "@type": "Offer",
-          "price": "0",
-          "priceCurrency": "USD"
-        }
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://sjacademiaone.vercel.app/#website",
+            "url": "https://sjacademiaone.vercel.app/",
+            "name": "SJ Academia One",
+            "alternateName": ["SJ Academia", "SJ Academia One Portal"],
+            "description": "Free multi-tenant school management platform connecting principals, coordinators, teachers, and students.",
+            "publisher": {
+              "@id": "https://sjacademiaone.vercel.app/#organization"
+            }
+          },
+          {
+            "@type": "Organization",
+            "@id": "https://sjacademiaone.vercel.app/#organization",
+            "name": "SJ Academia One",
+            "url": "https://sjacademiaone.vercel.app/",
+            "logo": {
+              "@type": "ImageObject",
+              "url": "https://sjacademiaone.vercel.app/pwa-512x512.png",
+              "width": 512,
+              "height": 512
+            }
+          },
+          {
+            "@type": "WebApplication",
+            "@id": "https://sjacademiaone.vercel.app/#webapp",
+            "name": "SJ Academia One",
+            "url": "https://sjacademiaone.vercel.app/",
+            "image": "https://sjacademiaone.vercel.app/pwa-512x512.png",
+            "applicationCategory": "EducationalApplication",
+            "operatingSystem": "All",
+            "description": "Free multi-tenant school management platform connecting administrators, coordinators, teachers, and students through unified role-based portals.",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            }
+          }
+        ]
       }
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
