@@ -15,6 +15,10 @@ import {
   Pencil,
   Upload,
   Loader2,
+  Coffee,
+  Sparkles,
+  Image as ImageIcon,
+  Lock,
 } from 'lucide-react';
 import { db, generateId, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { detectExamConflicts, detectTimetableConflicts } from '../../lib/permissions';
@@ -23,7 +27,15 @@ import { recordAuditLog } from '../../lib/audit';
 import { sanitizePhoneDigits, sortClassesInOrder } from '../../lib/schoolCodes';
 import {
   buildDefaultPeriodSchedule,
+  chainPeriodScheduleTimings,
   DEFAULT_ATTENDANCE_GEOFENCE_METERS,
+  DEFAULT_TEACHER_ATTENDANCE_END,
+  DEFAULT_TEACHER_ATTENDANCE_START,
+  formatHHMMTo12Hour,
+  insertBreakAfterIndex,
+  normalizePeriodSchedule,
+  parseHHMMToMinutes,
+  removeBreakAtIndex,
 } from '../../lib/geoAttendance';
 import {
   downloadTimetableExcelTemplate,
@@ -93,12 +105,50 @@ export function PrincipalTimetableView({
   const [replaceExisting, setReplaceExisting] = useState(true);
   const [importError, setImportError] = useState('');
 
+  // AI Timetable Generator modal state
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiScope, setAiScope] = useState<'selected' | 'all'>('selected');
+  const [aiPreferences, setAiPreferences] = useState('');
+  const [aiIncludeBreaks, setAiIncludeBreaks] = useState(true);
+  const [aiReplaceExisting, setAiReplaceExisting] = useState(true);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiPublishing, setAiPublishing] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const [aiPreviewClassFilter, setAiPreviewClassFilter] = useState('all');
+  const [aiResult, setAiResult] = useState<{
+    summary: string;
+    periods: Array<{
+      classId: string;
+      className: string;
+      dayOfWeek: DayOfWeek;
+      periodNumber: number;
+      startTime: string;
+      endTime: string;
+      isBreak: boolean;
+      subjectId: string;
+      subjectName: string;
+      teacherId: string;
+      teacherName: string;
+      roomId: string;
+      roomName: string;
+    }>;
+  } | null>(null);
+
   const periodSchedule = useMemo<PeriodTimingSlot[]>(() => {
     if (school?.settings?.periodSchedule && school.settings.periodSchedule.length > 0) {
-      return school.settings.periodSchedule;
+      return normalizePeriodSchedule(school.settings.periodSchedule);
     }
     return buildDefaultPeriodSchedule(school?.settings?.periodsPerDay || 8);
   }, [school?.settings?.periodSchedule, school?.settings?.periodsPerDay]);
+
+  const teachingPeriodCount = useMemo(
+    () => periodSchedule.filter((s) => !s.isBreak).length,
+    [periodSchedule],
+  );
+  const breakSlotCount = useMemo(
+    () => periodSchedule.filter((s) => s.isBreak).length,
+    [periodSchedule],
+  );
 
   const workingDays = useMemo<DayOfWeek[]>(() => {
     const configured = school?.settings?.workingDays;
@@ -111,7 +161,9 @@ export function PrincipalTimetableView({
   const [form, setForm] = useState({
     classId: sortedClasses[0]?.id || '',
     dayOfWeek: 'Monday' as DayOfWeek,
+    slotKey: '0',
     periodNumber: '1',
+    breakLabel: 'Short Break / Recess',
     startTime: periodSchedule[0]?.startTime || '08:30',
     endTime: periodSchedule[0]?.endTime || '09:15',
     isBreak: Boolean(periodSchedule[0]?.isBreak),
@@ -126,7 +178,7 @@ export function PrincipalTimetableView({
   const visiblePeriods = useMemo(() => {
     return timetable
       .filter((p) => (viewBy === 'class' ? p.classId === activeClassId : p.teacherId === activeTeacherId))
-      .sort((a, b) => a.periodNumber - b.periodNumber || a.startTime.localeCompare(b.startTime));
+      .sort((a, b) => a.startTime.localeCompare(b.startTime) || a.periodNumber - b.periodNumber);
   }, [timetable, viewBy, activeClassId, activeTeacherId]);
 
   const liveConflicts = useMemo(() => {
@@ -141,12 +193,12 @@ export function PrincipalTimetableView({
         classId: form.classId,
         className: cls?.name,
         dayOfWeek: form.dayOfWeek,
-        periodNumber: Number(form.periodNumber) || 1,
+        periodNumber: form.isBreak ? 0 : Number(form.periodNumber) || 1,
         startTime: form.startTime,
         endTime: form.endTime,
         isBreak: form.isBreak,
         subjectId: form.isBreak ? '' : subj?.id,
-        subjectName: form.isBreak ? 'Break' : subj?.name,
+        subjectName: form.isBreak ? form.breakLabel || 'Break / Recess' : subj?.name,
         teacherId: form.isBreak ? '' : tch?.id,
         teacherName: form.isBreak ? '' : tch?.name,
         roomId: form.isBreak ? '' : rm?.id,
@@ -157,19 +209,19 @@ export function PrincipalTimetableView({
     );
   }, [form, classes, subjects, teachers, rooms, timetable, schoolId, editingPeriod]);
 
-  const applyTimingForPeriod = (periodNumStr: string) => {
-    const num = Number(periodNumStr);
-    const slot = periodSchedule.find((s) => s.periodNumber === num);
+  const applyTimingForSlotIndex = (slotIdxStr: string) => {
+    const idx = Number(slotIdxStr);
+    const slot = periodSchedule[idx];
     if (slot) {
       setForm((prev) => ({
         ...prev,
-        periodNumber: periodNumStr,
+        slotKey: slotIdxStr,
+        periodNumber: slot.isBreak ? '0' : String(slot.periodNumber),
+        breakLabel: slot.isBreak ? slot.label : prev.breakLabel,
         startTime: slot.startTime,
         endTime: slot.endTime,
         isBreak: Boolean(slot.isBreak),
       }));
-    } else {
-      setForm((prev) => ({ ...prev, periodNumber: periodNumStr }));
     }
   };
 
@@ -183,7 +235,9 @@ export function PrincipalTimetableView({
     setForm({
       classId: activeClassId || sortedClasses[0]?.id || '',
       dayOfWeek: workingDays[0] || 'Monday',
-      periodNumber: String(firstSlot?.periodNumber || 1),
+      slotKey: '0',
+      periodNumber: firstSlot?.isBreak ? '0' : String(firstSlot?.periodNumber || 1),
+      breakLabel: firstSlot?.isBreak ? firstSlot.label : 'Short Break / Recess',
       startTime: firstSlot?.startTime || '08:30',
       endTime: firstSlot?.endTime || '09:15',
       isBreak: Boolean(firstSlot?.isBreak),
@@ -196,10 +250,17 @@ export function PrincipalTimetableView({
 
   const openEditPeriodModal = (p: TimetablePeriod) => {
     setEditingPeriod(p);
+    const matchedIdx = periodSchedule.findIndex((s) =>
+      p.isBreak
+        ? Boolean(s.isBreak) && s.startTime === p.startTime
+        : !s.isBreak && s.periodNumber === p.periodNumber,
+    );
     setForm({
       classId: p.classId,
       dayOfWeek: p.dayOfWeek,
-      periodNumber: String(p.periodNumber),
+      slotKey: matchedIdx >= 0 ? String(matchedIdx) : '0',
+      periodNumber: p.isBreak ? '0' : String(p.periodNumber || 1),
+      breakLabel: p.isBreak ? p.subjectName || 'Break / Recess' : 'Short Break / Recess',
       startTime: p.startTime,
       endTime: p.endTime,
       isBreak: Boolean(p.isBreak),
@@ -221,7 +282,6 @@ export function PrincipalTimetableView({
     const subj = subjects.find((s) => s.id === form.subjectId);
     const tch = teachers.find((t) => t.id === form.teacherId);
     const rm = rooms.find((r) => r.id === form.roomId);
-    const slotMeta = periodSchedule.find((s) => s.periodNumber === (Number(form.periodNumber) || 1));
 
     setSavingSlot(true);
     try {
@@ -229,12 +289,12 @@ export function PrincipalTimetableView({
         classId: form.classId,
         className: cls?.name || '',
         dayOfWeek: form.dayOfWeek,
-        periodNumber: Number(form.periodNumber) || 1,
+        periodNumber: form.isBreak ? 0 : Math.max(1, Number(form.periodNumber) || 1),
         startTime: form.startTime,
         endTime: form.endTime,
         isBreak: form.isBreak,
         subjectId: form.isBreak ? '' : subj?.id || '',
-        subjectName: form.isBreak ? slotMeta?.label || 'Break / Recess' : subj?.name || 'General Study',
+        subjectName: form.isBreak ? (form.breakLabel.trim() || 'Break / Recess').slice(0, 100) : subj?.name || 'General Study',
         teacherId: form.isBreak ? '' : tch?.id || '',
         teacherName: form.isBreak ? '' : tch?.name || '',
         roomId: form.isBreak ? '' : rm?.id || '',
@@ -412,6 +472,248 @@ export function PrincipalTimetableView({
     }
   };
 
+  const aiTargetClasses = useMemo(() => {
+    const active = sortedClasses.filter((c) => c.status !== 'archived');
+    if (aiScope === 'all') return active;
+    const picked = active.find((c) => c.id === activeClassId) || active[0];
+    return picked ? [picked] : [];
+  }, [sortedClasses, aiScope, activeClassId]);
+
+  const handleGenerateAiTimetable = async () => {
+    if (!canWrite || aiGenerating) return;
+    if (aiTargetClasses.length === 0) {
+      setAiError('Create at least one active class before generating an AI timetable.');
+      return;
+    }
+    const activeTeachers = teachers.filter((t) => t.status !== 'inactive');
+    if (subjects.length === 0 && activeTeachers.length === 0) {
+      setAiError('Add subjects and teachers to your school first so the AI can assign periods.');
+      return;
+    }
+
+    setAiGenerating(true);
+    setAiError('');
+    setAiResult(null);
+    setAiPreviewClassFilter('all');
+
+    try {
+      const targetClassIds = new Set(aiTargetClasses.map((c) => c.id));
+      const existingOtherClassPeriods = timetable
+        .filter((p) => !targetClassIds.has(p.classId) && !p.isBreak)
+        .map((p) => ({
+          classId: p.classId,
+          dayOfWeek: p.dayOfWeek,
+          startTime: p.startTime,
+          endTime: p.endTime,
+          teacherId: p.teacherId || '',
+          roomId: p.roomId || '',
+        }));
+
+      const res = await fetch('/api/ai/generate-timetable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          schoolName: school?.name || 'School',
+          workingDays,
+          periodSchedule,
+          targetClasses: aiTargetClasses.map((c) => ({
+            id: c.id,
+            name: c.name,
+            code: c.code,
+            classTeacherId: c.classTeacherId || '',
+            roomId: c.roomId || '',
+            roomName: c.roomName || '',
+          })),
+          subjects: subjects
+            .filter((s) => s.status !== 'archived')
+            .map((s) => ({
+              id: s.id,
+              name: s.name,
+              code: s.code,
+              classId: s.classId,
+              className: s.className || '',
+              teacherId: s.teacherId || '',
+              teacherName: s.teacherName || '',
+            })),
+          teachers: activeTeachers.map((t) => ({
+            id: t.id,
+            name: t.name,
+            staffId: t.staffId,
+            subjects: t.subjects || [],
+            assignedClassIds: t.assignedClassIds || [],
+            status: t.status,
+          })),
+          rooms: rooms
+            .filter((r) => r.status === 'active' && r.available !== false)
+            .map((r) => ({
+              id: r.id,
+              name: r.name,
+              roomNumber: r.roomNumber,
+              roomType: r.roomType,
+              capacity: r.capacity,
+            })),
+          existingOtherClassPeriods,
+          customInstructions: aiPreferences.trim(),
+        }),
+      });
+
+      const body = (await res.json().catch(() => ({}))) as {
+        summary?: string;
+        periods?: Array<{
+          classId: string;
+          className: string;
+          dayOfWeek: DayOfWeek;
+          periodNumber: number;
+          startTime: string;
+          endTime: string;
+          isBreak: boolean;
+          subjectId: string;
+          subjectName: string;
+          teacherId: string;
+          teacherName: string;
+          roomId: string;
+          roomName: string;
+        }>;
+        error?: { status?: string; message?: string };
+      };
+
+      if (!res.ok) {
+        throw new Error(body?.error?.message || `AI timetable service returned status ${res.status}.`);
+      }
+
+      const teachingPeriods = Array.isArray(body.periods) ? body.periods : [];
+      if (teachingPeriods.length === 0) {
+        throw new Error('AI returned no periods. Check that subjects and teachers are configured.');
+      }
+
+      // Optionally append configured Break/Recess slots (periodNumber: 0) per target class & day
+      const combined = [...teachingPeriods];
+      if (aiIncludeBreaks) {
+        const breakSlots = periodSchedule.filter((s) => s.isBreak);
+        for (const cls of aiTargetClasses) {
+          for (const day of workingDays) {
+            for (const brk of breakSlots) {
+              combined.push({
+                classId: cls.id,
+                className: cls.name,
+                dayOfWeek: day,
+                periodNumber: 0,
+                startTime: brk.startTime,
+                endTime: brk.endTime,
+                isBreak: true,
+                subjectId: '',
+                subjectName: (brk.label || 'Break / Recess').slice(0, 100),
+                teacherId: '',
+                teacherName: '',
+                roomId: '',
+                roomName: '',
+              });
+            }
+          }
+        }
+      }
+
+      combined.sort(
+        (a, b) =>
+          a.className.localeCompare(b.className) ||
+          workingDays.indexOf(a.dayOfWeek) - workingDays.indexOf(b.dayOfWeek) ||
+          a.startTime.localeCompare(b.startTime) ||
+          a.periodNumber - b.periodNumber,
+      );
+
+      setAiResult({
+        summary: body.summary || `Generated ${teachingPeriods.length} AI-scheduled teaching periods.`,
+        periods: combined,
+      });
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : 'Unable to generate AI timetable.');
+    } finally {
+      setAiGenerating(false);
+    }
+  };
+
+  const handlePublishAiTimetable = async () => {
+    if (!canWrite || !aiResult || aiPublishing) return;
+    setAiPublishing(true);
+    try {
+      const now = serverTimestamp();
+      const affectedClassIds = new Set(aiResult.periods.map((p) => p.classId));
+
+      if (aiReplaceExisting) {
+        const existingToDelete = timetable.filter((p) => affectedClassIds.has(p.classId));
+        const CHUNK = 350;
+        for (let i = 0; i < existingToDelete.length; i += CHUNK) {
+          const delBatch = writeBatch(db);
+          existingToDelete.slice(i, i + CHUNK).forEach((p) => {
+            delBatch.delete(doc(db, 'timetablePeriods', p.id));
+          });
+          await delBatch.commit();
+        }
+      }
+
+      const CHUNK = 350;
+      for (let i = 0; i < aiResult.periods.length; i += CHUNK) {
+        const batch = writeBatch(db);
+        aiResult.periods.slice(i, i + CHUNK).forEach((row) => {
+          const id = generateId('tt');
+          batch.set(doc(db, 'timetablePeriods', id), {
+            id,
+            schoolId,
+            classId: row.classId,
+            className: row.className.slice(0, 80),
+            dayOfWeek: row.dayOfWeek,
+            periodNumber: row.isBreak ? 0 : Math.max(1, Math.min(12, row.periodNumber)),
+            startTime: row.startTime,
+            endTime: row.endTime,
+            isBreak: Boolean(row.isBreak),
+            subjectId: row.isBreak ? '' : row.subjectId || '',
+            subjectName: (row.isBreak ? row.subjectName || 'Break / Recess' : row.subjectName || 'General Study').slice(0, 100),
+            teacherId: row.isBreak ? '' : row.teacherId || '',
+            teacherName: row.isBreak ? '' : (row.teacherName || '').slice(0, 120),
+            roomId: row.isBreak ? '' : row.roomId || '',
+            roomName: row.isBreak ? '' : (row.roomName || '').slice(0, 80),
+            status: 'published',
+            createdBy: actor.uid,
+            createdAt: now,
+            updatedAt: now,
+          });
+        });
+        await batch.commit();
+      }
+
+      const teachingCount = aiResult.periods.filter((p) => !p.isBreak).length;
+      await recordAuditLog({
+        schoolId,
+        actorUid: actor.uid,
+        actorName: actor.displayName,
+        actorRole: actor.role,
+        action: 'AI_GENERATE_TIMETABLE',
+        targetType: 'timetable',
+        targetId: schoolId,
+        targetLabel: `${teachingCount} AI periods across ${affectedClassIds.size} class(es)`,
+        details: aiResult.summary.slice(0, 480),
+      }).catch(() => undefined);
+
+      pushToast(
+        'success',
+        `Published ${teachingCount} AI-scheduled teaching periods${aiResult.periods.length > teachingCount ? ` and ${aiResult.periods.length - teachingCount} break slots` : ''}.`,
+      );
+      setAiOpen(false);
+      setAiResult(null);
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Unable to publish AI timetable.');
+      handleFirestoreError(err, OperationType.WRITE, 'timetablePeriods');
+    } finally {
+      setAiPublishing(false);
+    }
+  };
+
+  const aiVisiblePreview = useMemo(() => {
+    if (!aiResult) return [];
+    if (aiPreviewClassFilter === 'all') return aiResult.periods;
+    return aiResult.periods.filter((p) => p.classId === aiPreviewClassFilter);
+  }, [aiResult, aiPreviewClassFilter]);
+
   const classSubjectsForForm = useMemo(() => {
     const scoped = subjects.filter((s) => s.classId === form.classId);
     return scoped.length > 0 ? scoped : subjects;
@@ -469,11 +771,25 @@ export function PrincipalTimetableView({
 
           <span className="hidden xl:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
             <Clock className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
-            {periodSchedule.length} periods/day · {workingDays.length} working days
+            {teachingPeriodCount} periods/day{breakSlotCount > 0 ? ` + ${breakSlotCount} ${breakSlotCount === 1 ? 'break' : 'breaks'}` : ''} · {workingDays.length} working days
           </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!canWrite || classes.length === 0}
+            onClick={() => {
+              setAiError('');
+              setAiResult(null);
+              setAiScope(classes.length === 1 ? 'selected' : 'selected');
+              setAiOpen(true);
+            }}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+            AI Create Timetable
+          </Button>
           <Button
             variant="secondary"
             size="sm"
@@ -502,23 +818,28 @@ export function PrincipalTimetableView({
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
         {workingDays.map((day) => {
           const dayItems = visiblePeriods.filter((p) => p.dayOfWeek === day);
+          const dayTeachingCount = dayItems.filter((p) => !p.isBreak).length;
+          const dayBreakCount = dayItems.filter((p) => p.isBreak).length;
           return (
             <div key={day} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
               <div className="px-4 py-3 bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
                 <h3 className="text-sm font-bold font-display text-slate-900 dark:text-slate-100">{day}</h3>
-                <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">{dayItems.length} periods</span>
+                <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                  {dayTeachingCount} {dayTeachingCount === 1 ? 'period' : 'periods'}
+                  {dayBreakCount > 0 ? ` · ${dayBreakCount} ${dayBreakCount === 1 ? 'break' : 'breaks'}` : ''}
+                </span>
               </div>
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
                 {dayItems.length === 0 ? (
                   <p className="p-4 text-xs text-slate-400 dark:text-slate-500">No periods scheduled.</p>
                 ) : (
                   dayItems.map((p) => (
-                    <div key={p.id} className={`p-3.5 flex items-start justify-between gap-2 ${p.isBreak ? 'bg-slate-50/70 dark:bg-slate-800/40' : ''}`}>
+                    <div key={p.id} className={`p-3.5 flex items-start justify-between gap-2 ${p.isBreak ? 'bg-amber-50/50 dark:bg-amber-950/20' : ''}`}>
                       <div>
-                        <p className="text-xs font-mono text-teal-700 dark:text-teal-400 tabular-nums">
-                          {p.startTime} – {p.endTime} · P{p.periodNumber}
+                        <p className={`text-xs font-mono tabular-nums ${p.isBreak ? 'text-amber-700 dark:text-amber-400' : 'text-teal-700 dark:text-teal-400'}`}>
+                          {p.startTime} – {p.endTime} · {p.isBreak ? 'Break' : `P${p.periodNumber}`}
                         </p>
-                        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 mt-0.5">{p.subjectName || 'Break'}</p>
+                        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 mt-0.5">{p.subjectName || (p.isBreak ? 'Break / Recess' : 'General Study')}</p>
                         {!p.isBreak && (
                           <p className="text-xs text-slate-500 dark:text-slate-400">
                             {viewBy === 'class' ? p.teacherName || 'Unassigned Teacher' : p.className} {p.roomName ? `· ${p.roomName}` : ''}
@@ -603,15 +924,15 @@ export function PrincipalTimetableView({
 
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Period #</label>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Bell Slot</label>
               <select
-                value={form.periodNumber}
-                onChange={(e) => applyTimingForPeriod(e.target.value)}
+                value={form.slotKey}
+                onChange={(e) => applyTimingForSlotIndex(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 tabular-nums"
               >
-                {periodSchedule.map((slot) => (
-                  <option key={slot.periodNumber} value={String(slot.periodNumber)}>
-                    P{slot.periodNumber} · {slot.label} ({slot.startTime})
+                {periodSchedule.map((slot, idx) => (
+                  <option key={slot.id || `${idx}_${slot.periodNumber}`} value={String(idx)}>
+                    {slot.isBreak ? `Break · ${slot.label}` : `P${slot.periodNumber} · ${slot.label}`} ({slot.startTime})
                   </option>
                 ))}
               </select>
@@ -640,11 +961,30 @@ export function PrincipalTimetableView({
             <input
               type="checkbox"
               checked={form.isBreak}
-              onChange={(e) => setForm({ ...form, isBreak: e.target.checked })}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  isBreak: e.target.checked,
+                  periodNumber: e.target.checked ? '0' : form.periodNumber === '0' ? '1' : form.periodNumber,
+                })
+              }
               className="rounded border-slate-300 text-teal-600"
             />
-            Mark slot as Break / Recess
+            Break / Recess slot (does not count as a teaching period)
           </label>
+
+          {form.isBreak && (
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Break / Recess Label</label>
+              <input
+                type="text"
+                value={form.breakLabel}
+                onChange={(e) => setForm({ ...form, breakLabel: e.target.value })}
+                placeholder="e.g. Short Break, Lunch Recess"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+              />
+            </div>
+          )}
 
           {!form.isBreak && (
             <div className="grid sm:grid-cols-3 gap-3">
@@ -893,6 +1233,234 @@ export function PrincipalTimetableView({
               Import {validImportCount > 0 ? `${validImportCount} Periods` : 'Timetable'}
             </Button>
           </div>
+        </div>
+      </Modal>
+
+      {/* AI Timetable Generator Modal */}
+      <Modal
+        open={aiOpen}
+        onClose={() => !aiGenerating && !aiPublishing && setAiOpen(false)}
+        title="AI Timetable Generator"
+        subtitle="Automatically builds a balanced, conflict-checked weekly timetable using your school's teachers, subjects, rooms, and period timings."
+        maxWidth="max-w-3xl"
+      >
+        <div className="space-y-4">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                Target Scope
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAiScope('selected');
+                    setAiResult(null);
+                  }}
+                  className={`px-3 py-2 text-xs font-semibold rounded-lg border text-left transition-colors cursor-pointer ${
+                    aiScope === 'selected'
+                      ? 'border-teal-600 bg-teal-50 dark:bg-teal-950/30 text-teal-800 dark:text-teal-300'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  Selected Class
+                  <span className="block text-[11px] font-normal text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                    {sortedClasses.find((c) => c.id === activeClassId)?.name || sortedClasses[0]?.name || 'None'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAiScope('all');
+                    setAiResult(null);
+                  }}
+                  className={`px-3 py-2 text-xs font-semibold rounded-lg border text-left transition-colors cursor-pointer ${
+                    aiScope === 'all'
+                      ? 'border-teal-600 bg-teal-50 dark:bg-teal-950/30 text-teal-800 dark:text-teal-300'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  All Active Classes
+                  <span className="block text-[11px] font-normal text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
+                    {sortedClasses.filter((c) => c.status !== 'archived').length} classes
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 p-3 text-xs space-y-1">
+              <p className="font-semibold text-slate-800 dark:text-slate-200">Inputs Analyzed by AI</p>
+              <p className="text-slate-600 dark:text-slate-400 tabular-nums">
+                {aiTargetClasses.length} {aiTargetClasses.length === 1 ? 'class' : 'classes'} ·{' '}
+                {subjects.filter((s) => s.status !== 'archived').length} subjects ·{' '}
+                {teachers.filter((t) => t.status !== 'inactive').length} active teachers ·{' '}
+                {teachingPeriodCount} teaching periods/day
+              </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Working days: {workingDays.join(', ')}
+                {breakSlotCount > 0 ? ` · ${breakSlotCount} dedicated break(s)` : ''}
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Scheduling Preferences (Optional)
+            </label>
+            <input
+              type="text"
+              value={aiPreferences}
+              onChange={(e) => setAiPreferences(e.target.value)}
+              placeholder="e.g., Schedule Mathematics and Science in morning periods, avoid consecutive periods of the same subject…"
+              maxLength={400}
+              className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-4 text-xs text-slate-700 dark:text-slate-300">
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aiIncludeBreaks}
+                onChange={(e) => setAiIncludeBreaks(e.target.checked)}
+                className="rounded border-slate-300 text-teal-600"
+              />
+              Include configured Break / Recess slots ({breakSlotCount})
+            </label>
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aiReplaceExisting}
+                onChange={(e) => setAiReplaceExisting(e.target.checked)}
+                className="rounded border-slate-300 text-teal-600"
+              />
+              Replace existing timetable for target class(es)
+            </label>
+          </div>
+
+          {aiError && (
+            <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-lg text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{aiError}</span>
+            </div>
+          )}
+
+          {!aiResult ? (
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+              <Button type="button" variant="secondary" onClick={() => setAiOpen(false)} disabled={aiGenerating}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                loading={aiGenerating}
+                disabled={!canWrite || aiTargetClasses.length === 0}
+                onClick={handleGenerateAiTimetable}
+              >
+                <Sparkles className="w-4 h-4" />
+                {aiGenerating ? 'Generating Schedule…' : 'Generate Timetable with AI'}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+              <div className="p-3 rounded-lg bg-teal-50/70 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-900/50 text-xs text-teal-900 dark:text-teal-200 flex flex-wrap items-start justify-between gap-2">
+                <div className="space-y-0.5">
+                  <p className="font-semibold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+                    AI Draft Ready · {aiResult.periods.filter((p) => !p.isBreak).length} teaching periods
+                    {aiResult.periods.some((p) => p.isBreak)
+                      ? ` + ${aiResult.periods.filter((p) => p.isBreak).length} breaks`
+                      : ''}
+                  </p>
+                  <p className="text-teal-800/90 dark:text-teal-300/90">{aiResult.summary}</p>
+                </div>
+                {aiTargetClasses.length > 1 && (
+                  <select
+                    value={aiPreviewClassFilter}
+                    onChange={(e) => setAiPreviewClassFilter(e.target.value)}
+                    className="border border-teal-300 dark:border-teal-800 rounded-md px-2.5 py-1 text-xs bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200"
+                  >
+                    <option value="all">All Generated Classes ({aiTargetClasses.length})</option>
+                    {aiTargetClasses.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div className="max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-lg">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 sticky top-0">
+                    <tr>
+                      <th className="py-2 px-3">Class</th>
+                      <th className="py-2 px-3">Day</th>
+                      <th className="py-2 px-3">Slot & Time</th>
+                      <th className="py-2 px-3">Subject</th>
+                      <th className="py-2 px-3">Teacher · Room</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {aiVisiblePreview.slice(0, 60).map((row, idx) => (
+                      <tr
+                        key={`${row.classId}_${row.dayOfWeek}_${row.startTime}_${idx}`}
+                        className={row.isBreak ? 'bg-amber-50/50 dark:bg-amber-950/20' : ''}
+                      >
+                        <td className="py-2 px-3 font-medium text-slate-800 dark:text-slate-200">{row.className}</td>
+                        <td className="py-2 px-3 text-slate-600 dark:text-slate-400">{row.dayOfWeek}</td>
+                        <td className="py-2 px-3 font-mono tabular-nums text-slate-600 dark:text-slate-400">
+                          {row.isBreak ? 'Break' : `P${row.periodNumber}`} · {row.startTime}–{row.endTime}
+                        </td>
+                        <td className="py-2 px-3 font-semibold text-slate-900 dark:text-slate-100">{row.subjectName}</td>
+                        <td className="py-2 px-3 text-slate-500 dark:text-slate-400">
+                          {row.isBreak ? 'Recess' : [row.teacherName, row.roomName].filter(Boolean).join(' · ') || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {aiVisiblePreview.length > 60 && (
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 px-3 py-2 bg-slate-50 dark:bg-slate-800/70">
+                    Showing first 60 of {aiVisiblePreview.length} generated slots. All slots will be published.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={aiGenerating}
+                  disabled={aiPublishing}
+                  onClick={handleGenerateAiTimetable}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Regenerate
+                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setAiOpen(false)}
+                    disabled={aiPublishing || aiGenerating}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    loading={aiPublishing}
+                    disabled={!canWrite || aiGenerating}
+                    onClick={handlePublishAiTimetable}
+                  >
+                    Publish AI Timetable ({aiResult.periods.filter((p) => !p.isBreak).length} Periods)
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
     </div>
@@ -1193,99 +1761,111 @@ export function PrincipalExamsView({
 }
 
 // ============================================================================
-// Homework Management
+// Homework Management (Read-Only Monitoring — Only Teachers Can Publish)
 // ============================================================================
 export function PrincipalHomeworkView({
   homework,
   submissions,
-  classes,
-  teachers,
-  schoolId,
-  actor,
-  canWrite,
 }: {
   homework: Homework[];
   submissions: HomeworkSubmission[];
-  classes: SchoolClass[];
-  teachers: TeacherProfile[];
-  schoolId: string;
-  actor: PlatformUser;
-  canWrite: boolean;
+  classes?: SchoolClass[];
+  teachers?: TeacherProfile[];
+  schoolId?: string;
+  actor?: PlatformUser;
+  canWrite?: boolean;
 }) {
-  const { pushToast } = useToast();
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({
-    classId: classes[0]?.id || '',
-    subjectName: 'Mathematics',
-    teacherId: teachers[0]?.id || '',
-    title: '',
-    instructions: '',
-    dueDate: '2026-11-30',
-    allowOnlineSubmission: true,
-  });
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canWrite) return;
-    const cls = classes.find((c) => c.id === form.classId);
-    const tch = teachers.find((t) => t.id === form.teacherId);
-    const id = generateId('hw');
-    await setDoc(doc(db, 'homework', id), {
-      id,
-      schoolId,
-      classId: form.classId,
-      className: cls?.name || '',
-      subjectId: '',
-      subjectName: form.subjectName.trim(),
-      teacherId: tch?.id || '',
-      teacherName: tch?.name || actor.displayName,
-      title: form.title.trim().slice(0, 160),
-      instructions: form.instructions.trim().slice(0, 2000),
-      assignedDate: new Date().toISOString().slice(0, 10),
-      dueDate: form.dueDate,
-      allowOnlineSubmission: form.allowOnlineSubmission,
-      attachmentName: '',
-      status: 'published',
-      createdBy: actor.uid,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-    pushToast('success', 'Homework published.');
-    setOpen(false);
-  };
+  const [previewPhoto, setPreviewPhoto] = useState<{ title: string; url: string; fileName?: string } | null>(null);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-slate-500">Track class-level homework assignments, due dates, and student submissions.</p>
-        <Button variant="primary" size="sm" onClick={() => setOpen(true)} disabled={!canWrite}>
-          <Plus className="w-4 h-4" /> Publish Homework
-        </Button>
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3">
+        <div>
+          <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+            Homework Monitoring &amp; Submission Oversight
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Track class-level homework assignments, attached worksheet photos, due dates, and student submissions.
+          </p>
+        </div>
+        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-lg">
+          <Lock className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+          Teachers Only Can Publish Homework
+        </span>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800">
         {homework.length === 0 ? (
-          <EmptyState title="No homework assigned" description="Publish homework to track completion across classes." />
+          <EmptyState
+            title="No homework assigned yet"
+            description="Homework published by your school's Teachers will appear here automatically for oversight."
+          />
         ) : (
           homework.map((hw) => {
             const subs = submissions.filter((s) => s.homeworkId === hw.id);
             const late = subs.filter((s) => s.isLate).length;
             return (
-              <div key={hw.id} className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2 text-xs text-slate-500">
-                    <span className="font-semibold text-teal-700">{hw.className}</span>
-                    <span>·</span>
-                    <span>{hw.subjectName}</span>
-                    <span>·</span>
-                    <span className="tabular-nums">Due {hw.dueDate}</span>
+              <div key={hw.id} className="p-5 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                <div className="flex items-start gap-3.5 min-w-0">
+                  {hw.photoDataUrl && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPreviewPhoto({
+                          title: hw.title,
+                          url: hw.photoDataUrl || '',
+                          fileName: hw.attachmentName,
+                        })
+                      }
+                      className="shrink-0 group relative w-16 h-16 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 cursor-pointer"
+                      title="Click to view homework photo"
+                    >
+                      <img
+                        src={hw.photoDataUrl}
+                        alt={`Homework photo for ${hw.title}`}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                      />
+                    </button>
+                  )}
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                      <span className="font-semibold text-teal-700 dark:text-teal-400">{hw.className}</span>
+                      <span>·</span>
+                      <span>{hw.subjectName}</span>
+                      <span>·</span>
+                      <span className="tabular-nums">Due {hw.dueDate}</span>
+                      {hw.photoDataUrl && (
+                        <>
+                          <span>·</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPreviewPhoto({
+                                title: hw.title,
+                                url: hw.photoDataUrl || '',
+                                fileName: hw.attachmentName,
+                              })
+                            }
+                            className="inline-flex items-center gap-1 text-teal-700 dark:text-teal-400 hover:underline font-medium cursor-pointer"
+                          >
+                            <ImageIcon className="w-3 h-3" /> View Photo
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 mt-1">{hw.title}</h3>
+                    {hw.instructions && (
+                      <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">
+                        {hw.instructions}
+                      </p>
+                    )}
                   </div>
-                  <h3 className="text-sm font-bold text-slate-900 mt-1">{hw.title}</h3>
-                  <p className="text-xs text-slate-600 mt-0.5">{hw.instructions}</p>
                 </div>
                 <div className="text-xs text-right shrink-0 tabular-nums">
-                  <p className="font-semibold text-slate-900">{subs.length} submitted</p>
-                  <p className="text-slate-500">{late} late · {hw.teacherName}</p>
+                  <p className="font-semibold text-slate-900 dark:text-slate-100">{subs.length} submitted</p>
+                  <p className="text-slate-500 dark:text-slate-400">
+                    {late} late · {hw.teacherName || 'Teacher'}
+                  </p>
                 </div>
               </div>
             );
@@ -1293,39 +1873,29 @@ export function PrincipalHomeworkView({
         )}
       </div>
 
-      <Modal open={open} onClose={() => setOpen(false)} title="Publish Homework">
-        <form onSubmit={handleCreate} className="space-y-4">
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Class</label>
-              <select value={form.classId} onChange={(e) => setForm({ ...form, classId: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white">
-                {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+      <Modal
+        open={Boolean(previewPhoto)}
+        onClose={() => setPreviewPhoto(null)}
+        title={previewPhoto?.title || 'Homework Photo'}
+        subtitle={previewPhoto?.fileName || 'Uploaded by Teacher'}
+        maxWidth="max-w-2xl"
+      >
+        {previewPhoto && (
+          <div className="space-y-3">
+            <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
+              <img
+                src={previewPhoto.url}
+                alt={previewPhoto.title}
+                className="max-h-[70vh] w-auto object-contain"
+              />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Subject *</label>
-              <input type="text" required value={form.subjectName} onChange={(e) => setForm({ ...form, subjectName: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
-            </div>
-          </div>
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Title *</label>
-              <input type="text" required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Due Date *</label>
-              <input type="date" required value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg tabular-nums" />
+            <div className="flex justify-end">
+              <Button type="button" variant="secondary" size="sm" onClick={() => setPreviewPhoto(null)}>
+                Close
+              </Button>
             </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Instructions</label>
-            <textarea rows={3} value={form.instructions} onChange={(e) => setForm({ ...form, instructions: e.target.value })} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg" />
-          </div>
-          <div className="flex justify-end gap-3">
-            <Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button type="submit" variant="primary">Publish</Button>
-          </div>
-        </form>
+        )}
       </Modal>
     </div>
   );
@@ -1547,7 +2117,16 @@ export function PrincipalSchoolSettingsView({
   canWrite: boolean;
 }) {
   const { pushToast } = useToast();
-  const initialCount = school?.settings?.periodsPerDay || school?.settings?.periodSchedule?.length || 8;
+
+  const deriveTeachingCount = (s: School | null): number => {
+    if (s?.settings?.periodSchedule && s.settings.periodSchedule.length > 0) {
+      const teachingOnly = s.settings.periodSchedule.filter((slot) => !slot.isBreak).length;
+      if (teachingOnly > 0) return Math.min(12, teachingOnly);
+    }
+    return Math.max(1, Math.min(12, s?.settings?.periodsPerDay || 8));
+  };
+
+  const initialCount = deriveTeachingCount(school);
   const [address, setAddress] = useState(school?.address || '');
   const [phone, setPhone] = useState(school?.phone || '');
   const [email, setEmail] = useState(school?.email || '');
@@ -1571,12 +2150,21 @@ export function PrincipalSchoolSettingsView({
   const [geofenceMeters, setGeofenceMeters] = useState<string>(
     String(school?.settings?.attendanceGeofenceMeters || DEFAULT_ATTENDANCE_GEOFENCE_METERS),
   );
+  const [teacherWindowEnabled, setTeacherWindowEnabled] = useState<boolean>(
+    Boolean(school?.settings?.teacherAttendanceTimeWindowEnabled),
+  );
+  const [teacherStartTime, setTeacherStartTime] = useState<string>(
+    school?.settings?.teacherAttendanceStartTime || DEFAULT_TEACHER_ATTENDANCE_START,
+  );
+  const [teacherEndTime, setTeacherEndTime] = useState<string>(
+    school?.settings?.teacherAttendanceEndTime || DEFAULT_TEACHER_ATTENDANCE_END,
+  );
   const [locatingGps, setLocatingGps] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!school) return;
-    const count = school.settings?.periodsPerDay || school.settings?.periodSchedule?.length || 8;
+    const count = deriveTeachingCount(school);
     setAddress(school.address || '');
     setPhone(school.phone || '');
     setEmail(school.email || '');
@@ -1592,6 +2180,9 @@ export function PrincipalSchoolSettingsView({
     setCampusLat(typeof school.settings?.campusLatitude === 'number' ? String(school.settings.campusLatitude) : '');
     setCampusLng(typeof school.settings?.campusLongitude === 'number' ? String(school.settings.campusLongitude) : '');
     setGeofenceMeters(String(school.settings?.attendanceGeofenceMeters || DEFAULT_ATTENDANCE_GEOFENCE_METERS));
+    setTeacherWindowEnabled(Boolean(school.settings?.teacherAttendanceTimeWindowEnabled));
+    setTeacherStartTime(school.settings?.teacherAttendanceStartTime || DEFAULT_TEACHER_ATTENDANCE_START);
+    setTeacherEndTime(school.settings?.teacherAttendanceEndTime || DEFAULT_TEACHER_ATTENDANCE_END);
   }, [school]);
 
   if (!school) return <EmptyState title="School profile unavailable" description="No school record is linked to this account." />;
@@ -1602,10 +2193,26 @@ export function PrincipalSchoolSettingsView({
     setPeriodSchedule((prev) => buildDefaultPeriodSchedule(clamped, prev));
   };
 
-  const updatePeriodSlot = (periodNumber: number, patch: Partial<PeriodTimingSlot>) => {
+  const handleSlotLabelChange = (index: number, label: string) => {
     setPeriodSchedule((prev) =>
-      prev.map((slot) => (slot.periodNumber === periodNumber ? { ...slot, ...patch } : slot)),
+      prev.map((slot, idx) => (idx === index ? { ...slot, label } : slot)),
     );
+  };
+
+  const handleSlotTimeChange = (index: number, field: 'startTime' | 'endTime', value: string) => {
+    setPeriodSchedule((prev) => chainPeriodScheduleTimings(prev, index, field, value));
+  };
+
+  const handleInsertBreakAfter = (index: number) => {
+    setPeriodSchedule((prev) => {
+      const existingBreaks = prev.filter((s) => s.isBreak).length;
+      const defaultLabel = existingBreaks === 0 ? 'Short Break / Recess' : 'Lunch Break';
+      return insertBreakAfterIndex(prev, index, defaultLabel, existingBreaks === 0 ? 20 : 30);
+    });
+  };
+
+  const handleRemoveBreak = (index: number) => {
+    setPeriodSchedule((prev) => removeBreakAtIndex(prev, index));
   };
 
   const toggleWorkingDay = (day: DayOfWeek) => {
@@ -1653,14 +2260,26 @@ export function PrincipalSchoolSettingsView({
       return;
     }
 
+    if (teacherWindowEnabled) {
+      const startMins = parseHHMMToMinutes(teacherStartTime);
+      const endMins = parseHHMMToMinutes(teacherEndTime);
+      if (startMins === null || endMins === null || endMins <= startMins) {
+        pushToast('error', 'Teacher attendance closing time must be later than opening time.');
+        return;
+      }
+    }
+
     const parsedRadius = Math.max(
       25,
       Math.min(2000, Math.round(Number(geofenceMeters) || DEFAULT_ATTENDANCE_GEOFENCE_METERS)),
     );
 
-    const sanitizedSchedule: PeriodTimingSlot[] = periodSchedule.map((s) => ({
-      periodNumber: s.periodNumber,
-      label: (s.label.trim() || (s.isBreak ? 'Break / Recess' : `Period ${s.periodNumber}`)).slice(0, 40),
+    const normalizedSchedule = normalizePeriodSchedule(periodSchedule);
+    const teachingCount = normalizedSchedule.filter((s) => !s.isBreak).length;
+    const sanitizedSchedule: PeriodTimingSlot[] = normalizedSchedule.map((s) => ({
+      id: s.id,
+      periodNumber: s.isBreak ? 0 : s.periodNumber,
+      label: (s.label.trim() || (s.isBreak ? 'Short Break / Recess' : `Period ${s.periodNumber}`)).slice(0, 40),
       startTime: s.startTime || '08:30',
       endTime: s.endTime || '09:15',
       isBreak: Boolean(s.isBreak),
@@ -1670,9 +2289,12 @@ export function PrincipalSchoolSettingsView({
       ...(school.settings || {}),
       allowOnlineHomeworkSubmission: allowOnline,
       workingDays,
-      periodsPerDay: sanitizedSchedule.length,
+      periodsPerDay: teachingCount,
       periodSchedule: sanitizedSchedule,
       attendanceGeofenceMeters: parsedRadius,
+      teacherAttendanceTimeWindowEnabled: teacherWindowEnabled,
+      teacherAttendanceStartTime: teacherStartTime || DEFAULT_TEACHER_ATTENDANCE_START,
+      teacherAttendanceEndTime: teacherEndTime || DEFAULT_TEACHER_ATTENDANCE_END,
     };
     if (parsedLat !== undefined && parsedLng !== undefined) {
       nextSettings.campusLatitude = parsedLat;
@@ -1701,15 +2323,17 @@ export function PrincipalSchoolSettingsView({
         targetType: 'school',
         targetId: school.id,
         targetLabel: school.name,
-        details: `Periods/day: ${sanitizedSchedule.length}, Working days: ${workingDays.length}, Attendance radius: ${parsedRadius}m.`,
+        details: `Teaching periods/day: ${teachingCount}, Breaks: ${sanitizedSchedule.length - teachingCount}, Attendance radius: ${parsedRadius}m${teacherWindowEnabled ? `, Teacher check-in hours: ${teacherStartTime}-${teacherEndTime}` : ''}.`,
       }).catch(() => undefined);
-      pushToast('success', 'School settings, period timings, and campus geofence saved.');
+      pushToast('success', 'School settings, bell timings, and teacher attendance hours saved.');
     } catch (err) {
       pushToast('error', err instanceof Error ? err.message : 'Unable to save school settings.');
     } finally {
       setSaving(false);
     }
   };
+
+  const breakCount = periodSchedule.filter((s) => s.isBreak).length;
 
   return (
     <form onSubmit={handleSave} className="max-w-4xl space-y-6">
@@ -1768,7 +2392,7 @@ export function PrincipalSchoolSettingsView({
         </label>
       </div>
 
-      {/* 2. Daily Periods & Timings Configuration */}
+      {/* 2. Daily Periods & Timings Configuration (Breaks separate from Period numbering + Auto-Chained Timings) */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
           <div className="flex items-start gap-2.5">
@@ -1778,12 +2402,12 @@ export function PrincipalSchoolSettingsView({
                 Daily Periods &amp; Bell Timings
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Configure how many periods run each day and set exact timings. Used automatically by manual Timetable creation and Excel Timetable imports.
+                Breaks / Recess are kept separate and never counted as periods. Editing any slot&apos;s end time automatically sets the next slot&apos;s start time to match.
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Periods / Day</label>
+            <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">Teaching Periods / Day</label>
             <select
               value={periodsPerDay}
               disabled={!canWrite}
@@ -1824,89 +2448,116 @@ export function PrincipalSchoolSettingsView({
           </div>
         </div>
 
-        {/* Period Timings Table */}
-        <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 dark:bg-slate-800/70 text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
-              <tr>
-                <th className="py-2.5 px-3 font-semibold w-16">#</th>
-                <th className="py-2.5 px-3 font-semibold">Period Label</th>
-                <th className="py-2.5 px-3 font-semibold w-36">Start Time</th>
-                <th className="py-2.5 px-3 font-semibold w-36">End Time</th>
-                <th className="py-2.5 px-3 font-semibold w-28 text-center">Break / Recess</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {periodSchedule.map((slot) => (
-                <tr key={slot.periodNumber} className={slot.isBreak ? 'bg-amber-50/40 dark:bg-amber-950/20' : ''}>
-                  <td className="py-2 px-3 font-mono font-bold text-teal-700 dark:text-teal-400 tabular-nums">
-                    P{slot.periodNumber}
-                  </td>
-                  <td className="py-2 px-3">
-                    <input
-                      type="text"
-                      value={slot.label}
-                      disabled={!canWrite}
-                      onChange={(e) => updatePeriodSlot(slot.periodNumber, { label: e.target.value })}
-                      className="w-full px-2.5 py-1.5 text-xs border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
-                    />
-                  </td>
-                  <td className="py-2 px-3">
-                    <input
-                      type="time"
-                      value={slot.startTime}
-                      disabled={!canWrite}
-                      onChange={(e) => updatePeriodSlot(slot.periodNumber, { startTime: e.target.value })}
-                      className="w-full px-2.5 py-1.5 text-xs tabular-nums border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
-                    />
-                  </td>
-                  <td className="py-2 px-3">
-                    <input
-                      type="time"
-                      value={slot.endTime}
-                      disabled={!canWrite}
-                      onChange={(e) => updatePeriodSlot(slot.periodNumber, { endTime: e.target.value })}
-                      className="w-full px-2.5 py-1.5 text-xs tabular-nums border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
-                    />
-                  </td>
-                  <td className="py-2 px-3 text-center">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(slot.isBreak)}
-                      disabled={!canWrite}
-                      onChange={(e) =>
-                        updatePeriodSlot(slot.periodNumber, {
-                          isBreak: e.target.checked,
-                          label: e.target.checked
-                            ? slot.label.startsWith('Period')
-                              ? 'Short Break'
-                              : slot.label
-                            : slot.label.toLowerCase().includes('break')
-                              ? `Period ${slot.periodNumber}`
-                              : slot.label,
-                        })
-                      }
-                      className="rounded border-slate-300 text-teal-600"
-                    />
-                  </td>
+        {/* Period & Break Timings Table */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+            <span className="tabular-nums">
+              {periodsPerDay} teaching {periodsPerDay === 1 ? 'period' : 'periods'}
+              {breakCount > 0 ? ` + ${breakCount} dedicated ${breakCount === 1 ? 'break' : 'breaks'}` : ' (no breaks added yet)'}
+            </span>
+            <span className="text-[11px]">Tip: Use &ldquo;+ Break&rdquo; on any period row to insert recess after it.</span>
+          </div>
+          <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-800/70 text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                <tr>
+                  <th className="py-2.5 px-3 font-semibold w-24">Slot</th>
+                  <th className="py-2.5 px-3 font-semibold">Label</th>
+                  <th className="py-2.5 px-3 font-semibold w-36">Start Time</th>
+                  <th className="py-2.5 px-3 font-semibold w-36">End Time</th>
+                  <th className="py-2.5 px-3 font-semibold w-32 text-right">Break Control</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {periodSchedule.map((slot, idx) => {
+                  const isLastRow = idx === periodSchedule.length - 1;
+                  const nextIsBreak = periodSchedule[idx + 1]?.isBreak;
+                  return (
+                    <tr key={slot.id || `${idx}_${slot.periodNumber}`} className={slot.isBreak ? 'bg-amber-50/50 dark:bg-amber-950/20' : ''}>
+                      <td className="py-2 px-3">
+                        {slot.isBreak ? (
+                          <span className="inline-flex items-center gap-1 font-semibold text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 rounded text-[11px]">
+                            <Coffee className="w-3 h-3" /> Break
+                          </span>
+                        ) : (
+                          <span className="font-mono font-bold text-teal-700 dark:text-teal-400 tabular-nums">
+                            P{slot.periodNumber}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3">
+                        <input
+                          type="text"
+                          value={slot.label}
+                          disabled={!canWrite}
+                          onChange={(e) => handleSlotLabelChange(idx, e.target.value)}
+                          placeholder={slot.isBreak ? 'Short Break / Lunch' : `Period ${slot.periodNumber}`}
+                          className="w-full px-2.5 py-1.5 text-xs border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                        />
+                      </td>
+                      <td className="py-2 px-3">
+                        <input
+                          type="time"
+                          value={slot.startTime}
+                          disabled={!canWrite}
+                          onChange={(e) => handleSlotTimeChange(idx, 'startTime', e.target.value)}
+                          className="w-full px-2.5 py-1.5 text-xs tabular-nums border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                        />
+                      </td>
+                      <td className="py-2 px-3">
+                        <input
+                          type="time"
+                          value={slot.endTime}
+                          disabled={!canWrite}
+                          onChange={(e) => handleSlotTimeChange(idx, 'endTime', e.target.value)}
+                          className="w-full px-2.5 py-1.5 text-xs tabular-nums border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                        />
+                      </td>
+                      <td className="py-2 px-3 text-right">
+                        {slot.isBreak ? (
+                          <button
+                            type="button"
+                            disabled={!canWrite}
+                            onClick={() => handleRemoveBreak(idx)}
+                            className="inline-flex items-center gap-1 text-red-600 dark:text-red-400 hover:underline font-medium disabled:opacity-40 cursor-pointer"
+                            title="Remove this break slot"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> Remove
+                          </button>
+                        ) : !isLastRow && !nextIsBreak ? (
+                          <button
+                            type="button"
+                            disabled={!canWrite}
+                            onClick={() => handleInsertBreakAfter(idx)}
+                            className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400 hover:underline font-medium disabled:opacity-40 cursor-pointer"
+                            title={`Insert a Break / Recess right after Period ${slot.periodNumber}`}
+                          >
+                            <Coffee className="w-3.5 h-3.5" /> + Break
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-slate-400">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-      {/* 3. Campus Address & Teacher Attendance Geofence (100m default) */}
+      {/* 3. Campus Location, Geofence & Daily Teacher Attendance Marking Timings */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
           <div className="flex items-start gap-2.5">
             <MapPin className="w-5 h-5 text-teal-600 dark:text-teal-400 shrink-0 mt-0.5" />
             <div>
               <h3 className="text-sm font-bold font-display text-slate-900 dark:text-slate-100">
-                Campus Location &amp; Teacher Attendance Geofence
+                Campus Location, Geofence &amp; Teacher Attendance Timings
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Teachers must be within the configured campus radius (default 100 metres) and capture a live verification photo to mark their daily attendance.
+                Teachers must be within the configured campus radius (default 100 metres) with a live photo and within the daily attendance window below.
               </p>
             </div>
           </div>
@@ -1920,6 +2571,61 @@ export function PrincipalSchoolSettingsView({
             {locatingGps ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Navigation className="w-3.5 h-3.5" />}
             {locatingGps ? 'Locating…' : 'Pin Current GPS'}
           </Button>
+        </div>
+
+        {/* Daily Teacher Attendance Time Window (Teachers Only) */}
+        <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={teacherWindowEnabled}
+                disabled={!canWrite}
+                onChange={(e) => setTeacherWindowEnabled(e.target.checked)}
+                className="mt-0.5 rounded border-slate-300 text-teal-600"
+              />
+              <div>
+                <span className="block text-xs font-bold text-slate-900 dark:text-slate-100">
+                  Set Daily Attendance Marking Timings (Teachers Only)
+                </span>
+                <span className="block text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  When enabled, Teachers can only mark their daily self-attendance between the opening and closing times below. Student class attendance and Principal manual overrides remain unrestricted.
+                </span>
+              </div>
+            </label>
+            {teacherWindowEnabled && (
+              <span className="text-xs font-mono font-semibold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 border border-teal-200 dark:border-teal-800 px-2.5 py-1 rounded-md tabular-nums">
+                {formatHHMMTo12Hour(teacherStartTime)} – {formatHHMMTo12Hour(teacherEndTime)}
+              </span>
+            )}
+          </div>
+
+          <div className="grid sm:grid-cols-2 gap-4 pt-1">
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Teacher Attendance Opens At
+              </label>
+              <input
+                type="time"
+                value={teacherStartTime}
+                disabled={!canWrite || !teacherWindowEnabled}
+                onChange={(e) => setTeacherStartTime(e.target.value)}
+                className="w-full px-3 py-2 text-sm tabular-nums border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 disabled:opacity-50 focus:outline-none focus:border-teal-600"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Teacher Attendance Closes At
+              </label>
+              <input
+                type="time"
+                value={teacherEndTime}
+                disabled={!canWrite || !teacherWindowEnabled}
+                onChange={(e) => setTeacherEndTime(e.target.value)}
+                className="w-full px-3 py-2 text-sm tabular-nums border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 disabled:opacity-50 focus:outline-none focus:border-teal-600"
+              />
+            </div>
+          </div>
         </div>
 
         <DetectLocationAddressPicker

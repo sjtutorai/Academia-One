@@ -105,7 +105,8 @@ export function detectTimetableConflicts(
     if (!timesOverlap(candidate.startTime, candidate.endTime, p.startTime, p.endTime)) continue;
 
     if (p.classId === candidate.classId) {
-      conflicts.push(`Class overlap with Period ${p.periodNumber} (${p.startTime}–${p.endTime}).`);
+      const slotDesc = p.isBreak ? p.subjectName || 'Break / Recess' : `Period ${p.periodNumber}`;
+      conflicts.push(`Class overlap with ${slotDesc} (${p.startTime}–${p.endTime}).`);
     }
     if (!candidate.isBreak && !p.isBreak && candidate.teacherId && p.teacherId === candidate.teacherId) {
       conflicts.push(`Teacher ${candidate.teacherName || 'assigned'} is already booked in ${p.className || p.classId} (${p.startTime}–${p.endTime}).`);

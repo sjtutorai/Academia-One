@@ -16,7 +16,11 @@ import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { exportToCsv } from '../../lib/csv';
 import { recordAuditLog } from '../../lib/audit';
-import { DEFAULT_ATTENDANCE_GEOFENCE_METERS } from '../../lib/geoAttendance';
+import {
+  DEFAULT_ATTENDANCE_GEOFENCE_METERS,
+  evaluateTeacherAttendanceWindow,
+  formatHHMMTo12Hour,
+} from '../../lib/geoAttendance';
 import {
   Button,
   EmptyState,
@@ -70,6 +74,7 @@ export function PrincipalTeacherAttendanceView({
   const hasCampusCoords =
     typeof school.settings?.campusLatitude === 'number' &&
     typeof school.settings?.campusLongitude === 'number';
+  const teacherWindow = evaluateTeacherAttendanceWindow(school.settings);
 
   const dateRecordByTeacherId = useMemo(() => {
     const map = new Map<string, TeacherAttendanceRecord>();
@@ -211,8 +216,12 @@ export function PrincipalTeacherAttendanceView({
             </p>
             <p className="text-slate-600 dark:text-slate-400 mt-0.5">
               {hasCampusCoords
-                ? `School pin: ${school.settings?.campusLatitude?.toFixed(5)}, ${school.settings?.campusLongitude?.toFixed(5)}. Teachers must check in within ${geofenceRadius} meters with a live photo.`
+                ? `School pin: ${school.settings?.campusLatitude?.toFixed(5)}, ${school.settings?.campusLongitude?.toFixed(5)}.`
                 : 'Set your school campus latitude and longitude in School Settings so teachers can mark geofenced attendance within 100 meters.'}
+              {' '}
+              {teacherWindow.enabled
+                ? `Daily Teacher Marking Hours: ${formatHHMMTo12Hour(teacherWindow.startTime)} – ${formatHHMMTo12Hour(teacherWindow.endTime)} (Teachers only; Principal can edit anytime).`
+                : 'Daily Teacher Marking Hours: Any time of day (configure in School Settings to restrict hours).'}
             </p>
           </div>
         </div>
@@ -221,7 +230,7 @@ export function PrincipalTeacherAttendanceView({
           className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 dark:text-blue-400 hover:underline shrink-0"
         >
           <Settings className="w-3.5 h-3.5" />
-          Configure Geofence
+          Configure Geofence &amp; Timings
         </Link>
       </div>
 

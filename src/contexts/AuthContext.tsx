@@ -13,7 +13,7 @@ import {
   signOut,
   type User as FirebaseUser,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, getDocFromCache, setDoc, updateDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { DEFAULT_NOTIFICATION_PREFS } from '../lib/notifications';
 import { recordAuditLog } from '../lib/audit';
@@ -140,7 +140,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       snap = await getDoc(userRef);
     } catch (err) {
-      handleFirestoreError(err, OperationType.GET, `users/${fbUser.uid}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/offline|unavailable/i.test(msg)) {
+        try {
+          snap = await getDocFromCache(userRef);
+        } catch {
+          handleFirestoreError(err, OperationType.GET, `users/${fbUser.uid}`);
+        }
+      } else {
+        handleFirestoreError(err, OperationType.GET, `users/${fbUser.uid}`);
+      }
     }
 
     // Check emailDirectory for pre-registered school membership (works identically for Email/Password & Google)

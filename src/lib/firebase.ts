@@ -11,6 +11,10 @@ import {
 import {
   getFirestore,
   initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  memoryLocalCache,
+  enableNetwork,
   doc,
   getDocFromServer,
   type Firestore,
@@ -20,22 +24,48 @@ import firebaseConfig from '../../firebase-applet-config.json';
 const app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
 
 function createResilientFirestore(): Firestore {
+  const transportSettings = {
+    experimentalAutoDetectLongPolling: true,
+    experimentalLongPollingOptions: { timeoutSeconds: 20 },
+    ignoreUndefinedProperties: true,
+  };
+
   try {
     return initializeFirestore(
       app,
       {
-        experimentalForceLongPolling: true,
+        ...transportSettings,
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+        }),
       },
       firebaseConfig.firestoreDatabaseId,
     );
   } catch {
-    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    try {
+      return initializeFirestore(
+        app,
+        {
+          ...transportSettings,
+          localCache: memoryLocalCache(),
+        },
+        firebaseConfig.firestoreDatabaseId,
+      );
+    } catch {
+      return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    }
   }
 }
 
 export const db = createResilientFirestore();
 export const auth = getAuth(app);
 export const firebaseProjectConfig = firebaseConfig;
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    void enableNetwork(db).catch(() => undefined);
+  });
+}
 
 export enum OperationType {
   CREATE = 'create',
@@ -97,7 +127,7 @@ async function testConnection() {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firestore backend temporarily unreachable; operating with offline queue until reconnected.');
+      console.warn('Firestore backend temporarily unreachable; operating with offline cache until reconnected.');
     }
   }
 }

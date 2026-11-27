@@ -745,16 +745,16 @@ export function downloadTimetableExcelTemplate(
   ];
   XLSX.utils.book_append_sheet(wb, ws1, 'Timetable_Rows');
 
-  // Sheet 2: Grid/Matrix format example
+  // Sheet 2: Grid/Matrix format example (teaching periods only; breaks are separate)
+  const teachingSlots = schedule.filter((s) => !s.isBreak && s.periodNumber > 0);
   const gridRow: Record<string, string> = {
     Class: 'Class 1',
     Section: 'A',
     Day: 'Monday',
   };
-  schedule.slice(0, 6).forEach((slot) => {
-    gridRow[`Period ${slot.periodNumber}`] = slot.isBreak
-      ? 'Break'
-      : slot.periodNumber === 1
+  teachingSlots.slice(0, 6).forEach((slot) => {
+    gridRow[`Period ${slot.periodNumber}`] =
+      slot.periodNumber === 1
         ? 'Mathematics (Teacher Sharma)'
         : slot.periodNumber === 2
           ? 'English'
@@ -795,7 +795,11 @@ export async function parseTimetableExcelFile(
       : buildDefaultPeriodSchedule(8);
 
   const slotByPeriod = new Map<number, PeriodTimingSlot>();
-  schedule.forEach((s) => slotByPeriod.set(s.periodNumber, s));
+  schedule.forEach((s) => {
+    if (!s.isBreak && s.periodNumber > 0) {
+      slotByPeriod.set(s.periodNumber, s);
+    }
+  });
 
   const classByCode = new Map<string, SchoolClass>();
   const classByGradeSec = new Map<string, SchoolClass>();

@@ -1,7 +1,14 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
+dotenv.config();
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  AiTimetableHttpError,
+  generateAiTimetable,
+  type AiTimetableRequestPayload,
+} from './server/aiTimetable.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,7 +95,28 @@ function getServerMapsApiKey(): string {
 
 async function startServer() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '2mb' }));
+
+  // Server-side Gemini AI Timetable Generator
+  app.post('/api/ai/generate-timetable', async (req, res) => {
+    try {
+      const result = await generateAiTimetable(req.body as AiTimetableRequestPayload);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof AiTimetableHttpError) {
+        res.status(err.statusCode).json({
+          error: { status: err.errorStatus, message: err.message },
+        });
+        return;
+      }
+      res.status(500).json({
+        error: {
+          status: 'INTERNAL_ERROR',
+          message: err instanceof Error ? err.message : 'Unable to generate AI timetable.',
+        },
+      });
+    }
+  });
 
   // Exposes the configured Maps JS API key to the browser <APIProvider> if not already bundled via VITE_
   app.get('/api/maps/config', (_req, res) => {

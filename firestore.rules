@@ -92,6 +92,10 @@ service cloud.firestore {
       );
     }
 
+    function isTeacherOf(schoolId) {
+      return isSameSchool(schoolId) && userDoc().role == 'teacher';
+    }
+
     function isShortString(val, minLen, maxLen) {
       return val is string && val.size() >= minLen && val.size() <= maxLen;
     }
@@ -313,7 +317,7 @@ service cloud.firestore {
         && isValidId(data.schoolId)
         && isValidId(data.classId)
         && data.dayOfWeek in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-        && data.periodNumber is number && data.periodNumber >= 1 && data.periodNumber <= 12
+        && data.periodNumber is number && data.periodNumber >= 0 && data.periodNumber <= 12
         && isShortString(data.startTime, 4, 16)
         && isShortString(data.endTime, 4, 16)
         && data.isBreak is bool
@@ -368,7 +372,7 @@ service cloud.firestore {
 
     function isValidHomework(data) {
       return data.keys().hasAll(['id', 'schoolId', 'classId', 'subjectName', 'title', 'assignedDate', 'dueDate', 'status', 'createdBy', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'schoolId', 'classId', 'className', 'subjectId', 'subjectName', 'teacherId', 'teacherName', 'title', 'instructions', 'assignedDate', 'dueDate', 'allowOnlineSubmission', 'attachmentName', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'schoolId', 'classId', 'className', 'subjectId', 'subjectName', 'teacherId', 'teacherName', 'title', 'instructions', 'assignedDate', 'dueDate', 'allowOnlineSubmission', 'attachmentName', 'photoDataUrl', 'status', 'createdBy', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isValidId(data.schoolId)
         && isValidId(data.classId)
@@ -383,6 +387,7 @@ service cloud.firestore {
         && isOptString(data, 'teacherName', 120)
         && isOptString(data, 'instructions', 2000)
         && isOptString(data, 'attachmentName', 160)
+        && isOptString(data, 'photoDataUrl', 300000)
         && isShortString(data.createdBy, 1, 128);
     }
 
@@ -922,12 +927,12 @@ service cloud.firestore {
       allow list: if isSignedIn() && (isBootstrappedMainHead() || existing().schoolId == userDoc().schoolId);
       allow create: if isValidId(homeworkId) && isSignedIn() && isValidHomework(incoming())
         && incoming().createdAt == request.time && incoming().updatedAt == request.time
-        && (isMainHead() || isStaffOf(incoming().schoolId));
+        && (isMainHead() || (isTeacherOf(incoming().schoolId) && incoming().createdBy == request.auth.uid));
       allow update: if isValidId(homeworkId) && isSignedIn() && isValidHomework(incoming())
         && incoming().id == existing().id && incoming().schoolId == existing().schoolId
         && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time
-        && (isMainHead() || isStaffOf(existing().schoolId));
-      allow delete: if isValidId(homeworkId) && isSignedIn() && (isMainHead() || isStaffOf(existing().schoolId));
+        && (isMainHead() || isTeacherOf(existing().schoolId));
+      allow delete: if isValidId(homeworkId) && isSignedIn() && (isMainHead() || isTeacherOf(existing().schoolId));
     }
 
     match /homeworkSubmissions/{submissionId} {

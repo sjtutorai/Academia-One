@@ -14,6 +14,7 @@ import {
   FileText,
   Download,
   Clock,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
@@ -281,7 +282,7 @@ function StudentOverview({
   const today = getTodayDayName();
   const todayPeriods = data.timetable
     .filter((p) => p.dayOfWeek === today)
-    .sort((a, b) => a.periodNumber - b.periodNumber);
+    .sort((a, b) => a.startTime.localeCompare(b.startTime) || a.periodNumber - b.periodNumber);
   const nextClass = todayPeriods.find((p) => !p.isBreak);
 
   const presentOrLate = personalAttendance.filter((a) => a.status === 'present' || a.status === 'late').length;
@@ -466,7 +467,7 @@ function StudentTimetableView({ data, classNameLabel }: { data: SchoolDataBundle
         {daysToRender.map((day) => {
           const periods = data.timetable
             .filter((p) => p.dayOfWeek === day)
-            .sort((a, b) => a.periodNumber - b.periodNumber);
+            .sort((a, b) => a.startTime.localeCompare(b.startTime) || a.periodNumber - b.periodNumber);
           return (
             <div key={day} className="bg-white border border-slate-200 rounded-xl p-4">
               <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider pb-2.5 border-b border-slate-100">
@@ -480,7 +481,7 @@ function StudentTimetableView({ data, classNameLabel }: { data: SchoolDataBundle
                     <div key={p.id} className="py-2.5 flex items-start justify-between gap-2">
                       <div>
                         <p className="text-xs font-semibold text-slate-900">
-                          {p.isBreak ? 'Break / Recess' : `P${p.periodNumber} · ${p.subjectName}`}
+                          {p.isBreak ? p.subjectName || 'Break / Recess' : `P${p.periodNumber} · ${p.subjectName}`}
                         </p>
                         {!p.isBreak && (
                           <p className="text-[11px] text-slate-500">
@@ -521,6 +522,7 @@ function StudentHomeworkView({
 }) {
   const { pushToast } = useToast();
   const [submittingHw, setSubmittingHw] = useState<Homework | null>(null);
+  const [previewPhoto, setPreviewPhoto] = useState<{ title: string; url: string; fileName?: string } | null>(null);
   const [submissionText, setSubmissionText] = useState('');
   const [fileName, setFileName] = useState('');
   const [fileType, setFileType] = useState('');
@@ -640,17 +642,46 @@ function StudentHomeworkView({
                   <StatusText status={sub ? sub.reviewStatus : pastDue ? 'overdue' : 'pending'} />
                 </div>
 
-                {hw.instructions && <p className="text-sm text-slate-600 mt-2 leading-relaxed">{hw.instructions}</p>}
+                {hw.instructions && <p className="text-sm text-slate-600 dark:text-slate-400 mt-2 leading-relaxed">{hw.instructions}</p>}
+
+                {hw.photoDataUrl && (
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPreviewPhoto({
+                          title: hw.title,
+                          url: hw.photoDataUrl || '',
+                          fileName: hw.attachmentName,
+                        })
+                      }
+                      className="block w-full max-w-md rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 group cursor-pointer text-left"
+                    >
+                      <img
+                        src={hw.photoDataUrl}
+                        alt={`Homework photo for ${hw.title}`}
+                        className="w-full max-h-56 object-cover group-hover:opacity-95 transition-opacity"
+                      />
+                      <div className="px-3 py-1.5 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-700">
+                        <span className="inline-flex items-center gap-1.5 truncate">
+                          <ImageIcon className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400 shrink-0" />
+                          {hw.attachmentName || 'Teacher Homework Photo'}
+                        </span>
+                        <span className="font-semibold text-teal-700 dark:text-teal-400 shrink-0 ml-2">View Full Photo</span>
+                      </div>
+                    </button>
+                  </div>
+                )}
 
                 {sub && (
-                  <div className="mt-3 p-3.5 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1">
-                    <p className="font-semibold text-slate-800">
+                  <div className="mt-3 p-3.5 bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 rounded-lg text-xs space-y-1">
+                    <p className="font-semibold text-slate-800 dark:text-slate-200">
                       Your Submission {sub.fileName ? `· ${sub.fileName} (${sub.fileSizeKb || 0} KB)` : ''}
                       {sub.isLate ? ' · Submitted Late' : ''}
                     </p>
-                    {sub.submissionText && <p className="text-slate-600">{sub.submissionText}</p>}
+                    {sub.submissionText && <p className="text-slate-600 dark:text-slate-400">{sub.submissionText}</p>}
                     {sub.feedback && (
-                      <p className="text-teal-800 font-medium pt-1">Teacher Feedback: {sub.feedback}</p>
+                      <p className="text-teal-800 dark:text-teal-300 font-medium pt-1">Teacher Feedback: {sub.feedback}</p>
                     )}
                   </div>
                 )}
@@ -668,6 +699,31 @@ function StudentHomeworkView({
           })}
         </div>
       )}
+
+      <Modal
+        open={Boolean(previewPhoto)}
+        onClose={() => setPreviewPhoto(null)}
+        title={previewPhoto?.title || 'Homework Photo'}
+        subtitle={previewPhoto?.fileName || 'Attached by Teacher'}
+        maxWidth="max-w-2xl"
+      >
+        {previewPhoto && (
+          <div className="space-y-3">
+            <div className="rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
+              <img
+                src={previewPhoto.url}
+                alt={previewPhoto.title}
+                className="max-h-[70vh] w-auto object-contain"
+              />
+            </div>
+            <div className="flex justify-end">
+              <Button type="button" variant="secondary" size="sm" onClick={() => setPreviewPhoto(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={Boolean(submittingHw)}

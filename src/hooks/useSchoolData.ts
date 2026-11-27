@@ -69,12 +69,18 @@ export function useSchoolData(
     }
 
     setLoading(true);
-    let settled = 0;
+    const settledCols = new Set<string>();
     const includeTeacherAttendance = !studentUidFilter;
     const total = 13 + (includeSchoolUsers ? 1 : 0) + (includeTeacherAttendance ? 1 : 0);
-    const markSettled = () => {
-      settled += 1;
-      if (settled >= total) setLoading(false);
+    const fallbackTimer = window.setTimeout(() => {
+      setLoading(false);
+    }, 6000);
+    const markSettled = (colName: string) => {
+      settledCols.add(colName);
+      if (settledCols.size >= total) {
+        window.clearTimeout(fallbackTimer);
+        setLoading(false);
+      }
     };
 
     const subQuery = <T,>(
@@ -88,11 +94,11 @@ export function useSchoolData(
         (snap) => {
           const items = snap.docs.map((d) => d.data() as T);
           setter(transform ? transform(items) : items);
-          markSettled();
+          markSettled(colName);
         },
         (err) => {
           console.warn(`School listener (${colName}) warning:`, err.message);
-          markSettled();
+          markSettled(colName);
         },
       );
 
@@ -155,6 +161,7 @@ export function useSchoolData(
     }
 
     return () => {
+      window.clearTimeout(fallbackTimer);
       unsubs.forEach((u) => u());
     };
   }, [schoolId, includeSchoolUsers, studentUidFilter, teacherUidFilter]);

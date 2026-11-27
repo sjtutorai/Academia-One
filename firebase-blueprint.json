@@ -360,6 +360,7 @@
         "dueDate": { "type": "string", "maxLength": 24 },
         "allowOnlineSubmission": { "type": "boolean" },
         "attachmentName": { "type": "string", "maxLength": 160 },
+        "photoDataUrl": { "type": "string", "maxLength": 300000 },
         "status": { "type": "string", "enum": ["published", "draft", "closed"] },
         "createdBy": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },

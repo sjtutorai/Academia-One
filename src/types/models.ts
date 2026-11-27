@@ -35,7 +35,8 @@ export interface PlatformUser {
 }
 
 export interface PeriodTimingSlot {
-  periodNumber: number;
+  id?: string;
+  periodNumber: number; // 1..12 for teaching periods, 0 for dedicated Break/Recess slots
   label: string;
   startTime: string;
   endTime: string;
@@ -75,6 +76,9 @@ export interface School {
     campusLatitude?: number;
     campusLongitude?: number;
     attendanceGeofenceMeters?: number;
+    teacherAttendanceTimeWindowEnabled?: boolean;
+    teacherAttendanceStartTime?: string;
+    teacherAttendanceEndTime?: string;
   };
   source?: 'public_application' | 'admin_manual' | 'demo_seed';
   schoolType?: string;
@@ -343,6 +347,7 @@ export interface Homework {
   dueDate: string;
   allowOnlineSubmission?: boolean;
   attachmentName?: string;
+  photoDataUrl?: string;
   status: 'published' | 'draft' | 'closed';
   createdBy: string;
   createdAt?: unknown;
